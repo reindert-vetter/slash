@@ -415,7 +415,7 @@ function reviewersStrip(status) {
   const order = { APPROVED: 0, CHANGES_REQUESTED: 1, COMMENTED: 2 }
   const sorted = [...reviewers].sort((a, b) => (order[a.state] ?? 3) - (order[b.state] ?? 3))
   return html`
-    <span class="flex shrink-0 flex-wrap items-center gap-1.5" data-testid="reviewers">
+    <span class="flex w-28 flex-wrap justify-end items-center gap-1.5" data-testid="reviewers">
       ${sorted.map((r, i) => reviewerAvatar(r).key('rev:' + i + ':' + r.login))}
     </span>
   `
@@ -566,6 +566,28 @@ function statusSkeleton(pr) {
   >`
 }
 
+// reviewersList/reviewersArea — the reviewer-avatar strip, split out of
+// statusPills into its own grid column (see "A row's right side is a
+// fixed-width grid" in .claude/docs/pr-overview.md): avatars used to share
+// one track with the status-chip stack, so several reviewers wrapped the
+// avatars above the chips inside that same narrow column instead of getting
+// their own space. Same keyed-array/reactive-binding shape as statusPills
+// (never a bare template, so the async status backfill's null→loaded flip
+// can't hit the single↔array slot pitfall).
+function reviewersList(pr, status) {
+  if (!status) return []
+  const strip = reviewersStrip(status)
+  return strip ? [strip.key('reviewers')] : []
+}
+
+function reviewersArea(pr) {
+  return html`
+    <div class="flex min-h-[22px] flex-wrap items-center justify-end gap-1.5" data-testid="reviewers-slot">
+      ${() => reviewersList(pr, statusFor(pr))}
+    </div>
+  `
+}
+
 function statusPills(pr, status) {
   // Always return a keyed array (never a bare template, never nulls in the
   // array): a stable slot shape keeps arrow.js from reusing a mounted chunk
@@ -576,8 +598,6 @@ function statusPills(pr, status) {
   // "no-comments" wrap (see .claude/rules/conventions.md).
   if (!status) return [statusSkeleton(pr).key('skeleton')]
   const pills = []
-  const strip = reviewersStrip(status)
-  if (strip) pills.push(strip.key('reviewers'))
   const reviewVariant = pr.isDraft ? 'draft' : status.reviewDecision || 'none'
   const review = reviewChip(pr, status)
   // Stack the review chip and whatever secondary chips apply (checks, a merge
@@ -877,21 +897,25 @@ function connectorMark() {
 }
 
 // rowInner — the left side already lines up (authorMark has a fixed w-20),
-// but the right side used to be a single `flex … gap-3` row of five
-// variable-width groups (reviewers+status, the 4 optional pills, comments,
-// graphChip, chevron): any group that was narrower/absent on a given row
-// shifted every group after it, so nothing lined up between rows (reviewer
-// report + screenshot: data/review-shots/task-overview-right-side-messy.png).
-// Fixed with a `grid-cols-[...]` of one fixed-width TRACK per element kind —
+// but the right side used to be a single `flex … gap-3` row of variable-width
+// groups: any group that was narrower/absent on a given row shifted every
+// group after it, so nothing lined up between rows (reviewer report +
+// screenshot: data/review-shots/task-overview-right-side-messy.png). Fixed
+// with a `grid-cols-[...]` of one fixed-width TRACK per element kind —
 // content right-aligned within its own track — so a missing/narrower chip
 // just leaves blank space in its track instead of moving its neighbours.
-// Column 1 (reviewers + status chip stack) is the one whose natural content
-// varies most (0-5 reviewer avatars); `statusArea`'s own flex-wrap lets it
-// wrap onto a second line within its track instead of overflowing into
-// column 2. This is a per-ROW grid, not a page-wide one (Alt B in the
-// proposal this came from) — a track width is chosen generously enough for
-// the widest known label per column (see graphChip's "Bezig met
-// genereren…"), not derived from the other rows' content.
+//
+// Follow-up (data/review-shots/task-overview-right-columns-followup.png):
+// reviewers and the status-chip stack used to share ONE track, so several
+// reviewer avatars wrapped above the chips inside that same narrow column
+// instead of getting their own space — `reviewersArea`/`statusArea` are now
+// two separate tracks. And the graphChip track was 9rem even though
+// `iconChip` (graphChip's only render path, every state: idle/busy/done)
+// never shows a text label at all — only a `title`/`aria-label` tooltip
+// (`ingestLabel`'s "Bezig met genereren…" included) — so it shrank to
+// 2.5rem, which is also what pulled the comments/approval numbers so far
+// left of the AI button: that empty 6.5rem was reserved for a label that
+// was never actually rendered there.
 function rowInner(pr, opts) {
   return [
     opts.depth ? connectorMark() : null,
@@ -906,7 +930,8 @@ function rowInner(pr, opts) {
       </div>
     `,
     html`
-      <div class="grid shrink-0 grid-cols-[minmax(0,14rem)_9rem_2.5rem_9rem_1.25rem] items-center gap-3">
+      <div class="grid shrink-0 grid-cols-[7rem_10rem_9rem_2.5rem_2.5rem_1.25rem] items-center gap-3">
+        ${reviewersArea(pr)}
         ${statusArea(pr)}
         <div class="flex flex-col items-end gap-1">
           ${() => busyPill(pr)} ${() => checkoutPill(pr)} ${() => unpushedPill(pr)} ${() => approvalPill(pr)}

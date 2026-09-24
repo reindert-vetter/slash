@@ -742,20 +742,44 @@ groups (reviewers+status, the 4 optional pills, comments, `graphChip`,
 chevron) — any group narrower or absent on a given row shifted every group
 after it, so nothing lined up between rows.
 
-Fixed with a `grid-cols-[minmax(0,14rem)_9rem_2.5rem_9rem_1.25rem]` on that
-wrapper — one fixed-width TRACK per element kind, content right-aligned
-within its own track, so a missing/narrower chip leaves blank space in its
-track instead of moving its neighbours. `statusArea`'s own div gained
-`flex-wrap justify-end` so a row with several reviewer avatars wraps onto a
-second line within its track instead of overflowing into the next column.
-This is a per-ROW grid (each `rowInner` call builds its own), not a
-page-wide/subgrid one — track widths are fixed constants sized generously for
-the widest known label per column (e.g. `graphChip`'s busy label "Bezig met
-genereren…"), not derived from the other rows on the page. A page-wide
-subgrid (deriving each column's width from every row's content at once) was
-considered and rejected as a first step — bigger diff, touches the
+Fixed with a `grid-cols-[...]` on that wrapper — one fixed-width TRACK per
+element kind, content right-aligned within its own track, so a
+missing/narrower chip leaves blank space in its track instead of moving its
+neighbours. This is a per-ROW grid (each `rowInner` call builds its own), not
+a page-wide/subgrid one — track widths are fixed constants sized for the
+widest known label per column, not derived from the other rows on the page. A
+page-wide subgrid (deriving each column's width from every row's content at
+once) was considered and rejected as a first step — bigger diff, touches the
 stack/connector row structure, more test surface — see the discussion this
 came out of for the trade-off if this ever needs to be revisited.
+
+**Follow-up** (`data/review-shots/task-overview-right-columns-followup.png`,
+"avatars eigen kolom, 0/253 aantal berichten meer naar rechts, veel minder
+marge"): two things the first pass got wrong.
+
+- **Reviewers and the status-chip stack used to share one track.**
+  `statusPills` used to push the `reviewersStrip` into the same array as the
+  review/checks/conflict chip stack, both rendered by one `statusArea` div —
+  so several reviewer avatars wrapped ABOVE the chips inside that same narrow
+  column instead of getting their own space. Split into two: `statusPills`
+  now only builds the chip stack, and a new sibling `reviewersList`/
+  `reviewersArea` builds the avatar strip, each its own grid track
+  (`grid-cols-[7rem_10rem_9rem_2.5rem_2.5rem_1.25rem]`: avatars, status
+  chips, the 4 optional pills, comments, `graphChip`, chevron).
+  `reviewersStrip`'s own span needed an explicit `w-28` (matching the 7rem
+  avatars track) instead of `shrink-0` — a grid item's default min-width is
+  its content's min-content size, so a `shrink-0` flex child inside it was
+  silently growing the track past its declared 7rem (and overlapping the
+  title/meta column to its left) rather than wrapping; a fixed width gives
+  the inner `flex-wrap` something real to wrap against.
+- **The `graphChip` track was 9rem even though `iconChip` — graphChip's only
+  render path, every state (idle/busy/done) — never shows a text label at
+  all**, only a `title`/`aria-label` tooltip (`ingestLabel`'s "Bezig met
+  genereren…" included, confirmed by reading `iconChip`'s template: no text
+  node, just the icon). That reserved-but-never-rendered ~6.5rem is exactly
+  what pushed `0/253`/the comment count so far left of the AI button/chevron.
+  Shrunk to 2.5rem — icon-only content, no risk of a busy label clipping,
+  since no state of this chip ever prints one.
 
 ## The per-row popover
 
