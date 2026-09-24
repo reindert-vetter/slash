@@ -10041,6 +10041,28 @@ export function commentClaudeRowWidthCls(state) {
   return relatedWidthCls(chars, a + b, COMMENT_CLAUDE_CONNECTOR_REM)
 }
 
+// hasTextSelection reports whether the browser currently holds a real,
+// non-empty native text selection — used to tell "the reviewer dragged to
+// select/copy the excerpt" apart from "a plain click" on a card whose entire
+// root is one `@click` target. The browser fires `click` on `mouseup`
+// regardless of any drag selection made in between (same mousedown/mouseup
+// target), so without this guard selecting the code inside a related-item
+// card also fired drill(r) — opening the card as its own drilled column,
+// which collapses whatever column was focused before. Reviewer report: "als
+// ik iets selecteer op onderliggende code, wil ik niet dat het inklapt als ik
+// los laat". Same idiom already used elsewhere for "a real selection wins
+// over a click/shortcut" (`window.getSelection().toString()` in home.mjs's
+// right-click-menu copy detection and its Cmd+C-on-a-Claude-bubble guard) —
+// deliberately not the heavier mousedown/mouseup snapshot-and-restore
+// machinery home.mjs uses for diff-row selection (`.claude/docs/diff-render.md`,
+// "Line selection: click and browser text selection"), which exists to round
+// a selection up to app-state row ranges and to survive a wholesale
+// `.innerHTML` replacement — neither applies here, this card never rewrites
+// its own DOM out from under a selection.
+function hasTextSelection() {
+  return !!(window.getSelection && window.getSelection().toString())
+}
+
 // relatedCard renders one child block: a header (label + file:line + relation
 // kind) and a short, non-interactive code excerpt highlighted like the panes —
 // unless the card sits above the cursor in the list (`collapsed`, see below),
@@ -10102,7 +10124,13 @@ function relatedCard(r, i, drill) {
       data-child-id="${r.id}"
       data-active="${() => (selected() ? 'true' : 'false')}"
       data-collapsed="${() => (collapsed() ? 'true' : 'false')}"
-      @click="${() => drill && drill(r)}"
+      @click="${() => {
+        // A drag-selection inside this card (the code excerpt, the title, …)
+        // still fires a native `click` on release — see hasTextSelection's
+        // own doc comment. Let the selection stand instead of drilling.
+        if (hasTextSelection()) return
+        drill && drill(r)
+      }}"
     >
       <div class="border-b border-slate-100 dark:border-zinc-800/60 px-3 py-1.5">
         <div class="flex items-baseline gap-2">

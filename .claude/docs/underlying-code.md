@@ -7,6 +7,23 @@ the block column in `<main>`'s flow (see `.claude/docs/detail-layout.md`);
 `Enter`/click on a child drills it open as its own column
 (`.claude/docs/drilling.md`).
 
+**A drag-selection inside a card doesn't drill it.** `relatedCard`'s whole root
+carries one `@click`, so the browser's own `click` (fired on `mouseup`,
+regardless of any drag in between) used to call `drill(r)` even when the
+reviewer was only dragging to select/copy the excerpt or the title — opening
+the card as its own drilled column and collapsing whatever column was focused
+before. Reviewer report: "als ik iets selecteer op onderliggende code, wil ik
+niet dat het inklapt als ik los laat". `hasTextSelection()` (`RelatedPanel.mjs`)
+guards the click: a real, non-collapsed `window.getSelection()` at click time
+skips `drill(r)` and leaves the selection alone — the same
+"a real selection wins over a click" idiom `home.mjs` already uses for its
+right-click-menu copy detection and its Cmd+C-on-a-Claude-bubble guard, not
+the heavier mousedown/mouseup snapshot-and-restore machinery built for the
+diff panes (`.claude/docs/diff-render.md`, "Line selection: click and browser
+text selection") — that exists to round a selection up to app-state row
+ranges and to survive a wholesale `.innerHTML` replacement, neither of which
+this card does. Test: `tests/related-item-text-selection.spec.mjs`.
+
 ## The children and their badges
 
 Each child is one card (`data-testid=related-item`). It follows
