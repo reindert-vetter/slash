@@ -3511,6 +3511,26 @@ backticked names. Deliberately only those three files — the other prompts
 conversational answers. If a future session wants fewer/more code blocks in
 chat answers, this paragraph is the knob; no frontend change is involved.
 
+### Volunteering a change proposal is also a PROMPT rule, not a new write path
+
+Reindert asked for the chat to somewhat more often suggest, on its own, how a
+piece of code could be adjusted and what the result would look like — without
+touching the existing hard rule that Claude only edits/commits/pushes or
+replies to/resolves a comment on **explicit** reviewer request (the
+`need_write` escalation in `chat_readonly.md`, and the "Doe een
+aanpassing/commit alleen wanneer …" paragraph in `chat_shell.md`, are
+untouched). All three chat system prompts
+(`modules/claude/prompts/chat.md`, `chat_readonly.md`, `chat_shell.md`) got
+one more shared paragraph, placed right after the existing "emit a fence"
+paragraph above: when Claude notices a clear improvement relevant to the
+reviewer's question, it should say so more often — a short description of
+what it would change plus a ` ``` ` block showing what the result would look
+like — framed explicitly as a proposal to consider, not an action. This is
+prose only; it never triggers `need_write`, an actual `Edit`, or a commit by
+itself. Same knob shape as the paragraph above: to dial this up/down, edit
+that one shared paragraph in the three prompt files, no frontend change
+involved.
+
 ### Codeblok numbering diverges from chat context (on purpose) — the mechanism for acting on a fenced code block/suggestion
 
 A fenced code block (` ``` `) or a GitHub `` ```suggestion `` block in a
