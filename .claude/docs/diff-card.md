@@ -573,8 +573,16 @@ A plain `w-[42rem] 2xl:w-[49.2rem]`, i.e. the same 60% tier again, and
 text: a markdown bullet or a prose paragraph reads perfectly fine wrapped, so an
 isolated long line has no business ballooning the card — reported, a
 336-character markdown bullet grew it to roughly 6800px. Instead of growing the
-card, `codeDiff` sets its `wrap` flag (`viewMode() === 'fit' && isProseFile(b)`)
-and the rows wrap within this bounded width.
+card, `codeDiff` sets its `wrap` flag (`isPrDescriptionBlock(b) ||
+isProseFile(b)`) and the rows wrap within this bounded width, **in every
+stand** — `wrap` used to gate on `viewMode() === 'fit'` too (except for the
+synthetic PR-description block, see "The PR-titel & omschrijving index block
+is markdown, and always wraps" in `.claude/rules/conventions.md`), until a
+reviewer report against a real `.md` file in `split` showed the same clipped,
+unwrapped line the `.ts`-file bug below already reported for width — `wrap` is
+now threaded into the `split` stand's `codePane(...)` calls and the whole
+`unified` chain (`unifiedCodeDiff`/`unifiedHTML`/`unifiedRowHTML`) too,
+neither of which took a `wrap` argument before.
 
 **Superseded (2026-08-26):** the discriminator used to be `isPhpFile` (a plain
 `.php` extension **allowlist** — PHP got the content-driven width, literally

@@ -781,11 +781,10 @@ function widthCls(b, viewMode, capFitChars, activeGroup, narrowFixed) {
 // isProseFile), in every stand: the same narrow 60%-equivalent width a
 // one-sided added/removed block already used — deliberately NOT
 // content-based. Long lines are made to fit THIS width by wrapping instead
-// (the `wrap` flag on codePane/paneHTML in 'fit'; 'split'/'unified' already
-// wrapped nothing before and still don't, unaffected by this change) — the
-// direct fix for "the diff must not be wider than needed" for prose/config
-// text, where a long line reads perfectly fine wrapped, unlike a code
-// statement.
+// (the `wrap` flag on codePane/paneHTML/unifiedCodeDiff, in every stand —
+// see codeDiff's own doc comment for `wrap`) — the direct fix for "the diff
+// must not be wider than needed" for prose/config text, where a long line
+// reads perfectly fine wrapped, unlike a code statement.
 function boundedWrapWidthCls() {
   return 'w-[42rem] 2xl:w-[49.2rem] '
 }
@@ -2529,27 +2528,27 @@ function codeDiff(
   // removed block has no new side to fall back to, so its old/left pane
   // stays visible in every stand, 'fit' included).
   const effectiveOnly = only || (viewMode() === 'fit' ? 'right' : null)
-  // A prose/config file in 'fit' wraps its lines within a bounded width
-  // instead of growing the card to fit the longest line
-  // (widthCls/boundedWrapWidthCls pick the matching width; this flag makes
-  // the row rendering itself wrap instead of overflowing on a single
-  // `whitespace-pre` line) — see isProseFile/contentWidthCls's own doc
-  // comment for the full reasoning. Since 'fit' now always forces a single
-  // pane above, this only ever reaches the single-pane codePane branches
-  // below (effectiveOnly === 'right'/'left') — there is no two-pane
-  // wrapping path left to reach.
-  //
-  // The PR-titel & omschrijving index block (isPrDescriptionBlock) wraps in
-  // EVERY stand, not just 'fit' — reviewer request: "laat markdown altijd
-  // wrappen zodat het allemaal zichtbaar is". Its width is already bounded
-  // in every stand (isProseFile(b) includes PR_DESC_FILE, see widthCls), so
-  // only `wrap` was missing outside 'fit' — without it a long title/body
-  // line just ran off the card's right edge into an invisible
-  // `overflow-auto`/`no-scrollbar` horizontal scroll in split/unified.
-  // Scoped to this one synthetic block, not every prose/config file: a real
-  // .md/.json/.yaml file elsewhere in a PR keeps the existing "only wraps in
-  // 'fit'" behaviour unchanged.
-  const wrap = isPrDescriptionBlock(b) || (viewMode() === 'fit' && isProseFile(b))
+  // A prose/config file wraps its lines within a bounded width instead of
+  // growing the card to fit the longest line (widthCls/boundedWrapWidthCls
+  // pick the matching width, in every stand — see isProseFile/
+  // contentWidthCls's own doc comment; this flag makes the row rendering
+  // itself wrap instead of overflowing on a single `whitespace-pre` line).
+  // Applies in EVERY stand ('fit'/'split'/'unified'), not just 'fit' —
+  // reviewer report: a real .md file (REVIEW.md) still ran its long lines
+  // off both panes' right edge in 'split', clipped instead of wrapped, even
+  // though its width was already bounded there (widthCls doesn't gate on
+  // viewMode at all). `wrap` used to gate on `viewMode() === 'fit'` for every
+  // prose/config file except the synthetic PR-titel & omschrijving block
+  // (isPrDescriptionBlock, "laat markdown altijd wrappen zodat het allemaal
+  // zichtbaar is") — that gate is gone now that every prose/config file gets
+  // the same always-wrap treatment; `isPrDescriptionBlock(b) ||` stays as a
+  // harmless redundant OR (it checks `b.kind`, not `b.file`, so it isn't
+  // provably identical to isProseFile's own `PR_DESC_FILE` check). Threaded
+  // into the two-pane 'split' branch's `codePane(...)` calls and into the
+  // 'unified' chain (unifiedCodeDiff → unifiedHTML → unifiedRowHTML →
+  // rowCellHTML) below — both used to hardcode `false` here regardless of
+  // this variable.
+  const wrap = isPrDescriptionBlock(b) || isProseFile(b)
   // Gates the collapsed-run breadcrumb (see yamlBreadcrumbsForSegs) — only a
   // yaml/yml whole-file fallback block gets the extra key-hierarchy line.
   const isYaml = isYamlFile(b)
@@ -2620,6 +2619,7 @@ function codeDiff(
       isYaml,
       commentRangeFn,
       lang,
+      wrap,
     )
   }
   // Side-by-side (the default 'split' stand). Only the RIGHTMOST pane gets
@@ -2668,9 +2668,9 @@ function codeDiff(
       data-split-root
       data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
     >
-      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, splitLeftCls, approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, undefined, false, lang, activeGroup, splitDividerStyleFn)}
+      ${codePane('old', c.old, rows, 'left', 'border-rose-100 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400', NO_ACTIVE_GROUP, splitLeftCls, approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, undefined, false, lang, activeGroup, splitDividerStyleFn)}
       ${splitDividerHandle((e) => onSplitResizeStart(e), () => onSplitResizeReset())}
-      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'flex-1 min-w-0', approvedFn, commentedFn, approvedCallsFn, false, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
+      ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'flex-1 min-w-0', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
       ${scrollHint('up')}
       ${scrollHint('down')}
     </div>
@@ -2943,16 +2943,16 @@ function runScheduledHints() {
 // the L-range in the header. The body is the shared aligned `rows`, projected to
 // this side (`left` = old, `right` = new). Both panes render the same number of
 // rows at the same line-height, so they line up vertically without any JS.
-// `wrap` (only ever true for a prose/config file in 'fit', see
-// isProseFile/codeDiff)
-// switches every row from `whitespace-pre` to `whitespace-pre-wrap
-// break-words` — safe here because this is the SINGLE-pane path: there's no
-// second pane whose row height needs to stay in lockstep. 'fit' forces a
-// single pane for every block (fitOnly/effectiveOnly in codeDiff), so this
-// function is now the ONLY render path 'fit' ever reaches; the unified
-// stand still never reaches it (see unifiedCodeDiff instead), since that
-// stand restructures a genuinely two-sided block into its own single
-// "old above new" column.
+// `wrap` (true for a prose/config file, in every stand — see
+// isProseFile/codeDiff's own doc comment) switches every row from
+// `whitespace-pre` to `whitespace-pre-wrap break-words`. Used both by the
+// single-pane 'fit' path (the only render path 'fit' ever reaches, since it
+// forces a single pane for every block — fitOnly/effectiveOnly in codeDiff)
+// and, since a prose/config file wraps in every stand, by the two-pane
+// 'split' stand's own old/new codePane calls — the unified stand still never
+// reaches this function at all (see unifiedCodeDiff instead, its own
+// separate wrap-threading), since that stand restructures a genuinely
+// two-sided block into its own single "old above new" column.
 function codePane(
   side,
   data,
@@ -4136,9 +4136,10 @@ function paneHTML(
   cursorGroupFn = null,
 ) {
   // Virtualization: decide the row window BEFORE building anything. `wrap`
-  // (a prose/config file in 'fit') never virtualizes — its rows have no
-  // fixed height (see VIRTUALIZE_ROW_PX's own doc comment), so a fixed-height
-  // spacer estimate would be actively wrong there, not just approximate.
+  // (a prose/config file, in every stand) never virtualizes — its rows have
+  // no fixed height (see VIRTUALIZE_ROW_PX's own doc comment), so a
+  // fixed-height spacer estimate would be actively wrong there, not just
+  // approximate.
   let win = null
   if (!wrap && rows.length > VIRTUALIZE_MIN_ROWS && typeof cursorGroupFn === 'function') {
     const cg = cursorGroupFn()
@@ -4211,6 +4212,10 @@ function unifiedRowHTML(
   // lang: threaded straight from unifiedHTML/unifiedCodeDiff — see
   // codePane's own doc comment.
   lang = 'php',
+  // wrap: threaded straight from unifiedHTML/unifiedCodeDiff — see its own
+  // doc comment. Used to hardcode `false` on every rowCellHTML call below,
+  // so a prose/config file never wrapped in the 'unified' stand.
+  wrap = false,
 ) {
   const paired = r.left != null && r.right != null && !!r.leftMark && !!r.rightMark
   // BOTH lines of a paired row draw the comment-range bar (unlike every other
@@ -4220,15 +4225,15 @@ function unifiedRowHTML(
   const meta = { gutter: true, emitMeta: true, commentRange, lang }
   if (paired) {
     return (
-      rowCellHTML(r, i, 'left', group, approved, commented, false, focused, { gutter: true, emitMeta: false, commentRange, lang }, lineSummaries) +
-      rowCellHTML(r, i, 'right', group, approved, commented, false, focused, meta, lineSummaries, segDots)
+      rowCellHTML(r, i, 'left', group, approved, commented, wrap, focused, { gutter: true, emitMeta: false, commentRange, lang }, lineSummaries) +
+      rowCellHTML(r, i, 'right', group, approved, commented, wrap, focused, meta, lineSummaries, segDots)
     )
   }
   if (r.right != null) {
-    return rowCellHTML(r, i, 'right', group, approved, commented, false, focused, meta, lineSummaries, segDots)
+    return rowCellHTML(r, i, 'right', group, approved, commented, wrap, focused, meta, lineSummaries, segDots)
   }
   if (r.left != null) {
-    return rowCellHTML(r, i, 'left', group, approved, commented, false, focused, meta, lineSummaries, segDots)
+    return rowCellHTML(r, i, 'left', group, approved, commented, wrap, focused, meta, lineSummaries, segDots)
   }
   return ''
 }
@@ -4254,13 +4259,19 @@ function unifiedHTML(
   // lang: threaded straight from unifiedCodeDiff — see codePane's own doc
   // comment.
   lang = 'php',
+  // wrap: threaded straight from unifiedCodeDiff — see its own doc comment.
+  wrap = false,
 ) {
   // Virtualization, same mechanism/threshold as paneHTML (see "Virtualizing a
   // huge, mostly-changed block" above) — the unified stand is always ONE
   // pane/one binding (see this function's own call site,
   // unifiedCodeDiff), so `group` is already the real cursor group, no
-  // cursorGroupFn indirection needed.
-  const win = rows.length > VIRTUALIZE_MIN_ROWS ? computeWindow(rows, group ? group.start : 0, group ? group.end : 0) : null
+  // cursorGroupFn indirection needed. Same `!wrap` gate as paneHTML: a
+  // wrapped prose/config row has no fixed height, so the fixed-height spacer
+  // estimate would be actively wrong — this stand used to never receive
+  // `wrap:true` at all (see unifiedCodeDiff's own doc comment), so this gate
+  // was unreachable before wrap started applying to every stand.
+  const win = !wrap && rows.length > VIRTUALIZE_MIN_ROWS ? computeWindow(rows, group ? group.start : 0, group ? group.end : 0) : null
   const parts = []
   const pushRow = (i) => {
     const r = rows[i]
@@ -4270,7 +4281,7 @@ function unifiedHTML(
     // row's metadata (emitMeta), see unifiedRowHTML.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
     const segDots = partial ? segDotMarkers(r.right != null ? r.right : r.left, partial) : null
-    parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange, lang))
+    parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange, lang, wrap))
   }
   const plan = collapsePlan(rows, commented)
   const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
@@ -4306,6 +4317,11 @@ function unifiedCodeDiff(
   // lang: threaded straight from codeDiff's langForFile(b.file) — see
   // codePane's own doc comment.
   lang = 'php',
+  // wrap: threaded straight from codeDiff's own `wrap` (true for a
+  // prose/config file, in every stand — see codeDiff's own doc comment).
+  // Was missing entirely from this whole chain until the 'unified' stand
+  // got the same wrap-in-every-stand treatment as 'split'.
+  wrap = false,
 ) {
   return html`
     <div
@@ -4320,7 +4336,7 @@ function unifiedCodeDiff(
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() => {
             disarmRowPairHover()
-            return unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), lang)
+            return unifiedHTML(rows, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), lang, wrap)
           }}"
         ></code>
       </div>

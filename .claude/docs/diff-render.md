@@ -117,10 +117,14 @@ section is the mechanism; that one is the numbers.
   unchanged-run collapse just above it. Below the threshold,
   `cursorGroupFn`/`computeWindow` are never even called — a code-level
   guarantee, not a coincidence of the numbers happening to match.
-- Never engaged while `wrap` is true (a prose/config file in 'fit', see
-  `isProseFile`) — such a row has no fixed height (it can wrap to several
-  visual lines), so the fixed-height spacer estimate below would be actively
-  wrong there, not just approximate.
+- Never engaged while `wrap` is true (a prose/config file, in every stand —
+  see `isProseFile`/`codeDiff`'s own doc comment in `Block.mjs`) — such a row
+  has no fixed height (it can wrap to several visual lines), so the
+  fixed-height spacer estimate below would be actively wrong there, not just
+  approximate. `unifiedHTML`'s own window computation carries the identical
+  `!wrap` gate as `paneHTML` here — it used to never receive `wrap:true` at
+  all (the whole 'unified' chain hardcoded `wrap:false`), so it stayed
+  unguarded until 'unified' started wrapping prose/config files too.
 - `VIRTUALIZE_MARGIN` (250) rows stay live on each side of the active unit's
   own row span; `VIRTUALIZE_HYSTERESIS` (100) means the window only
   re-centers once the cursor gets that close to an edge — most keystrokes

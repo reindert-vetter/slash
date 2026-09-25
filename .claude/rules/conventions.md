@@ -93,21 +93,28 @@ italic, inline code, links and blockquotes now get real tokens. It registers
 `Prism.languages.md` as an alias itself, so no entry was needed in
 `LANGUAGE_ALIASES`.
 
-**Always wraps, in every `a` stand — not just `fit`.** Every other prose/
-config file (`isProseFile`, `.claude/docs/diff-card.md`) only wraps in the
-`fit` stand; outside it a long line ran off the card's right edge into an
-invisible `overflow-auto`/`no-scrollbar` horizontal scroll — read as the diff
-being clipped. `codeDiff`'s `wrap` flag is `isPrDescriptionBlock(b) ||
-(viewMode() === 'fit' && isProseFile(b))`: this ONE synthetic block wraps
-unconditionally, every real `.md`/`.json`/`.yaml`/`.svg`/image file elsewhere
-in a PR keeps the existing `fit`-only wrap. No width change was needed for
-this: `isProseFile(b)` already includes `PR_DESC_FILE`, so `widthCls` already
-gave it the fixed, bounded `boundedWrapWidthCls()` in every stand — only the
+**Always wraps, in every `a` stand — not just `fit`.** This block was the
+first to get that treatment; `codeDiff`'s `wrap` flag was originally
+`isPrDescriptionBlock(b) || (viewMode() === 'fit' && isProseFile(b))`, so
+every OTHER prose/config file (`isProseFile`, `.claude/docs/diff-card.md`)
+still only wrapped in the `fit` stand — outside it a long line ran off the
+card's right edge into an invisible `overflow-auto`/`no-scrollbar`
+horizontal scroll, read as the diff being clipped. Reviewer report against a
+real `.md` file (`REVIEW.md`, `split` stand) generalized this: `wrap` is now
+simply `isPrDescriptionBlock(b) || isProseFile(b)` — every prose/config file
+wraps in every stand (`fit`/`split`/`unified`), not just this one synthetic
+block. No width change was needed for this: `isProseFile(b)` already
+includes `PR_DESC_FILE`, so `widthCls` already gave every prose/config file
+the fixed, bounded `boundedWrapWidthCls()` in every stand — only the
 row-level `wrap` flag (`whitespace-pre` → `whitespace-pre-wrap break-words`)
-was missing outside `fit`. This block is also always single-sided
-(`status: 'added'`, see `prDescriptionBlock`), so it always renders through
-`codeDiff`'s single-pane branch regardless of stand — there is no two-pane
-'split'/'unified' path to reach for it at all. Test:
+was missing outside `fit`, threaded through both the two-pane `split`
+branch's `codePane(...)` calls and the whole `unified` chain
+(`unifiedCodeDiff` → `unifiedHTML` → `unifiedRowHTML` → `rowCellHTML`) in
+`Block.mjs`, neither of which took a `wrap` argument at all before. This
+block is also always single-sided (`status: 'added'`, see
+`prDescriptionBlock`), so it always renders through `codeDiff`'s single-pane
+branch regardless of stand — there is no two-pane `split`/`unified` path to
+reach for it at all, unlike a real two-sided (modified) `.md` file. Test:
 `tests/pr-description-block.spec.mjs`.
 
 ### A SQL comment (`-- ...`) embedded in a PHP string
