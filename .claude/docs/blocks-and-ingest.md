@@ -626,7 +626,7 @@ trimmed only once; `enrichedCodeSide` with tail trim only, no transform, and fol
 + trim combined to prove the `Start` bump and `End` lowering stay independently
 correct).
 
-## `tsscan.go`: TypeScript function splitting (v1, functions only)
+## `tsscan.go`: TypeScript function/class splitting
 
 Reviewer request: "ook ts files wil ik opslitsen (net als php) voor nu te
 beginnen met functions" — a `.ts` file used to always go down `ScanBlocks`'
@@ -637,6 +637,12 @@ into one giant "modified" block). `ScanBlocks` now dispatches `.ts` to
 `scanTS` (`tsscan.go`), a lighter sibling of `phpscan.go` — same pragmatic
 style (regex + brace/paren counting over a source with strings/comments
 blanked out first, not a real parser), deliberately much smaller scope.
+
+A class's own methods are ALSO split out (added later, see "Class
+splitting" below, PR 13885) — the original v1 landed with "no classes/methods
+at all" as an explicit boundary; that boundary is gone, only the
+free-function scope description below still says "v1" for the two original
+shapes.
 
 ### What counts as a block (v1: two shapes, both requiring a `{ ... }` body)
 
@@ -702,10 +708,8 @@ costs a missed block, never a wrong one.
 **Deliberate v1 boundaries, not bugs — don't "fix" these without a fresh
 request:**
 
-- No classes/methods at all (a TS class's methods stay inside the file's one
-  whole-file fallback block, exactly like before this feature).
 - No `.tsx`/`.js`/`.mjs` — only `.ts`.
-- No left-side type annotation on a const/let/var arrow
+- No left-side type annotation on a top-level const/let/var arrow
   (`const x: Handler = (...) => {...}` is not detected — the arrow regex
   requires only whitespace between the name and `=`).
 - No cross-file anything (see the callresolve section below).
@@ -717,6 +721,68 @@ depth count, strings/comments/template literals not confusing brace counting,
 the whole-file fallback when nothing matches, and the `ScanBlocks` dispatch
 itself).
 
+### Class splitting (PR 13885): methods, generators, computed names, arrow fields
+
+Reviewer request: a call from inside a TS class method (`this.#adoptHandedOverIds(params)`,
+`resources/analytics/src/analytics.ts`, PR 13885) should surface the called
+private method as "Onderliggende code" — impossible while the whole class was
+one block. `scanTSFunctions` now also matches a top-level `class Name ... { }`
+(`reTSClassDecl`, body found via the existing `skipToTSBodyOpen`/`matchTSBrace`
+so an `extends X<T> implements Y` clause is skipped correctly) and recurses
+into its body via `scanTSClassMembers`.
+
+**Three member shapes**, mirroring `splitClassHeaderMembers`'s PHP precedent
+(`.claude/docs/blocks-and-ingest.md`'s own `scanClassMembers` section above):
+every recognised member becomes its own `Block` with `Class` set to the class
+name (so `Block.symbol()`/`ID()` and the frontend's generic `x.class + '::' +
+x.name` title composition need no change), and everything between the class's
+opening brace and its first recognised member (field declarations, comments)
+becomes ONE residual `<class-header>` block (`classHeaderSentinel`, reused
+verbatim from `phpscan.go`) — "a part that can't be split goes in one block".
+A class with **zero** recognised members contributes nothing at all, as if it
+hadn't been detected as a class (same "silently nothing" precedent as an
+expression-bodied top-level arrow).
+
+1. **A method**, including a getter/setter (`get`/`set` as a modifier) and a
+   generator (`*name(...) {...}`/`async *name(...) {...}`) — `reTSMethodDecl`.
+   Anchored at the member's own physical **line start** (`(?m)^[ \t]*...`) so
+   a call expression inside a method body (`this.init()`) is never mistaken
+   for a declaration — a real member signature is always the first token on
+   its line, a call site never is. A hand-picked `tsReservedWords` set
+   additionally excludes a bare `if (`/`while (`/etc. from matching the same
+   "name immediately followed by `(`" shape.
+2. **A computed-name method** — `[<expr>](...) {...}` — `reTSComputedMethodOpen`
+   finds the opening `[`, the new `matchTSBracket` (the bracket-counting
+   sibling of `matchTSParen`) finds its matching `]`, and the block's `Name`
+   becomes the bracket's own (trimmed) source text wrapped in brackets, e.g.
+   `[Symbol.iterator]` — a deliberately literal, readable choice over
+   inventing a synthetic name. Two computed members with differently
+   formatted but equivalent expressions (whitespace aside) would collide —
+   an accepted v1 edge case. A computed **field** (no `(` right after `]`,
+   e.g. a TS index signature `[key: string]: number`) is correctly left
+   unrecognised.
+3. **A field assigned an arrow function** — `name = (...) => {...}`, optional
+   modifiers and a single-line type annotation — `reTSFieldArrowDecl`, split
+   into its own block just like a method (reviewer decision: WEL splitsen,
+   unlike the top-level const-arrow's "no left-side type annotation"
+   boundary above — a class field never has a `const`/`let`/`var` keyword to
+   begin with, so the two aren't the same shape). A type annotation
+   containing a real `=>` (e.g. a function type) is a known v1 gap: the
+   regex's `[^\n=]*` stops at the first `=`, which would be the `=>` inside
+   such a type — not observed in this codebase's style, accepted rather than
+   solved with backtracking.
+
+**Not pulled into a member's own span:** a decorator line (`@Foo()`) directly
+above a member — unlike PHP's attribute pull, it sits in the header (if
+before the first real member) or, between two members, in the same
+documented "belongs to no block" gap `phpscan.go`'s own class-header
+splitting accepts.
+
+Tests: `tsscan_test.go` (`TestScanTSClassSplitsIntoMethodsAndHeader` — the
+concrete analytics.ts shape: getter/constructor/method/private-method plus the
+header block; `TestScanTSClassGeneratorAndComputedMethod`;
+`TestScanTSClassArrowFieldMethod`; `TestScanTSClassWithNoMethodsEmitsNothing`).
+
 ### `resolveTSCalls` (TypeScript, same-file, Go-only) — the "Onderliggende code" link
 
 Splitting the file into blocks alone does not make one call another's
@@ -725,15 +791,44 @@ Splitting the file into blocks alone does not make one call another's
 (`buildSymbolIndex`, every numbered rule) is PHP-only, worktree-wide,
 regex-on-PHP-syntax. `resolveTSCalls` (`tscallresolve_analysis.go`) is a
 small, deliberately narrower TypeScript sibling: it re-scans the CALLER's own
-file with `scanTSFunctions` to get its top-level function names, filters the
-caller's changed lines (`changedNewLines`/`fc.keepChanged`, the same
-line-scoping every PHP rule uses — "only a call on a changed line produces a
-child"), and for every OTHER same-file function whose name appears as
-`\bname\s*\(` on those changed lines, emits a plain `callresolve.Entry`
+file with `scanTSFunctions` to get its top-level function AND class-method
+names, filters the caller's changed lines (`changedNewLines`/`fc.keepChanged`,
+the same line-scoping every PHP rule uses — "only a call on a changed line
+produces a child"), and for every OTHER same-file function/method whose name
+appears as a call on those changed lines, emits a plain `callresolve.Entry`
 (`Status: StatusResolved`, empty `Kind` → normalises to `method_call`,
-`CallKey` = the bare function name). See "Resolving (also unchanged) called
-methods" in `.claude/docs/workflows-analysis.md` for the full mechanism and
-why no frontend change was needed to scope/show it.
+`CallKey` = the bare name, `ChildClass` = the callee's own class, `""` for a
+top-level function). See "Resolving (also unchanged) called methods" in
+`.claude/docs/workflows-analysis.md` for the full mechanism and why no
+frontend change was needed to scope/show it (`ChildClass` was already fully
+generic downstream — `modules/callresolve`, `/api/callresolve`, `home.mjs`'s
+`childClass ? childClass + '::' + childMethod : childMethod` block-id
+composition — it was simply always `""` before class support existed).
+
+**Deliberately loose, name-only matching — NOT scoped to the caller's own
+class** (reviewer decision, extending the existing precedent rather than
+narrowing it): a call resolves against ANY same-named function/method in the
+file, top-level or on any class, same as two same-named top-level functions
+already only ever resolved to whichever one `scanTSFunctions` happens to
+return last for that name (`byName`, a `map[string]Block` — a real, accepted
+limitation, not something this change fixes). Finding the **caller's own**
+body is unambiguous even so: a separate `bySym` map, keyed on the full
+`Class::Name` symbol (or bare `Name` for a top-level function), is used only
+for that lookup, so a same-named method on an unrelated class can never be
+mistaken for the caller's own definition (and thus never mis-slices its
+changed-line text).
+
+**A private method's call site needs its own regex shape.** `this.#foo(` has
+`.` then `#` — both non-word characters — right before the name, and `\b`
+never matches between two non-word characters. `reTSCallName` therefore skips
+the leading `\b` for a name starting with `#`; a plain name keeps it (guards
+against matching a stray suffix of a longer identifier).
+
+Tests: `tscallresolve_analysis_test.go`
+(`TestResolveTSCallsPrivateMethodSameClass` — the concrete analytics.ts
+`this.#adoptHandedOverIds(params)` case;
+`TestResolveTSCallsMatchesSameNameAcrossClasses` — the deliberately loose
+match).
 
 ## Classification (`classify.go`)
 

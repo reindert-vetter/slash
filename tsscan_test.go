@@ -179,6 +179,126 @@ func TestScanTSNoMatchesFallsBackToWholeFile(t *testing.T) {
 	}
 }
 
+// TestScanTSClassSplitsIntoMethodsAndHeader is the concrete PR 13885 case
+// (analytics.ts's PlugAndPayAnalytics class): a getter, a constructor, a
+// plain method and a private `#method` each become their own Block with
+// Class set, and the leading field declarations become one residual
+// "<class-header>" block.
+func TestScanTSClassSplitsIntoMethodsAndHeader(t *testing.T) {
+	src := `class PlugAndPayAnalytics {
+    #endpoint: string = "x";
+    #debug: boolean = false;
+
+    get isInitialized() {
+        return this.#debug;
+    }
+
+    constructor() {
+        this.init();
+    }
+
+    init() {
+        this.#adoptHandedOverIds();
+    }
+
+    #adoptHandedOverIds() {
+        console.log('adopt');
+    }
+}
+`
+	blocks := scanTS([]byte(src), "analytics.ts")
+	header, ok := findTSBlock(blocks, classHeaderSentinel)
+	if !ok {
+		t.Fatalf("expected a <class-header> block, got %+v", blocks)
+	}
+	if header.Class != "PlugAndPayAnalytics" || header.Line != 2 || header.EndLine != 4 {
+		t.Fatalf("header: class=%q line=%d-%d, want PlugAndPayAnalytics/2-4", header.Class, header.Line, header.EndLine)
+	}
+	for _, name := range []string{"isInitialized", "constructor", "init", "#adoptHandedOverIds"} {
+		b, ok := findTSBlock(blocks, name)
+		if !ok {
+			t.Fatalf("%s not found, got %+v", name, blocks)
+		}
+		if b.Class != "PlugAndPayAnalytics" {
+			t.Fatalf("%s: class = %q, want PlugAndPayAnalytics", name, b.Class)
+		}
+	}
+	adopt, _ := findTSBlock(blocks, "#adoptHandedOverIds")
+	if adopt.Line != 16 || adopt.EndLine != 19 {
+		t.Fatalf("#adoptHandedOverIds: line=%d-%d, want 16-19", adopt.Line, adopt.EndLine)
+	}
+}
+
+// TestScanTSClassGeneratorAndComputedMethod covers a generator method and a
+// computed method name — both newly in scope.
+func TestScanTSClassGeneratorAndComputedMethod(t *testing.T) {
+	src := `class Foo {
+    *entries() {
+        yield 1;
+    }
+
+    [Symbol.iterator]() {
+        return this.entries();
+    }
+}
+`
+	blocks := scanTS([]byte(src), "foo.ts")
+	if _, ok := findTSBlock(blocks, "entries"); !ok {
+		t.Fatalf("generator method 'entries' not found, got %+v", blocks)
+	}
+	computed, ok := findTSBlock(blocks, "[Symbol.iterator]")
+	if !ok {
+		t.Fatalf("computed method '[Symbol.iterator]' not found, got %+v", blocks)
+	}
+	if computed.Class != "Foo" {
+		t.Fatalf("computed method: class = %q, want Foo", computed.Class)
+	}
+}
+
+// TestScanTSClassArrowFieldMethod covers a class field assigned an arrow
+// function — `handler = (x) => { ... }` — which is split into its own block
+// like an ordinary method (reviewer decision: WEL splitsen, unlike the
+// top-level const-arrow v1 boundary).
+func TestScanTSClassArrowFieldMethod(t *testing.T) {
+	src := `class Foo {
+    handler = (x: number): void => {
+        console.log(x);
+    };
+
+    private onClick = () => {
+        this.handler(1);
+    };
+}
+`
+	blocks := scanTS([]byte(src), "foo.ts")
+	h, ok := findTSBlock(blocks, "handler")
+	if !ok {
+		t.Fatalf("arrow field 'handler' not found, got %+v", blocks)
+	}
+	if h.Class != "Foo" {
+		t.Fatalf("handler: class = %q, want Foo", h.Class)
+	}
+	if _, ok := findTSBlock(blocks, "onClick"); !ok {
+		t.Fatalf("arrow field 'onClick' (with a modifier) not found, got %+v", blocks)
+	}
+}
+
+// TestScanTSClassWithNoMethodsEmitsNothing: a class with only fields (no
+// method-shaped member at all) contributes nothing — as if the class hadn't
+// been detected — same "silently nothing" precedent as an expression-bodied
+// top-level arrow. The file still falls back to one whole-file block.
+func TestScanTSClassWithNoMethodsEmitsNothing(t *testing.T) {
+	src := `class Config {
+    debug = false;
+    name = "x";
+}
+`
+	blocks := scanTS([]byte(src), "config.ts")
+	if len(blocks) != 1 || blocks[0].Name != "config.ts" {
+		t.Fatalf("expected the whole-file fallback, got %+v", blocks)
+	}
+}
+
 // TestScanBlocksDispatchesTSExtension is the ScanBlocks-level integration
 // check: a .ts file must reach scanTS, not the PHP path or the generic
 // whole-file default.

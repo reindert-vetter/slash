@@ -100,6 +100,81 @@ export const trackEvents = (): void => {
 	}
 }
 
+// TestResolveTSCallsPrivateMethodSameClass is the concrete PR 13885 case: a
+// changed method (init) calls a private method (`this.#adoptHandedOverIds()`)
+// of the SAME class, declared later in the same file. Proves the `#`-name
+// regex fix in reTSCallName (no leading `\b`, which never matches between
+// the `.` and the `#`) and the caller-lookup fix (bySym, keyed on the full
+// Class::Name symbol so a same-named method in another class can't shadow
+// the real caller's own body).
+func TestResolveTSCallsPrivateMethodSameClass(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 13885
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	file := "resources/analytics/src/analytics.ts"
+	writeTSFile(t, headDir, file, `class PlugAndPayAnalytics {
+    init() {
+        const params = new URLSearchParams(window.location.search);
+        this.#adoptHandedOverIds(params);
+    }
+
+    #adoptHandedOverIds(params: URLSearchParams) {
+        console.log(params);
+    }
+}
+`)
+	caller := Block{PR: pr, File: file, Class: "PlugAndPayAnalytics", Name: "init", Side: SideNew, Status: StatusModified}
+	entries := resolveTSCalls(dataDir, pr, []Block{caller})
+
+	e, ok := findEntry(entries, "#adoptHandedOverIds")
+	if !ok {
+		t.Fatalf("no entry for call %q, got %+v", "#adoptHandedOverIds", entries)
+	}
+	if e.Status != callresolve.StatusResolved {
+		t.Fatalf("#adoptHandedOverIds: status = %q, want %q", e.Status, callresolve.StatusResolved)
+	}
+	if e.ChildClass != "PlugAndPayAnalytics" || e.ChildMethod != "#adoptHandedOverIds" {
+		t.Fatalf("#adoptHandedOverIds: child = %q/%q, want PlugAndPayAnalytics/#adoptHandedOverIds", e.ChildClass, e.ChildMethod)
+	}
+	if e.ChildCode == "" {
+		t.Fatalf("#adoptHandedOverIds: expected non-empty child code")
+	}
+}
+
+// TestResolveTSCallsMatchesSameNameAcrossClasses documents the deliberately
+// loose, name-only precedent (reviewer decision: NOT scoped to the caller's
+// own class) — a call inside one class's method resolves to a same-named
+// method declared on an entirely DIFFERENT class in the same file, exactly
+// like the existing top-level-only behavior already did for two same-named
+// top-level functions.
+func TestResolveTSCallsMatchesSameNameAcrossClasses(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 1
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	file := "modules/example.ts"
+	writeTSFile(t, headDir, file, `class Other {
+    helper() {
+        console.log('other');
+    }
+}
+
+class Foo {
+    run() {
+        this.helper();
+    }
+
+    helper() {
+        console.log('foo');
+    }
+}
+`)
+	caller := Block{PR: pr, File: file, Class: "Foo", Name: "run", Side: SideNew, Status: StatusModified}
+	entries := resolveTSCalls(dataDir, pr, []Block{caller})
+	if _, ok := findEntry(entries, "helper"); !ok {
+		t.Fatalf("expected a 'helper' entry (loose, name-only match), got %+v", entries)
+	}
+}
+
 // TestResolveTSCallsSkipsNonTSFiles is a defensive guard: a PHP block in the
 // same PR must never reach the TS-only scan path.
 func TestResolveTSCallsSkipsNonTSFiles(t *testing.T) {
