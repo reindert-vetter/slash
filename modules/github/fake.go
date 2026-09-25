@@ -40,6 +40,7 @@ type Fake struct {
 	prMetaErrs        map[int]error        // per-PR error override (SetPRMetaErr), checked before prMetas
 	changesSince      map[int]SinceChanges // per-PR ChangesSince stub (SetChangesSince)
 	viewed            map[string]bool      // "pr|path" -> viewed
+	markFileViewedErr error                // set by SetMarkFileViewedErr: MarkFileViewed fails instead of recording
 
 	lastStartLine int
 	lastEndLine   int
@@ -432,6 +433,9 @@ func viewedKey(pr int, path string) string {
 func (f *Fake) MarkFileViewed(_ context.Context, pr int, path string, viewed bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.markFileViewedErr != nil {
+		return f.markFileViewedErr
+	}
 	if f.viewed == nil {
 		f.viewed = map[string]bool{}
 	}
@@ -640,4 +644,15 @@ func (f *Fake) ViewedFiles() map[string]bool {
 		out[k] = v
 	}
 	return out
+}
+
+// SetMarkFileViewedErr makes every later MarkFileViewed call fail with err
+// instead of recording the viewed state — mirrors SetFetchRepliesErr's own
+// error-injection shape. Used to simulate GitHub rejecting a mark-viewed call
+// for a file that is no longer part of the PR ("Filepath must be part of pull
+// request").
+func (f *Fake) SetMarkFileViewedErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.markFileViewedErr = err
 }

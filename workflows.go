@@ -2707,6 +2707,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 
 	// Activity: mark/unmark a file's GitHub "Viewed" checkbox (write,
 	// workflow-driven — the only place that talks to GitHub for this).
+	// Best-effort — this only mirrors state onto GitHub's own UI, it is never
+	// the source of truth (that's the approvals read-model), so a failure here
+	// must not kill the long-lived per-PR approve tracker. It used to return
+	// the error, which failed the whole Execution: SignalWorkflow refuses any
+	// further Signal once a run is StatusFailed, so ONE rejected mark-viewed
+	// call (e.g. a stale local block for a file a rebase/force-push already
+	// dropped from the PR — GitHub's markFileAsViewed then answers
+	// "Filepath must be part of pull request") permanently blocked every
+	// later approval on that PR too, and a retry re-hit the same live
+	// rejection every time (PR 13885).
 	engine.RegisterActivity("setFileViewed", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
 			Repo   string `json:"repo,omitempty"`
@@ -2720,7 +2730,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.gh == nil || arg.File == "" {
 			return nil, nil
 		}
-		return nil, m.ghFor(arg.Repo).MarkFileViewed(ctx, arg.PR, arg.File, arg.Viewed)
+		if err := m.ghFor(arg.Repo).MarkFileViewed(ctx, arg.PR, arg.File, arg.Viewed); err != nil {
+			m.logf("approve: set file viewed skipped for pr %d file %q: %v", arg.PR, arg.File, err)
+		}
+		return nil, nil
 	})
 
 	// Activity: submit a real GitHub PR-level review (write, workflow-driven —

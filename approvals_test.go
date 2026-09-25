@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -165,6 +166,61 @@ func TestApproveWorkflowFileViewed(t *testing.T) {
 	// The approvals read-model was never touched by the viewed requests.
 	if got, _ := ap.List(context.Background(), "", pr); len(got) != 0 {
 		t.Fatalf("approvals List = %+v, want none (viewed-only signals)", got)
+	}
+}
+
+// A failing setFileViewed Activity (GitHub rejecting a mark-viewed call, e.g.
+// because a stale local block still names a file that a rebase/force-push
+// already dropped from the PR) must not kill the approve tracker: it is a
+// best-effort mirror of GitHub's own "Viewed" checkbox, never the source of
+// truth. Before the fix this failed the whole Execution, and since
+// SignalWorkflow refuses any further Signal on a StatusFailed run, every
+// later approval on the same PR was silently dropped too (PR 13885).
+func TestApproveWorkflowFileViewedErrorDoesNotFailTracker(t *testing.T) {
+	ap, err := approvals.Open(filepath.Join(t.TempDir(), "approvals.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.Close()
+
+	gh := &github.Fake{}
+	gh.SetMarkFileViewedErr(errors.New(`gh api graphql markFileAsViewed: exit status 1 ({"errors":[{"type":"UNPROCESSABLE","message":"Filepath must be part of pull request"}]})`))
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, gh, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, ap, nil, nil, nil, nil, "", "test/repo")
+
+	pr := 44
+	runID, err := m.EnsureApprovals("", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	viewedTrue := true
+	if err := engine.SignalWorkflow(runID, SignalSet, ApprovalSignal{
+		File: "stale/dropped-file.php", Viewed: &viewedTrue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A normal approval signal right after must still land — the tracker is
+	// alive, not stuck as StatusFailed.
+	if err := engine.SignalWorkflow(runID, SignalSet, ApprovalSignal{
+		BlockID: "44:a.php:A::x", Rows: []int{1}, Calls: nil,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		got, _ := ap.List(context.Background(), "", pr)
+		return len(got) == 1 && got[0].BlockID == "44:a.php:A::x"
+	})
+
+	runs, err := engine.Runs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if r.ID == runID && r.Status == tembed.StatusFailed {
+			t.Fatalf("approve run %s is %s, want alive after a rejected setFileViewed call", runID, r.Status)
+		}
 	}
 }
 
