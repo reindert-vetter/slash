@@ -373,7 +373,7 @@ test.describe('Inline code editing — caret placed in the middle of the active 
     expect(offsets.none).toBe(null)
   })
 
-  test('opening the editor for a specific selected unit focuses the textarea with the caret inside it', async ({
+  test('opening the editor for a specific selected unit focuses the textarea with the caret inside it, and shows ONLY that unit', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -403,9 +403,9 @@ test.describe('Inline code editing — caret placed in the middle of the active 
           new: {
             start: 26,
             end: 30,
-            // 4 lines — the active unit below points at row 2 only
-            // ("    return 2;"), which sits neither at the very start nor
-            // the very end of the whole new-side text.
+            // 4 lines — the active unit below points at rows 1..2 only
+            // ("    // changed" + "    return 2;"), neither the whole
+            // block's own start nor its end.
             text: 'public function caret(): ?int {\n    // changed\n    return 2;\n}',
           },
         },
@@ -417,10 +417,11 @@ test.describe('Inline code editing — caret placed in the middle of the active 
       Block(b, {
         allowInlineEdit: true,
         diffActive: () => true,
-        // Simulates the reviewer's cursor sitting on row 2 ("    return
-        // 2;") when "Bewerk deze code" is invoked — the SAME {start,end}
-        // shape activeGroup()/topLevelActiveUnit() return.
-        activeGroup: () => ({ start: 2, end: 2 }),
+        // Simulates the reviewer's selection sitting on rows 1..2 ("    //
+        // changed" / "    return 2;") when "Bewerk deze code" is invoked —
+        // the SAME {start,end} shape activeGroup()/topLevelActiveUnit()
+        // return.
+        activeGroup: () => ({ start: 1, end: 2 }),
       })(host)
     })
 
@@ -430,15 +431,18 @@ test.describe('Inline code editing — caret placed in the middle of the active 
     await expect(textarea).toBeVisible()
     await expect(textarea).toBeFocused()
 
+    // Only the selected unit's own two rows are shown/editable — not the
+    // whole 4-line block (reviewer follow-up: "is het handiger als je
+    // alleen kan bewerken wat is geselecteerd?", a deliberate narrowing of
+    // v1's "whole block" scope — see .claude/docs/inline-edit.md).
+    await expect(textarea).toHaveValue('    // changed\n    return 2;')
+
     const value = await textarea.inputValue()
-    const lines = value.split('\n')
-    const rowStartOffset = lines.slice(0, 2).join('\n').length + 1 // start of line index 2
-    const rowEndOffset = rowStartOffset + lines[2].length
     const pos = await textarea.evaluate((el) => el.selectionStart)
-    // The caret must land strictly inside row 2's own text — never at 0
-    // (the very start of the whole block) and never past its own end.
-    expect(pos).toBeGreaterThan(rowStartOffset)
-    expect(pos).toBeLessThan(rowEndOffset)
+    // The caret must land strictly inside the (now whole) editable text —
+    // never at its very start and never at its very end.
+    expect(pos).toBeGreaterThan(0)
+    expect(pos).toBeLessThan(value.length)
   })
 })
 
@@ -495,5 +499,189 @@ test.describe('Inline code editing — Cmd+Enter auto-sends the change, no manua
         data: { author: 'reviewer' },
       })
     }
+  })
+})
+
+// Reviewer follow-up: "is het handiger als je alleen kan bewerken wat is
+// geselecteerd?" — narrows v1's "whole block, not a sub-range" scope (see
+// .claude/docs/inline-edit.md) to just the currently selected navigation
+// unit. Opslaan must still leave the REST of the block untouched: it merges
+// the reviewer's edited fragment back into the full new-side source before
+// handing it to Claude as `proposedCode` (home.mjs's saveInlineEdit).
+test.describe('Inline code editing — only the selected unit is editable', () => {
+  test('blockNewSourceRangeText/mergeInlineEditRangeIntoSource: extract a sub-range, then merge an edit back in leaving the rest untouched', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    const result = await page.evaluate(async () => {
+      const { blockNewSourceRangeText, mergeInlineEditRangeIntoSource } = await import('/src/inlineEdit.mjs')
+      const rows = [{ right: 'aaaa' }, { right: 'bb' }, { right: 'cccccc' }, { right: 'dd' }]
+      return {
+        // rows 1..2 only ("bb", "cccccc") — not the whole 4-row block.
+        rangeText: blockNewSourceRangeText(rows, 1, 2),
+        // No selection at all (-1/-1) falls back to the WHOLE block, same
+        // as v1's original behaviour — still needed for list mode / a
+        // direct-mount caller that never computed a unit.
+        wholeBlockFallback: blockNewSourceRangeText(rows, -1, -1),
+        // Replacing rows 1..2 with new text: row 0 ("aaaa") and row 3
+        // ("dd") must survive completely unchanged, only the middle is the
+        // reviewer's edit.
+        merged: mergeInlineEditRangeIntoSource(rows, 1, 2, 'EDITED'),
+        // No selection: the merge has no "rest of the block" to preserve,
+        // so it returns the typed text as-is.
+        mergedNoSelection: mergeInlineEditRangeIntoSource(rows, -1, -1, 'EDITED'),
+      }
+    })
+    expect(result.rangeText).toBe('bb\ncccccc')
+    expect(result.wholeBlockFallback).toBe('aaaa\nbb\ncccccc\ndd')
+    expect(result.merged).toBe('aaaa\nEDITED\ndd')
+    expect(result.mergedNoSelection).toBe('EDITED')
+  })
+
+  // A real end-to-end pass through Block.mjs's own onSaveInlineEdit hand-off:
+  // the reviewer only ever sees/types the SELECTED unit's own two rows, but
+  // the callback also receives that unit's own rowStart/rowEnd so the caller
+  // (home.mjs's saveInlineEdit) can merge it back into the full source.
+  test('"Opslaan" only hands over the selected unit\'s own text, plus its row range', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const b = reactive({
+        id: 'inline-edit-test:Foo::scope',
+        pr: 12903,
+        category: 'ACTION',
+        label: 'Foo::scope',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 26,
+        endLine: 30,
+        name: 'scope',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 26, end: 29, text: 'public function scope(): int {\n    return 1;\n}' },
+          new: {
+            start: 26,
+            end: 30,
+            text: 'public function scope(): ?int {\n    // changed\n    return 2;\n}',
+          },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'inline-edit-scope-host'
+      host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto'
+      document.body.appendChild(host)
+      window.__inlineEditScopeSaves = []
+      Block(b, {
+        allowInlineEdit: true,
+        diffActive: () => true,
+        // Only row 2 ("    return 2;") is selected.
+        activeGroup: () => ({ start: 2, end: 2 }),
+        onSaveInlineEdit: (blk, text, originalSource, rowStart, rowEnd) => {
+          window.__inlineEditScopeSaves.push({ text, originalSource, rowStart, rowEnd })
+        },
+      })(host)
+    })
+
+    const host = page.locator('#inline-edit-scope-host')
+    await host.locator('[data-testid="block-inline-edit-toggle"]').click()
+    const textarea = host.locator('[data-testid="inline-edit-textarea"]')
+    await expect(textarea).toHaveValue('    return 2;')
+    await textarea.fill('    return 3;')
+    await host.locator('[data-testid="inline-edit-save"]').click()
+
+    const saves = await page.evaluate(() => window.__inlineEditScopeSaves)
+    expect(saves).toHaveLength(1)
+    expect(saves[0].text).toBe('    return 3;')
+    expect(saves[0].originalSource).toBe('    return 2;')
+    expect(saves[0].rowStart).toBe(2)
+    expect(saves[0].rowEnd).toBe(2)
+  })
+})
+
+// Reviewer report (with a screenshot): "als ik stukje code bewerk, kan ik er
+// niet in scrollen" — an underestimated initial textarea height (Block.mjs's
+// crude "assume 16px per line" guess) left the <textarea> itself internally
+// scrollable (a plain <textarea>'s own default overflow), which silently
+// captured the mouse-wheel scroll instead of it bubbling to the intended
+// overflow-auto ancestor — while the highlighted <pre> underneath (which
+// tracks the ancestor, not the textarea) never moved at all. Fixed by
+// scheduleInlineEditGrow (inlineEdit.mjs), which corrects the textarea's own
+// height to its real ta.scrollHeight right after mount. Still relevant after
+// narrowing the editor's scope to just the selected unit (above), since a
+// 'group'/'call' unit can still legitimately span many lines.
+test.describe('Inline code editing — a long selected unit is scrollable', () => {
+  test('the textarea has no internal overflow of its own, and the surrounding container actually scrolls', async ({
+    page,
+  }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const lines = []
+      for (let i = 0; i < 300; i++) lines.push('    $line' + i + ' = ' + i + ';')
+      const newText = 'public function big(): int {\n' + lines.join('\n') + '\n}'
+      const b = reactive({
+        id: 'inline-edit-test:Foo::big',
+        pr: 12903,
+        category: 'ACTION',
+        label: 'Foo::big',
+        status: 'modified',
+        file: 'app/Foo.php',
+        line: 26,
+        endLine: 26 + lines.length + 1,
+        name: 'big',
+        class: 'Foo',
+        approved: false,
+        code: {
+          old: { start: 26, end: 27, text: 'public function big(): int {\n}' },
+          new: { start: 26, end: 26 + lines.length + 1, text: newText },
+        },
+      })
+      const host = document.createElement('div')
+      host.id = 'inline-edit-scroll-host'
+      // A bounded host (unlike the other direct-mount tests' unbounded
+      // fixed overlay) so the card's own overflow-auto container actually
+      // has to scroll rather than just growing with the page — matching
+      // the real app's column, which is bounded by the footer.
+      host.style.cssText =
+        'position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto;display:flex;flex-direction:column;height:600px'
+      document.body.appendChild(host)
+      Block(b, {
+        allowInlineEdit: true,
+        diffActive: () => true,
+        // A big SELECTED UNIT (a 'group' spanning the whole block) — the
+        // case that must still be scrollable even though the editor now
+        // scopes to just the selected unit.
+        activeGroup: () => ({ start: 0, end: lines.length + 1 }),
+      })(host)
+    })
+
+    const host = page.locator('#inline-edit-scroll-host')
+    await host.locator('[data-testid="block-inline-edit-toggle"]').click()
+    const textarea = host.locator('[data-testid="inline-edit-textarea"]')
+    await expect(textarea).toBeVisible()
+    // Wait for scheduleInlineEditGrow's requestAnimationFrame to run.
+    await expect
+      .poll(async () => textarea.evaluate((el) => parseFloat(el.style.height) >= el.scrollHeight))
+      .toBe(true)
+
+    const box = await textarea.boundingBox()
+    await page.mouse.move(box.x + 50, box.y + 50)
+    await page.mouse.wheel(0, 2000)
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const wrapper = document.querySelector('#inline-edit-scroll-host [data-testid="inline-edit-wrapper"]')
+          const scrollDiv = wrapper.querySelector(':scope > div')
+          return scrollDiv.scrollTop
+        }),
+      )
+      .toBeGreaterThan(0)
   })
 })

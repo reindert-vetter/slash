@@ -27,10 +27,16 @@ import { loadDraft, saveDraft, clearDraft } from './draftStorage.mjs'
 // selRowStart/selRowEnd — the aligned-row range (blockRows() indices) of the
 // diff's own active navigation unit at the moment editing was opened — set
 // together with `id` by openInlineEdit below, -1/-1 when nothing was
-// selected. Used only once, by inlineEditorSlot (Block.mjs), to place the
-// caret in the MIDDLE of that same code once the editor mounts (reviewer
-// request: "moet gelijk de cursor zetten in het midden van wat is
-// geselecteerd") — see computeInlineEditCaretOffset/scheduleInlineEditCaret.
+// selected (e.g. list mode). This is now the editor's own SCOPE, not just a
+// caret-placement hint: inlineEditorSlot (Block.mjs) shows and edits ONLY
+// these rows, falling back to the whole block only when there was no active
+// unit at all — see "Only the selected unit is editable" in
+// .claude/docs/inline-edit.md (a deliberate narrowing from v1's "whole block
+// at once", reviewer follow-up: "is het handiger als je alleen kan bewerken
+// wat is geselecteerd?"). Also still used to place the caret in the MIDDLE
+// of that range once the editor mounts (reviewer request: "moet gelijk de
+// cursor zetten in het midden van wat is geselecteerd") — see
+// computeInlineEditCaretOffset/scheduleInlineEditCaret.
 export const inlineEditState = reactive({ id: null, selRowStart: -1, selRowEnd: -1 })
 
 // openInlineEdit — the ONE entry point that turns inline editing on for a
@@ -53,6 +59,7 @@ export function openInlineEdit(b, unit) {
 export function closeInlineEdit() {
   inlineEditState.id = null
   caretScheduledFor = null
+  growScheduledFor = null
 }
 
 // computeInlineEditCaretOffset maps a stored row range onto a character
@@ -113,12 +120,46 @@ export function scheduleInlineEditCaret(b, offset) {
   })
 }
 
-// blockNewSourceText — a block's current new/right-side source as one plain
+// growScheduledFor — mirrors caretScheduledFor below: a plain, non-reactive
+// guard so the just-mounted <textarea>'s height is force-recomputed only
+// ONCE per "open", not on every re-render of the toggling slot that mounts
+// inlineEditorSlot while editing stays open.
+let growScheduledFor = null
+
+// scheduleInlineEditGrow corrects the just-mounted <textarea>'s height to its
+// REAL rendered content height (ta.scrollHeight) right after mount, instead
+// of relying only on inlineEditorSlot's own upfront "assume 16px per line"
+// estimate (Block.mjs's initialHeightPx). See "Scrolling a long selected
+// unit" in .claude/docs/inline-edit.md for the bug this fixes: an
+// underestimated height leaves the <textarea> itself internally scrollable
+// (a plain <textarea>'s own default overflow), which silently captures the
+// reviewer's mouse-wheel scroll instead of letting it bubble to the intended
+// overflow-auto ancestor — while the absolutely positioned, highlighted
+// <pre> underneath (which tracks the container, not the textarea) never
+// moves at all, reading as "I can't scroll in here". Deferred via
+// requestAnimationFrame for the same reason scheduleInlineEditCaret is: the
+// textarea mounts asynchronously, not synchronously with the state write
+// that revealed it.
+export function scheduleInlineEditGrow(b) {
+  if (growScheduledFor === b.id) return
+  growScheduledFor = b.id
+  requestAnimationFrame(() => {
+    if (inlineEditState.id !== b.id) return
+    const ta = document.querySelector('[data-testid="inline-edit-textarea"]')
+    if (!ta) return
+    ta.style.height = 'auto'
+    ta.style.height = ta.scrollHeight + 'px'
+  })
+}
+
+// blockNewSourceText — a block's WHOLE new/right-side source as one plain
 // string, built from the same aligned rows blockRows()/commentTarget()
 // already use (Block.mjs/home.mjs) — reused here instead of a second source
 // of truth, and the exact text a real edit would eventually replace
-// (Line..EndLine, model.go), whole-block since editing is scoped to "heel
-// blok" (see Block.mjs's isInlineEditable).
+// (Line..EndLine, model.go). Still used for the FULL block (e.g. as the
+// base a sub-range edit gets merged back into — see
+// mergeInlineEditRangeIntoSource below) even though the editor itself no
+// longer edits the whole thing at once (see blockNewSourceRangeText).
 export function blockNewSourceText(rows) {
   const lines = []
   for (const r of rows || []) {
@@ -126,6 +167,52 @@ export function blockNewSourceText(rows) {
     if (text != null) lines.push(text)
   }
   return lines.join('\n')
+}
+
+// blockNewSourceRangeText — the plain-text content of just rows[rowStart..
+// rowEnd] (inclusive), the same per-row rule blockNewSourceText applies to
+// the whole block. This is the editor's actual scope now (see
+// inlineEditState's own doc comment above): rowStart<0 (no active unit —
+// list mode, or a block with no navigable changes) falls back to the WHOLE
+// block, exactly like the old v1 behaviour.
+export function blockNewSourceRangeText(rows, rowStart, rowEnd) {
+  const all = rows || []
+  if (rowStart == null || rowStart < 0 || rowEnd == null || rowEnd < 0) return blockNewSourceText(all)
+  const lines = []
+  for (let i = rowStart; i <= rowEnd; i++) {
+    const r = all[i]
+    const text = r && (r.right != null ? r.right : r.left)
+    if (text != null) lines.push(text)
+  }
+  return lines.join('\n')
+}
+
+// mergeInlineEditRangeIntoSource rebuilds the block's WHOLE new-side source
+// with just rows[rowStart..rowEnd] replaced by `text` — everything outside
+// that range is left exactly as it already was. This is how "Opslaan" keeps
+// its promise that only the selected unit changes (reviewer: "opslaan
+// vervangt alleen dat stuk; de rest van het blok blijft ongewijzigd"): the
+// reviewer only ever typed the sub-range, but the proposed code handed to
+// Claude (home.mjs's saveInlineEdit) is the full, accurate result. rowStart<0
+// (no active unit — the whole-block fallback) returns `text` unchanged, since
+// there is no "rest of the block" to preserve in that case.
+export function mergeInlineEditRangeIntoSource(rows, rowStart, rowEnd, text) {
+  if (rowStart == null || rowStart < 0 || rowEnd == null || rowEnd < 0) return text
+  const all = rows || []
+  const before = []
+  const after = []
+  for (let i = 0; i < all.length; i++) {
+    const r = all[i]
+    const t = r && (r.right != null ? r.right : r.left)
+    if (t == null) continue
+    if (i < rowStart) before.push(t)
+    else if (i > rowEnd) after.push(t)
+  }
+  const parts = []
+  if (before.length) parts.push(before.join('\n'))
+  parts.push(text)
+  if (after.length) parts.push(after.join('\n'))
+  return parts.join('\n')
 }
 
 // ── Local draft persistence ─────────────────────────────────────────────
@@ -137,21 +224,31 @@ export function blockNewSourceText(rows) {
 // clearInlineEditDraft's call site, home.mjs's saveInlineEdit). Leaving the
 // editor via "Annuleren" or navigating away deliberately does NOT clear it.
 //
-// Each draft stores both the typed text AND a snapshot of the new-side
-// source at the moment editing started (or resumed) — `originalSource` —
-// so a later save can tell, precisely (not by asking the reviewer), whether
-// the underlying code has since changed under it (a landing of this
-// reviewer's own or a colleague's, in between). See saveInlineEdit
-// (home.mjs) for how that becomes a plain-language note in the chat's
-// invisible context.
+// Each draft stores both the typed text AND a snapshot of the (sub-range's
+// own) new-side source at the moment editing started (or resumed) —
+// `originalSource` — so a later save can tell, precisely (not by asking the
+// reviewer), whether the underlying code has since changed under it (a
+// landing of this reviewer's own or a colleague's, in between). See
+// saveInlineEdit (home.mjs) for how that becomes a plain-language note in
+// the chat's invisible context.
+//
+// The key is scoped to rowStart/rowEnd, not just the block id: since v1's
+// "edit the whole block" scope narrowed to "edit only the selected unit"
+// (see inlineEditState's own doc comment above), two different units of the
+// SAME block are two unrelated drafts — sharing one key would otherwise seed
+// a freshly opened, different unit's editor with whatever text was typed for
+// an earlier, differently-sized unit. rowStart<0 (the whole-block fallback)
+// keys as 'all', same bucket every direct-mount test that never sets
+// activeGroup already exercises.
 const inlineEditDrafts = new Map()
 
-function inlineEditDraftKey(b) {
-  return 'inline-edit:' + b.pr + ':' + b.id
+function inlineEditDraftKey(b, rowStart, rowEnd) {
+  const range = rowStart != null && rowStart >= 0 ? rowStart + '-' + rowEnd : 'all'
+  return 'inline-edit:' + b.pr + ':' + b.id + ':' + range
 }
 
-export function loadInlineEditDraft(b) {
-  const key = inlineEditDraftKey(b)
+export function loadInlineEditDraft(b, rowStart, rowEnd) {
+  const key = inlineEditDraftKey(b, rowStart, rowEnd)
   if (inlineEditDrafts.has(key)) return inlineEditDrafts.get(key)
   const raw = loadDraft(key)
   if (!raw) return null
@@ -167,15 +264,15 @@ export function loadInlineEditDraft(b) {
   return null
 }
 
-export function saveInlineEditDraft(b, text, originalSource) {
-  const key = inlineEditDraftKey(b)
+export function saveInlineEditDraft(b, text, originalSource, rowStart, rowEnd) {
+  const key = inlineEditDraftKey(b, rowStart, rowEnd)
   const entry = { text, originalSource }
   inlineEditDrafts.set(key, entry)
   saveDraft(key, JSON.stringify(entry))
 }
 
-export function clearInlineEditDraft(b) {
-  const key = inlineEditDraftKey(b)
+export function clearInlineEditDraft(b, rowStart, rowEnd) {
+  const key = inlineEditDraftKey(b, rowStart, rowEnd)
   inlineEditDrafts.delete(key)
   clearDraft(key)
 }

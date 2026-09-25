@@ -15,13 +15,14 @@ import Prism from './vendor/prism.js'
 import { t } from './i18n.mjs'
 import {
   inlineEditState,
-  blockNewSourceText,
+  blockNewSourceRangeText,
   loadInlineEditDraft,
   saveInlineEditDraft,
   openInlineEdit,
   closeInlineEdit,
   computeInlineEditCaretOffset,
   scheduleInlineEditCaret,
+  scheduleInlineEditGrow,
 } from './inlineEdit.mjs'
 // alignRows/diffLines used to live at the bottom of this file; they were
 // extracted to their own module so /plan/<KEY> can reuse the exact same
@@ -1166,9 +1167,17 @@ function inlineEditToggleButton(b, activeGroup) {
 // inlineEditorSlot — the inline, IDE-style editor for a block's new/right
 // side. Replaces the ordinary diff body while active (codeDiff/
 // translationSlot/svgSlot/imageSlot are all skipped, see the call site in
-// Block() below) — editing the WHOLE block as one free-form text, so there
-// is no per-row alignment against the old side left to keep meaningful
-// during an edit.
+// Block() below) — editing only the SELECTED UNIT (the diff's active
+// navigation unit at the moment editing was opened, inlineEditState's own
+// selRowStart/selRowEnd) as one free-form text, not the whole block anymore
+// (reviewer follow-up: "is het handiger als je alleen kan bewerken wat is
+// geselecteerd?" — a deliberate narrowing of v1's "whole block, not a
+// sub-range" scope, see .claude/docs/inline-edit.md). Falls back to the
+// whole block only when there was no active unit at all (list mode, or a
+// direct-mount caller that never computed one — every real entry point
+// always has one once eligible, see openInlineEdit's callers). There is no
+// per-row alignment against the old side to keep meaningful during an edit
+// either way.
 //
 // Two-layer technique, no contenteditable (see "A statically interpolated
 // template..."/the keyed-node-reuse family of pitfalls in
@@ -1188,7 +1197,10 @@ function inlineEditToggleButton(b, activeGroup) {
 // the <pre> is absolutely positioned with only top/left/right pinned
 // (never bottom/height), so its natural content height matches the
 // textarea's and scrolling the shared container moves both together with
-// zero JS scroll-sync code.
+// zero JS scroll-sync code — see scheduleInlineEditGrow (inlineEdit.mjs) for
+// why the textarea's OWN height must be corrected right after mount for
+// that to actually hold for a long selected unit (a reviewer-reported bug:
+// "als ik stukje code bewerk, kan ik er niet in scrollen").
 //
 // Nothing here writes anywhere. "Opslaan" (onSave) hands the edited text to
 // a brand-new Claude chat instead of committing it directly — see
@@ -1197,8 +1209,23 @@ function inlineEditToggleButton(b, activeGroup) {
 function inlineEditorSlot(b, onSave) {
   const rows = blockRows(b)
   const lang = langForFile(b.file)
-  const draft = loadInlineEditDraft(b)
-  const currentSource = blockNewSourceText(rows)
+  // rowStart/rowEnd snapshot the editor's SCOPE at mount time, from
+  // inlineEditState's own selRowStart/selRowEnd — captured here, in plain
+  // local consts, because closeInlineEdit() (called by every
+  // onCancelClick/onSaveClick/onTextareaKeyDown path below, BEFORE onSave
+  // runs) resets those fields to -1/-1; onSave still needs the exact range
+  // that was being edited, so it's passed through as its own arguments
+  // rather than re-read from the (by-then-reset) shared state. -1/-1 means
+  // "no active unit" (list mode, or a direct-mount caller that never
+  // computed one) — blockNewSourceRangeText/mergeInlineEditRangeIntoSource/
+  // the draft functions (inlineEdit.mjs) all already treat that as "the
+  // whole block" on their own, so nothing here needs to resolve it to a
+  // concrete 0..rows.length-1 pair itself.
+  const rowStart = inlineEditState.selRowStart
+  const rowEnd = inlineEditState.selRowEnd
+  const hasSelection = rowStart != null && rowStart >= 0 && rowEnd != null && rowEnd >= 0
+  const draft = loadInlineEditDraft(b, rowStart, rowEnd)
+  const currentSource = blockNewSourceRangeText(rows, rowStart, rowEnd)
   const initialText = draft ? draft.text : currentSource
   const originalSource = draft ? draft.originalSource : currentSource
   const initialHighlightHtml = highlightForLang(initialText, lang)
@@ -1217,7 +1244,7 @@ function inlineEditorSlot(b, onSave) {
     growEl(ta)
     const code = highlightCodeEl(ta)
     if (code) code.innerHTML = highlightForLang(ta.value, lang)
-    saveInlineEditDraft(b, ta.value, originalSource)
+    saveInlineEditDraft(b, ta.value, originalSource, rowStart, rowEnd)
   }
   function onCancelClick(e) {
     if (!e) return
@@ -1231,7 +1258,7 @@ function inlineEditorSlot(b, onSave) {
     const ta = wrapper && wrapper.querySelector('[data-testid="inline-edit-textarea"]')
     const text = ta ? ta.value : initialText
     closeInlineEdit()
-    onSave(b, text, originalSource)
+    onSave(b, text, originalSource, rowStart, rowEnd)
   }
   // onTextareaKeyDown — the editor's own two shortcuts (reviewer request:
   // "esc moet edit sluiten zonder op te slaan ... cmd + enter moet het
@@ -1256,18 +1283,24 @@ function inlineEditorSlot(b, onSave) {
       e.stopPropagation()
       const text = e.target.value
       closeInlineEdit()
-      onSave(b, text, originalSource)
+      onSave(b, text, originalSource, rowStart, rowEnd)
     }
   }
 
-  // Place the caret in the MIDDLE of whatever the diff's own selection
-  // covered at the moment "Bewerk deze code" was invoked (reviewer request:
-  // "moet gelijk de cursor zetten in het midden van wat is geselecteerd") —
-  // see computeInlineEditCaretOffset/scheduleInlineEditCaret's own doc
-  // comments (inlineEdit.mjs) for the row→offset mapping and the
-  // once-per-open guard.
-  const initialCaretOffset = computeInlineEditCaretOffset(rows, inlineEditState.selRowStart, inlineEditState.selRowEnd)
+  // Place the caret in the MIDDLE of the selected unit's own text (reviewer
+  // request: "moet gelijk de cursor zetten in het midden van wat is
+  // geselecteerd") — now trivial since the editable text IS that unit
+  // (nothing wider to locate it within anymore): reuse
+  // computeInlineEditCaretOffset against just the unit's own rows, spanning
+  // its whole (now sole) range. No selection at all (the whole-block
+  // fallback) leaves the caret at the text's own end, same as before. See
+  // computeInlineEditCaretOffset/scheduleInlineEditCaret's own doc comments
+  // (inlineEdit.mjs).
+  const initialCaretOffset = hasSelection
+    ? computeInlineEditCaretOffset(rows.slice(rowStart, rowEnd + 1), 0, rowEnd - rowStart)
+    : null
   scheduleInlineEditCaret(b, initialCaretOffset)
+  scheduleInlineEditGrow(b)
 
   return html`
     <div class="flex min-h-0 flex-1 flex-col" data-testid="inline-edit-wrapper">

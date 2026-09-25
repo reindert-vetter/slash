@@ -3424,21 +3424,27 @@ function claudeContextBlock(commentTarget) {
       if (t.label) lines.push('Onderdeel: ' + t.label)
       lines.push('Voorbeeldcode:', '```php', t.code, '```')
       // proposedCode — the reviewer's own inline-edited draft (Block.mjs's
-      // inline editor, "Opslaan"), set only by home.mjs's saveInlineEdit.
-      // Every other caller's target has no proposedCode, so this branch is a
-      // pure addition for every existing chat entry point (startClaudeChat/
-      // startComment/etc.) — unchanged behaviour there. Deliberately sent as
-      // plain, visible-to-Claude context (not the reviewer's own typed
-      // message, see the file header) so the reviewer's own follow-up
-      // question ("pas dit ook op andere plekken aan") is what they typed,
-      // nothing more.
+      // inline editor, "Opslaan"), set only by home.mjs's saveInlineEdit. The
+      // editor itself only shows/edits the SELECTED unit (not the whole
+      // block — see "Only the selected unit is editable" in
+      // .claude/docs/inline-edit.md); saveInlineEdit merges that edited
+      // fragment back into the block's WHOLE new-side source
+      // (mergeInlineEditRangeIntoSource, inlineEdit.mjs) before it lands
+      // here, so proposedCode is always the full, accurate resulting code,
+      // not just the edited fragment in isolation. Every other caller's
+      // target has no proposedCode, so this branch is a pure addition for
+      // every existing chat entry point (startClaudeChat/startComment/etc.)
+      // — unchanged behaviour there. Deliberately sent as plain,
+      // visible-to-Claude context (not the reviewer's own typed message, see
+      // the file header) so the reviewer's own follow-up question ("pas dit
+      // ook op andere plekken aan") is what they typed, nothing more.
       if (t.proposedCode) {
         lines.push('Door de reviewer voorgestelde nieuwe code (nog niet doorgevoerd):', '```php', t.proposedCode, '```')
         // proposedStale — set true only when home.mjs's saveInlineEdit found
-        // the new-side source had genuinely changed since this edit started
-        // (a landing in between, this reviewer's own or a colleague's) — a
-        // precise, computed fact, never a guess, see blockNewSourceText's own
-        // doc comment (inlineEdit.mjs).
+        // the EDITED RANGE's own source had genuinely changed since this
+        // edit started (a landing in between, this reviewer's own or a
+        // colleague's) — a precise, computed fact, never a guess, see
+        // blockNewSourceRangeText's own doc comment (inlineEdit.mjs).
         if (t.proposedStale)
           lines.push(
             'Let op: dit voorstel is getypt tegen een eerdere versie van dit bestand — de huidige code hierboven kan intussen zijn gewijzigd.',

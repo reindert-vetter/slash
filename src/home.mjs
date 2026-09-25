@@ -35,7 +35,13 @@ import Block, {
   PR_DESC_FILE,
   isPrDescriptionBlock,
 } from './Block.mjs'
-import { inlineEditState, blockNewSourceText, clearInlineEditDraft, openInlineEdit } from './inlineEdit.mjs'
+import {
+  inlineEditState,
+  blockNewSourceRangeText,
+  mergeInlineEditRangeIntoSource,
+  clearInlineEditDraft,
+  openInlineEdit,
+} from './inlineEdit.mjs'
 import RelatedPanel, {
   InlineComments,
   ClaudeChatPanel,
@@ -11784,25 +11790,35 @@ function commentTarget() {
 // actually sent through this target, but once the auto-send below started
 // doing exactly that, the freshly created anchor never matched `cs.scope`
 // and silently never became selectable, so the turn was never sent at all
-// (caught by tests/inline-edit.spec.mjs's own auto-send test). The reviewer's
-// EDITED TEXT still always covers the whole new-side source (v1 scope,
-// unrelated to this) — only the anchor's own row range needs to track the
-// live cursor, exactly like every other "Chat over deze regel" anchor.
-function saveInlineEdit(b, text, originalSource) {
+// (caught by tests/inline-edit.spec.mjs's own auto-send test).
+//
+// `text` is now only the SELECTED UNIT's own edited text (rowStart/rowEnd —
+// Block.mjs's inlineEditorSlot, a deliberate narrowing of v1's "whole block"
+// scope, reviewer follow-up: "is het handiger als je alleen kan bewerken wat
+// is geselecteerd?"). proposedCode reconstructs the block's WHOLE new-side
+// source with just that range replaced, via mergeInlineEditRangeIntoSource —
+// "opslaan vervangt alleen dat stuk; de rest van het blok blijft
+// ongewijzigd" — so Claude still receives the complete, accurate resulting
+// code, not just the edited fragment in isolation. See "Only the selected
+// unit is editable" in .claude/docs/inline-edit.md.
+function saveInlineEdit(b, text, originalSource, rowStart, rowEnd) {
   const rows = blockRows(b)
-  const currentSource = blockNewSourceText(rows)
-  // Precise, not guessed: only note staleness when the new-side source has
-  // genuinely changed since this draft started (a landing in between — this
-  // reviewer's own or a colleague's).
-  const stale = currentSource !== originalSource
+  const currentRangeSource = blockNewSourceRangeText(rows, rowStart, rowEnd)
+  // Precise, not guessed: only note staleness when the edited RANGE's own
+  // source has genuinely changed since this draft started (a landing in
+  // between — this reviewer's own or a colleague's) — narrowed from the
+  // whole block's source to just the edited sub-range, matching the
+  // narrower editing scope above.
+  const stale = currentRangeSource !== originalSource
   const base = commentTarget()
   if (!base) return
+  const proposedCode = mergeInlineEditRangeIntoSource(rows, rowStart, rowEnd, text)
   const target = () => ({
     ...base,
-    proposedCode: text,
+    proposedCode,
     proposedStale: stale,
   })
-  clearInlineEditDraft(b)
+  clearInlineEditDraft(b, rowStart, rowEnd)
   startClaudeChat(target)
   // requestAnimationFrame: ensureClaudeAnchorForNew (RelatedPanel.mjs) reads
   // the just-mounted comment-compose textarea, so wait one frame for it —

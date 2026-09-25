@@ -67,11 +67,11 @@ edit. Not editing: the **group**-granularity hint list gains an `e` →
 separate reviewer decision, see `blockShortcutHints`' own comment) even though
 the `e` key itself still works at any granularity there, it just isn't hinted.
 
-## Scope (v1, deliberately narrow)
+## Scope
 
-- Only the **new/right side**, and only the **whole block** at once (not a
-  sub-range) — a reviewer edits the entire new-side source as one free-form
-  text.
+- Only the **new/right side**. **v1 (superseded, see "Only the selected unit
+  is editable" below) edited the whole block at once, not a sub-range** — a
+  reviewer edited the entire new-side source as one free-form text.
 - Only a **`modified`/`added`** code block: not `removed` (nothing left to
   edit), not the synthetic `unchanged` drilled call-frame, not TRANSLATION/
   SVG/IMAGE (each already replaces the text diff with its own render, see
@@ -132,13 +132,103 @@ whichever card now shows the affordance:
   follows `focusedBlock()` too, so the Esc/Cmd+Enter hint shows on whichever
   card is actually mid-edit.
 
-`saveInlineEdit(b, text, originalSource)` itself needed **no** change — it
-was already generic on `b` (only reads `b.file`/`b.line`/`b.endLine`/
+`saveInlineEdit(b, text, originalSource, rowStart, rowEnd)` itself needed
+**no** change beyond the later `rowStart`/`rowEnd` addition below — it was
+already generic on `b` (only reads `b.file`/`b.line`/`b.endLine`/
 `blockRows(b)`), so it works unchanged for a drilled block.
 
 Test: `tests/comment-anchor-expanded-view.spec.mjs` and
 `tests/inline-edit.spec.mjs` (existing top-level coverage; both re-verified
 against this change).
+
+## Only the selected unit is editable (narrowed from v1's "whole block")
+
+Reviewer follow-up, alongside a bug report with a screenshot ("als ik stukje
+code bewerk, kan ik er niet in scrollen ... is het handiger als je alleen
+kan bewerken wat is geselecteerd?"): v1's "whole block, not a sub-range"
+scope (see "Scope" above) is superseded — the editor now shows and edits
+**only** the diff's currently active navigation unit (the same `{start,end}`
+row range every entry point already passed to `openInlineEdit` for caret
+placement, see "Opening the editor focuses it..." below), not the whole
+block. `inlineEditState.selRowStart`/`selRowEnd` (`inlineEdit.mjs`) is now
+the editor's actual SCOPE, not just a caret-placement hint.
+
+- **`inlineEditorSlot`** (`Block.mjs`) captures `rowStart`/`rowEnd` from
+  `inlineEditState` at mount time (in plain local consts, since
+  `closeInlineEdit()` — called by every Annuleren/Opslaan/Escape/Cmd+Enter
+  path, BEFORE `onSave` runs — resets those fields to `-1`/`-1`), and uses
+  `blockNewSourceRangeText(rows, rowStart, rowEnd)` (`inlineEdit.mjs`)
+  instead of the whole-block `blockNewSourceText(rows)` to seed the textarea.
+  `-1`/`-1` (no active unit — list mode, or a direct-mount caller that never
+  computed one) falls back to the WHOLE block, exactly like v1's original
+  behaviour — every real entry point (the header toggle, `"Bewerk deze
+  code"`, the `e` key) always has an active unit once eligible, so this
+  fallback is mostly a defensive/test-only path.
+- **The draft key is scoped to `rowStart`/`rowEnd`, not just the block id**
+  (`inlineEditDraftKey`, `inlineEdit.mjs`) — two different units of the same
+  block are two unrelated drafts now; sharing one key would otherwise seed a
+  freshly opened, differently-sized unit's editor with an earlier unit's
+  typed text. `-1`/`-1` keys as `'all'`, the same bucket every direct-mount
+  test that never sets `activeGroup` already exercises.
+- **`onSave`/`onSaveInlineEdit` gained two more arguments**,
+  `(b, text, originalSource, rowStart, rowEnd)` — `rowStart`/`rowEnd` are the
+  captured local consts above, passed through because `closeInlineEdit()`
+  already reset the shared state by the time `onSave` runs.
+- **The caret-centering math simplified**: since the editable text now IS
+  the selected unit (nothing wider to locate it within), placing the caret
+  in the middle just means the middle of the whole (now short) editable
+  text — `computeInlineEditCaretOffset(rows.slice(rowStart, rowEnd + 1), 0,
+  rowEnd - rowStart)` instead of mapping the row range onto an offset into
+  the WHOLE block's text. `computeInlineEditCaretOffset` itself is
+  unchanged/still exported and unit-tested as a generic row→offset utility.
+- **"Opslaan" reconstructs the full block before handing it to Claude** —
+  home.mjs's `saveInlineEdit` merges the reviewer's edited fragment back
+  into the block's WHOLE new-side source via
+  `mergeInlineEditRangeIntoSource(rows, rowStart, rowEnd, text)`
+  (`inlineEdit.mjs`), so `proposedCode` (`RelatedPanel.mjs`'s
+  `claudeContextBlock`) is always the complete, accurate resulting code —
+  "opslaan vervangt alleen dat stuk; de rest van het blok blijft
+  ongewijzigd" — not just the edited fragment shown in isolation. The
+  staleness check (`proposedStale`) narrowed the same way: it now compares
+  the EDITED RANGE's own current source (`blockNewSourceRangeText`) against
+  `originalSource`, rather than the whole block's.
+
+**Scrolling a long selected unit.** A reviewer-reported bug (with a
+screenshot: the editor's content ran off the bottom of the card, uncapped
+by the visible "Annuleren"/"Opslaan" row, with no way to scroll down to it)
+turned out to be independent of the scope narrowing above, but became more
+important to fix correctly once a reviewer might deliberately pick a large
+`'group'`/`'call'` unit to edit: `inlineEditorSlot`'s upfront height guess
+(`initialHeightPx`, `Math.max(60, (lines+1) * 16)` — assuming 16px per line)
+systematically underestimates the real rendered height for `text-[11px]
+leading-relaxed` once a selection runs to dozens/hundreds of lines (measured
+against a real 361-line case: guessed 5792px, actually needed 6477px). A
+plain `<textarea>`'s own default `overflow` is `auto`, so as soon as its real
+content (`scrollHeight`) exceeds its own set `style.height`, the TEXTAREA
+ITSELF — not the intended `overflow-auto` ancestor `<div>` — becomes the
+scrollable element: it silently swallows the reviewer's mouse-wheel scroll,
+while the absolutely positioned, Prism-highlighted `<pre>` underneath (which
+tracks the ANCESTOR, not the textarea, and has no internal scroll of its
+own) never moves at all — reads exactly as "kan ik er niet in scrollen",
+with the visible/highlighted code frozen in place. `growEl(ta)` (already
+existed, called on every `@input`) already fixes this reactively once the
+reviewer types a single character — but the FIRST render, before any
+keystroke, only ever had the flawed upfront guess.
+
+**Fix: `scheduleInlineEditGrow(b)`** (`inlineEdit.mjs`) — mirrors
+`scheduleInlineEditCaret`'s own pattern exactly (a `requestAnimationFrame`
+deferral, since the textarea mounts asynchronously; a plain, non-reactive
+`growScheduledFor` guard so it only runs once per "open", reset by
+`closeInlineEdit()`). It corrects the just-mounted textarea's height to its
+own real `ta.scrollHeight` right after mount, closing the internal-overflow
+gap before the reviewer ever gets a chance to try scrolling. Test:
+"a long selected unit is scrollable" in `tests/inline-edit.spec.mjs` (a
+bounded host div — unlike this file's other direct-mount tests' unbounded
+fixed overlay — so the card's own `overflow-auto` container is actually
+forced to scroll, matching the real app's column, which is bounded by the
+footer; asserts both that the textarea ends up with no internal overflow of
+its own and that a mouse-wheel scroll actually moves the container's
+`scrollTop`).
 
 ## Two entry points, one shared flag
 
@@ -350,22 +440,29 @@ pipeline.
 ## Files
 
 - `src/inlineEdit.mjs` — the shared `inlineEditState` flag (one block at a
-  time, plus its `selRowStart`/`selRowEnd` caret-placement fields),
-  `openInlineEdit`/`closeInlineEdit` (the one entry/exit point both call
-  sites and both close actions use), `computeInlineEditCaretOffset`/
-  `scheduleInlineEditCaret` (see "Opening the editor focuses it…" above),
-  `blockNewSourceText`, and the draft persistence helpers. A pure leaf
-  module (no import of `Block.mjs`/`home.mjs`/`RelatedPanel.mjs`), so both
-  `Block.mjs` and `home.mjs` import it directly with no cycle.
+  time, plus its `selRowStart`/`selRowEnd` fields — now the editor's actual
+  SCOPE, see "Only the selected unit is editable" above, not just a
+  caret-placement hint), `openInlineEdit`/`closeInlineEdit` (the one
+  entry/exit point both call sites and both close actions use),
+  `computeInlineEditCaretOffset`/`scheduleInlineEditCaret` (see "Opening the
+  editor focuses it…" above), `scheduleInlineEditGrow` (see "Scrolling a long
+  selected unit" above), `blockNewSourceText` (still the WHOLE block, used as
+  the merge base)/`blockNewSourceRangeText` (the editor's own sub-range)/
+  `mergeInlineEditRangeIntoSource` (merges an edited sub-range back into the
+  whole block), and the draft persistence helpers (keyed on
+  `rowStart`/`rowEnd` too, not just the block id). A pure leaf module (no
+  import of `Block.mjs`/`home.mjs`/`RelatedPanel.mjs`), so both `Block.mjs`
+  and `home.mjs` import it directly with no cycle.
 - `src/Block.mjs` — `isInlineEditable`, `inlineEditToggleButton`,
   `inlineEditorSlot` (including `onTextareaKeyDown`, see "Escape (close, keep
   draft) / Cmd+Enter (save)" above), the `allowInlineEdit`/`onSaveInlineEdit`
   opts.
-- `src/home.mjs` — `saveInlineEdit`, `inlineEditEligibleNow`/`eKey` (the `e`
-  key, see "Three entry points, one shared gate" above), wiring
-  `allowInlineEdit: true` / `onSaveInlineEdit: saveInlineEdit` only at the
-  top-level `Block()` call site in `DetailPanel`, the `"Bewerk deze code"`
-  entry in `COMMANDS`, and the edit-mode branch of `blockShortcutHints()`.
+- `src/home.mjs` — `saveInlineEdit(b, text, originalSource, rowStart,
+  rowEnd)`, `inlineEditEligibleNow`/`eKey` (the `e` key, see "Three entry
+  points, one shared gate" above), wiring `allowInlineEdit: true` /
+  `onSaveInlineEdit: saveInlineEdit` only at the top-level `Block()` call
+  site in `DetailPanel`, the `"Bewerk deze code"` entry in `COMMANDS`, and
+  the edit-mode branch of `blockShortcutHints()`.
 - `src/RelatedPanel.mjs` — `claudeContextBlock`'s additive `proposedCode`/
   `proposedStale` branch.
 
@@ -377,7 +474,8 @@ a seeded PR for the `COMMANDS` entry point and the `e` key (each absent in
 list mode, present and functional once the block owns the diff keyboard),
 plus a pure-function test of `computeInlineEditCaretOffset`'s row→offset
 arithmetic and a direct-mount test asserting the textarea is focused with the
-caret strictly inside a given `activeGroup()` unit's own text. The
+caret strictly inside a given `activeGroup()` unit's own text (and, since the
+scope narrowing, that only that unit's own text is shown at all). The
 direct-mount tests assert the `startClaudeChat` hand-off only via a spy on
 `onSaveInlineEdit`, since `saveInlineEdit` itself lives in `home.mjs`, not
 `Block.mjs`. A real-app test (same file, seeded PR) covers the actual
@@ -385,4 +483,11 @@ auto-send: pressing `Cmd+Enter` in the editor lands a `claude-message-body`
 with the fixed instruction sentence, with no reviewer-typed text and no
 second Enter — the `claude_chat` mechanics underneath that (progress,
 streaming, the fake-backend reply) are already covered by
-`tests/claude-chat-panel.spec.mjs`.
+`tests/claude-chat-panel.spec.mjs`. Plus (see "Only the selected unit is
+editable" and "Scrolling a long selected unit" above): a pure-function test
+of `blockNewSourceRangeText`/`mergeInlineEditRangeIntoSource`'s arithmetic, a
+direct-mount test asserting `onSaveInlineEdit` receives only the selected
+unit's own text plus its `rowStart`/`rowEnd`, and a direct-mount test (a
+bounded host, not the usual unbounded fixed overlay) asserting a long
+selected unit's editor has no internal `<textarea>` overflow and its
+surrounding container genuinely scrolls on a mouse wheel.
