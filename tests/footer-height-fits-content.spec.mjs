@@ -76,13 +76,14 @@ test.describe('footer height fits its actual content', () => {
   })
 
   // footer-diff has no visible scrollbar (no-scrollbar, like every other
-  // panel) — the green up/down scrollHint chevron pair (Block.mjs, reused via
-  // src/scrollFade.mjs's updateScrollHints) is the only cue that a big enough
-  // group scrolls internally instead of endlessly growing the bar. See "Does
-  // the footer ever cover the tail of another scrolling panel behind it?" in
+  // panel) and deliberately no scroll-hint chevron/fade either (removed on
+  // request — see "footer-diff deliberately shows NO scroll-hint chevron..."
+  // in .claude/docs/footer.md): a big enough group scrolls internally past
+  // FOOTER_MAX_PX with no visual cue that it does. See "Does the footer ever
+  // cover the tail of another scrolling panel behind it?" in
   // .claude/docs/footer.md for the unrelated (and unaffected) reservation
   // guarantee this test does NOT need to re-check.
-  test('a group past the 140px cap scrolls footer-diff internally, shown by the down scroll hint', async ({
+  test('a group past the 140px cap scrolls footer-diff internally, with no scroll-hint chevron shown', async ({
     page,
   }) => {
     // 5 changed lines (MAX_GROUP) = 10 rendered rows at FOOTER_DIFF_LINE_PX
@@ -111,19 +112,20 @@ test.describe('footer height fits its actual content', () => {
     expect(footerClass).toContain(`h-[${140}px]`)
 
     const scroller = page.getByTestId('footer-diff')
-    const upHint = scroller.locator('..').locator('[data-hint="up"]')
-    const downHint = scroller.locator('..').locator('[data-hint="down"]')
 
-    // At rest (scrolled to the top): nothing above, more below.
-    await expect(upHint).toHaveCSS('opacity', '0')
-    await expect(downHint).toHaveCSS('opacity', '1')
+    // No scroll-hint chevron of either direction is rendered in the footer at
+    // all, even though the content genuinely overflows and scrolls.
+    await expect(scroller.locator('..').locator('[data-hint="up"]')).toHaveCount(0)
+    await expect(scroller.locator('..').locator('[data-hint="down"]')).toHaveCount(0)
+    const overflows = await scroller.evaluate((el) => el.scrollHeight > el.clientHeight)
+    expect(overflows).toBe(true)
 
-    // Scroll footer-diff all the way down: the hints flip.
+    // Scrolling footer-diff all the way down still works, just silently.
     await scroller.evaluate((el) => {
       el.scrollTop = el.scrollHeight
       el.dispatchEvent(new Event('scroll'))
     })
-    await expect(downHint).toHaveCSS('opacity', '0')
-    await expect(upHint).toHaveCSS('opacity', '1')
+    await expect(scroller.locator('..').locator('[data-hint="up"]')).toHaveCount(0)
+    await expect(scroller.locator('..').locator('[data-hint="down"]')).toHaveCount(0)
   })
 })

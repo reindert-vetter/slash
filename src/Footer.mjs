@@ -59,9 +59,8 @@
 // state.selected/gran/change read here could not.
 
 import { html } from './vendor/arrow.js'
-import { highlight, markChars, UNDERLINE_CLS, scrollHint } from './Block.mjs'
+import { highlight, markChars, UNDERLINE_CLS } from './Block.mjs'
 import { PROGRESS_BAR_PX } from './ProgressBar.mjs'
-import { updateScrollHints } from './scrollFade.mjs'
 
 // line builds the innerHTML for one footer diff line: a non-selectable +/- gutter
 // followed by the Prism-highlighted PHP, so it reads exactly like a row in the
@@ -181,8 +180,6 @@ export default function Footer(state) {
           <div
             class="no-scrollbar min-h-0 h-full overflow-auto"
             data-testid="footer-diff"
-            data-scroll-body
-            @scroll="${(e) => updateScrollHints(e.target)}"
           >
             <code
               class="language-php m-0 block font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
@@ -215,8 +212,6 @@ export default function Footer(state) {
               }}"
             ></code>
           </div>
-          ${scrollHint('up')}
-          ${scrollHint('down')}
         </div>
       </div>
     </footer>

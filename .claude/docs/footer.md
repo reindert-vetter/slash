@@ -165,17 +165,21 @@ and a Shift+↑/↓ range has no row ceiling of its own at all (see "The active
 unit already widens to a Shift+arrow range" below), so it can scroll
 internally well before an ordinary group would.
 
-**`footer-diff` gets the same green up/down `scrollHint` chevron pair
-Block.mjs's diff panes use, via `data-scroll-body` + `updateScrollHints`
-(`src/scrollFade.mjs`)** — the exact same reuse as the four containers
-documented in "A capped, fading thread" in `.claude/docs/comments-panel.md`.
-Unlike those four, `footer-diff` was already `no-scrollbar` from the start (no
-visible scrollbar to remove) — it simply never had ANY "there's more" cue at
-all until now, native scrollbar included. `home.mjs`'s `updateFooter()` calls
-`refreshScrollHints()` right after pushing a fresh `state.footerUnit`/
-`state.footerExplain` snapshot, mirroring `refreshHints()`'s own "cover the
-cases nothing scrolls" role for the diff panes. Test:
-`tests/footer-height-fits-content.spec.mjs`.
+**`footer-diff` deliberately shows NO scroll-hint chevron and no fade
+gradient at all.** It briefly reused the same green up/down `scrollHint`
+chevron pair Block.mjs's diff panes use (via `data-scroll-body` +
+`updateScrollHints` from `src/scrollFade.mjs`), the same mechanism the four
+containers in "A capped, fading thread"
+(`.claude/docs/comments-panel.md`) still use — but Reindert asked for it to
+be removed again from the footer specifically ("haal beneden groene pijltje
+in de footer weg, laat dat daar nooit zien" / "ook blur mag weg"): both the
+chevron circle and its gradient fade-out layer. `footer-diff` stays
+`no-scrollbar overflow-auto` (a long group still scrolls internally past
+`FOOTER_MAX_PX`, see "Height" above), just with no visual cue that it does —
+same as before the scroll-hint reuse was ever added there. The other four
+containers (`claude-chat-thread`, `comment-thread`/`comment-detail-thread`,
+the standalone code-preview `pane()`) are unaffected; this removal is scoped
+to `Footer.mjs` only. Test: `tests/footer-height-fits-content.spec.mjs`.
 
 **Does the footer ever cover the tail of another scrolling panel behind it?**
 Measured directly (real rendered rects, a 7-row group pushing the footer to
