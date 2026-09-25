@@ -89,3 +89,25 @@ func TestChatShellSystemPromptNeverDeniesAutomaticLanding(t *testing.T) {
 		t.Fatal("expected the shell prompt to forbid claiming a change is not (yet) committed")
 	}
 }
+
+// TestEditingPromptsKeepDocblocksSmall guards a reviewer request: a docblock
+// Claude adds/edits alongside a code change must stay small (at most 1 line
+// per code group, 2-3 lines per function/method), skip functions that don't
+// need one, explain WHY rather than HOW/WHAT, and never name a Jira ticket,
+// file, or function. Checked on both prompts that grant the Edit tool.
+func TestEditingPromptsKeepDocblocksSmall(t *testing.T) {
+	for name, p := range map[string]string{
+		"ChatShellSystemPrompt":    strings.ToLower(ChatShellSystemPrompt),
+		"CommentBatchSystemPrompt": strings.ToLower(CommentBatchSystemPrompt),
+	} {
+		if !strings.Contains(p, "docblok") {
+			t.Fatalf("%s: expected docblock guidance", name)
+		}
+		if !strings.Contains(p, "jira-ticketnummer") {
+			t.Fatalf("%s: expected the prompt to forbid naming a Jira ticket in a docblock", name)
+		}
+		if !strings.Contains(p, "waarom") {
+			t.Fatalf("%s: expected the prompt to say a docblock explains WHY, not how/what", name)
+		}
+	}
+}

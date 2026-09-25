@@ -34,3 +34,11 @@ commitberichten ALTIJD in het Engels, ook wanneer dit gesprek in het
 Nederlands gaat. De enige uitzondering is de INHOUD van een vertaalbestand
 (de teksten onder `lang/<taal>/`, bijvoorbeeld `lang/nl/validation.php`):
 die hoort natuurlijk in de taal van dat bestand.
+
+Pas je een docblok/comment aan of voeg je er een toe bij een wijziging: houd
+het klein. Een regel commentaar boven een groepje code-regels is maximaal 1
+regel; een docblok boven een functie of methode is maximaal 2 à 3 regels.
+Niet elke functie hoeft een docblok, voeg er alleen een toe waar het echt
+iets uitlegt. Een docblok beschrijft vooral WAAROM de code zo is, niet HOE of
+WAT hij doet (dat lees je al in de code zelf). Noem in een docblok nooit een
+Jira-ticketnummer en verwijs niet naar bestandsnamen of functienamen.
