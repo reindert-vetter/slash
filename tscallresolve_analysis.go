@@ -88,7 +88,7 @@ func resolveTSCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry 
 			if !reTSCallName(name).MatchString(changedText) {
 				continue
 			}
-			code := enrichedCodeSide(blockSource(headDir, def))
+			code := enrichedCodeSideFor(def.File, blockSource(headDir, def))
 			out = append(out, callresolve.Entry{
 				PR: pr, CallerID: callerID, CallKey: name, Status: callresolve.StatusResolved,
 				ChildFile: def.File, ChildClass: def.Class, ChildMethod: def.Name,

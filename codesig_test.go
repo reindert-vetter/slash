@@ -614,3 +614,15 @@ func TestEnrichedCodeSidesAddedDocKeepsOrdinaryFold(t *testing.T) {
 		t.Fatalf("old side = %+v, want unchanged %+v (nothing to fold)", gotOld, old)
 	}
 }
+
+// TestEnrichedCodeSideForTSClipsJSDocWithoutTypeFold: a TS block's leading
+// JSDoc is clipped like a PHPDoc, but its `@return {T}` is never spliced into
+// the (already typed) signature.
+func TestEnrichedCodeSideForTSClipsJSDocWithoutTypeFold(t *testing.T) {
+	cs := codeSide{Start: 10, End: 15, Text: "/**\n * Load it.\n * @return {Promise<void>}\n */\nexport function load(id: number) {\n}"}
+	got := enrichedCodeSideFor("x.ts", cs)
+	want := "export function load(id: number) {\n}"
+	if got.Text != want || got.Start != 14 {
+		t.Fatalf("got start=%d text=%q, want start=14 text=%q", got.Start, got.Text, want)
+	}
+}

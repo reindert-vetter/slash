@@ -224,8 +224,8 @@ func TestScanTSClassSplitsIntoMethodsAndHeader(t *testing.T) {
 		}
 	}
 	adopt, _ := findTSBlock(blocks, "#adoptHandedOverIds")
-	if adopt.Line != 16 || adopt.EndLine != 19 {
-		t.Fatalf("#adoptHandedOverIds: line=%d-%d, want 16-19", adopt.Line, adopt.EndLine)
+	if adopt.Line != 17 || adopt.EndLine != 19 {
+		t.Fatalf("#adoptHandedOverIds: line=%d-%d, want 17-19 (its declaration, not the blank line above)", adopt.Line, adopt.EndLine)
 	}
 }
 
@@ -310,5 +310,86 @@ func TestScanBlocksDispatchesTSExtension(t *testing.T) {
 	blocks := ScanBlocks([]byte(src), "modules/example.ts")
 	if len(blocks) != 1 || blocks[0].Name != "foo" {
 		t.Fatalf("expected ScanBlocks to dispatch .ts to scanTS, got %+v", blocks)
+	}
+}
+
+// TestScanTSClassMethodJSDocPulledIntoBlock mirrors PHP's PHPDoc pull: a
+// JSDoc directly above a method moves the block's Line up to the `/**`, its
+// prose becomes Description, and the residual <class-header> stops before it.
+func TestScanTSClassMethodJSDocPulledIntoBlock(t *testing.T) {
+	src := `class A {
+    #x = 1;
+
+    /**
+     * Adopt the ids.
+     *
+     * @param params the query
+     */
+    #adopt(params: URLSearchParams) {
+        return params;
+    }
+
+    plain() {
+        return 1;
+    }
+}
+`
+	blocks := scanTS([]byte(src), "a.ts")
+	adopt, ok := findTSBlock(blocks, "#adopt")
+	if !ok {
+		t.Fatalf("#adopt not found, got %+v", blocks)
+	}
+	if adopt.Line != 4 || adopt.EndLine != 11 || adopt.Description != "Adopt the ids." {
+		t.Fatalf("#adopt: line=%d-%d desc=%q, want 4-11 %q", adopt.Line, adopt.EndLine, adopt.Description, "Adopt the ids.")
+	}
+	plain, _ := findTSBlock(blocks, "plain")
+	if plain.Line != 13 || plain.Description != "" {
+		t.Fatalf("plain: line=%d desc=%q, want 13 and no description", plain.Line, plain.Description)
+	}
+	header, _ := findTSBlock(blocks, classHeaderSentinel)
+	if header.Line != 2 || header.EndLine != 3 {
+		t.Fatalf("header: line=%d-%d, want 2-3", header.Line, header.EndLine)
+	}
+}
+
+// TestScanTSUnchangedMethodAfterAddedMethodIsNotModified is the concrete
+// PR 13885 case: a new method inserted above an untouched one, where git's
+// diff marks the blank separator line directly above the untouched method as
+// the added one. That blank line must not belong to the untouched method's
+// span, or it classifies as "modified" with an identical old/new body.
+func TestScanTSUnchangedMethodAfterAddedMethodIsNotModified(t *testing.T) {
+	oldSrc := `class A {
+    init() {
+        return 1;
+    }
+
+    keep() {
+        return 2;
+    }
+}
+`
+	newSrc := `class A {
+    init() {
+        return 1;
+    }
+
+    added() {
+        return 3;
+    }
+
+    keep() {
+        return 2;
+    }
+}
+`
+	fd := &fileDiff{changedOld: lineSet{}, changedNew: lineSet{6: true, 7: true, 8: true, 9: true}}
+	out := classifyFile(1, "a.ts", "", scanTS([]byte(oldSrc), "a.ts"), scanTS([]byte(newSrc), "a.ts"), fd, false, false, oldSrc, newSrc)
+	for _, b := range out {
+		if b.Name == "keep" {
+			t.Fatalf("keep classified as %s, want it dropped as unchanged (span %d-%d)", b.Status, b.Line, b.EndLine)
+		}
+	}
+	if _, ok := findTSBlock(out, "added"); !ok {
+		t.Fatalf("added not emitted, got %v", symbols(out))
 	}
 }

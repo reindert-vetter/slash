@@ -163,10 +163,31 @@ func blockSource(root string, def Block) codeSide {
 // A block affected by neither — or one enrichSignature couldn't confidently
 // rewrite — passes through unchanged.
 func enrichedCodeSide(cs codeSide) codeSide {
+	return enrichCodeSide(cs, true)
+}
+
+// enrichedCodeSideFor is enrichedCodeSide for a block of `file`: a TypeScript
+// block skips the @return/@param type fold (its signature already carries real
+// types, and a JSDoc `@return {T}` is not PHPDoc syntax to splice in) but still
+// gets the leading-doc clip — its JSDoc text lives on Block.Description, see
+// tsscan.go's tsBlockWithJSDoc.
+func enrichedCodeSideFor(file string, cs codeSide) codeSide {
+	return enrichCodeSide(cs, !isTSFile(file))
+}
+
+// isTSFile reports whether file goes through tsscan.go (ScanBlocks' `.ts` case).
+func isTSFile(file string) bool {
+	return strings.EqualFold(filepath.Ext(file), ".ts")
+}
+
+func enrichCodeSide(cs codeSide, foldDocTypes bool) codeSide {
 	if cs.Text == "" {
 		return cs
 	}
-	text, removed := enrichSignatureWithDocTypes(cs.Text)
+	text, removed := cs.Text, 0
+	if foldDocTypes {
+		text, removed = enrichSignatureWithDocTypes(cs.Text)
+	}
 	if removed == 0 {
 		// The fold left the text untouched — a free-text-only leading doc (no
 		// @return/@param to splice), or a signature it couldn't confidently

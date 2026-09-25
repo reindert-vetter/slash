@@ -306,7 +306,7 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oldSide, newSide, docChanged := enrichedCodeSides(
+	oldSide, newSide, docChanged := enrichedCodeSidesFor(file,
 		extractBlockSource(filepath.Join(baseDir, oldFile), oldFile, oldClass, oldName),
 		extractBlockSource(filepath.Join(headDir, file), file, class, name),
 	)

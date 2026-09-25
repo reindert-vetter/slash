@@ -667,18 +667,38 @@ block-bodied and get their own block (including `firePurchaseEvent` and
 `trackEvents`, see the callresolve section below); `isPaid`,
 `buildPurchaseItems`, `buildPurchaseEvent` (all expression-bodied) don't.
 
-**No JSDoc inclusion** — deliberately different from PHP's PHPDoc-pull
-(`.claude/docs/blocks-and-ingest.md`'s own "PHPDoc description" section
-above): a block's `Line` starts at its own declaration keyword (`export`/
-`function`/`const`), never at a leading `/** ... */` comment above it. This
-side-steps `code.go`'s `enrichedCodeSide`/`stripLeadingPhpDoc` cleanly: that
-transform triggers purely on the generic pattern "the sliced text starts with
-`/** */`" (JSDoc uses the exact same delimiter as PHPDoc) — without a TS-side
-`Description` extraction to catch what it strips, a leading JSDoc comment
-would otherwise silently vanish from the diff with nowhere to land. By simply
-never including it in the block's own span, that transform is a safe no-op
-for every TS block. Accepted trade-off: the JSDoc text itself isn't shown
-anywhere (yet) — narrower than the PHP behavior, not a bug.
+**A leading JSDoc IS pulled into the block, like PHP's PHPDoc** (reviewer
+request, "trek het gelijk met PHP"; this reverses the original v1 "no JSDoc
+inclusion" boundary). `tsBlockWithJSDoc` (`tsscan.go`) is used for every
+top-level function/arrow and every class member: when the declaration is
+directly preceded — only whitespace in between — by a `/** ... */` that opens
+its own line (`tsLeadingJSDoc`), `Block.Line` moves up to that `/**` and the
+doc's prose becomes `Block.Description` via the very same `phpDocDescription`
+(JSDoc and PHPDoc share the delimiter and the "prose first, `@tags` after"
+shape). The class splitter's residual `<class-header>` stops before a member's
+doc, so no line belongs to two blocks. Display then goes through the existing
+PHP path: `enrichedCodeSide` clips the leading doc (its text is on the card's
+description strip instead), and `enrichedCodeSides`' "doc edited on both sides
+stays visible as code" rule applies unchanged. One difference, by design: a TS
+block **never gets the `@return`/`@param` type fold** — its signature already
+has real types and a JSDoc `@return {T}` is not PHPDoc syntax to splice in.
+`enrichedCodeSideFor`/`enrichedCodeSidesFor(file, …)` (`code.go`/`codesig.go`)
+skip only that fold for a `.ts` file; `/api/code`, `blockstats` and
+`resolveTSCalls`' embedded child snapshots all use the file-aware variant. A
+plain `/* */` or `//` comment is never pulled in; a decorator between the doc
+and the declaration breaks the "directly above" rule (the doc then stays out).
+
+**A block never starts on the blank line above its declaration.**
+`reTSMethodDecl`/`reTSComputedMethodOpen` used `\*?\s*` between the optional
+generator `*` and the name, and `\s*` also matches a newline: an unmodified
+method's match started on the empty separator line above it. When a PR inserts
+a new method right above an untouched one, git's diff marks exactly that blank
+line as the added one, so the untouched method classified as "modified" with an
+identical old/new body — a card with no diff rows, no row navigation and no
+code preview in the chat (PR 13885, `#refreshOrCreateCookie`). Both regexes now
+use `\*?[ \t]*`. Tests: `TestScanTSUnchangedMethodAfterAddedMethodIsNotModified`,
+`TestScanTSClassMethodJSDocPulledIntoBlock` (`tsscan_test.go`),
+`TestEnrichedCodeSideForTSClipsJSDocWithoutTypeFold` (`codesig_test.go`).
 
 **Masking pass (`maskTSStringsAndComments`)**: every `'...'`/`"..."` string,
 `` `...` `` template literal (the ENTIRE run up to the next unescaped

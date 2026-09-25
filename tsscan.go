@@ -51,11 +51,11 @@ var (
 	// is). Optional modifiers, optional generator `*`, then a name (plain
 	// identifier or `#private`) or `constructor`, ending right after the
 	// opening `(` of the parameter list. See scanTSClassMembers.
-	reTSMethodDecl = regexp.MustCompile(`(?m)^[ \t]*(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*\*?\s*(#?[A-Za-z_$][\w$]*)\s*\(`)
+	reTSMethodDecl = regexp.MustCompile(`(?m)^[ \t]*(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*\*?[ \t]*(#?[A-Za-z_$][\w$]*)\s*\(`)
 	// reTSComputedMethodOpen matches the START of a computed method name —
 	// `[<expr>](` — up to and including the opening `[`; the matching `]` is
 	// found separately via matchTSBracket. See scanTSClassMembers.
-	reTSComputedMethodOpen = regexp.MustCompile(`(?m)^[ \t]*(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*\*?\s*\[`)
+	reTSComputedMethodOpen = regexp.MustCompile(`(?m)^[ \t]*(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*\*?[ \t]*\[`)
 	// reTSFieldArrowDecl matches a class field assigned an arrow function —
 	// `name (: SimpleType)? = (async)? (` — no `const|let|var` keyword (class
 	// fields don't have one), optional modifiers, optional single-line type
@@ -98,10 +98,10 @@ const tsDeclScanCap = 4000
 //   - No `.tsx`, no left-side type annotation on a top-level const/let/var
 //     arrow assignment, no cross-file anything. A future session may widen
 //     this; don't assume any of it is accidental.
-//   - No leading-JSDoc inclusion (unlike PHP's PHPDoc/attribute pull): a
-//     block's Line starts at its own declaration keyword. See
-//     .claude/docs/blocks-and-ingest.md for why this side-steps
-//     code.go's enrichedCodeSide/stripLeadingPhpDoc safely.
+//   - A leading JSDoc directly above a declaration IS pulled into the
+//     block (Line + Description), like PHP's PHPDoc — see tsBlockWithJSDoc.
+//     Otherwise a block's Line starts at its own declaration keyword, never
+//     at a blank line above it.
 func scanTSFunctions(s, filename string) []Block {
 	masked := maskTSStringsAndComments(s)
 
@@ -206,12 +206,8 @@ func scanTSFunctions(s, filename string) []Block {
 			pos = bodyOpen + 1
 			continue
 		}
-		blocks = append(blocks, Block{
-			File:    filename,
-			Name:    cand.name,
-			Line:    tsLineAt(s, cand.start),
-			EndLine: tsLineAt(s, bodyClose),
-		})
+		b, _ := tsBlockWithJSDoc(s, filename, "", cand.name, cand.start, bodyClose)
+		blocks = append(blocks, b)
 		// The consumed region [cand.start, bodyClose] is brace-balanced by
 		// construction (matchTSBrace found the exact matching close), so
 		// depth is unchanged and we can jump straight past it — any
@@ -341,10 +337,11 @@ func scanTSClassMembers(masked, s, filename, className string, bodyOpen, bodyClo
 				pos = bOpen + 1
 				continue
 			}
+			b, start := tsBlockWithJSDoc(s, filename, className, c.name, c.start, bClose)
 			if firstMemberStart == -1 {
-				firstMemberStart = c.start
+				firstMemberStart = start
 			}
-			out = append(out, Block{File: filename, Class: className, Name: c.name, Line: tsLineAt(s, c.start), EndLine: tsLineAt(s, bClose)})
+			out = append(out, b)
 			pos = bClose + 1
 		case mComputed:
 			bracketClose, ok := matchTSBracket(masked, c.after)
@@ -378,10 +375,11 @@ func scanTSClassMembers(masked, s, filename, className string, bodyOpen, bodyClo
 				continue
 			}
 			name := "[" + strings.TrimSpace(s[c.after:bracketClose]) + "]"
+			b, start := tsBlockWithJSDoc(s, filename, className, name, c.start, bClose)
 			if firstMemberStart == -1 {
-				firstMemberStart = c.start
+				firstMemberStart = start
 			}
-			out = append(out, Block{File: filename, Class: className, Name: name, Line: tsLineAt(s, c.start), EndLine: tsLineAt(s, bClose)})
+			out = append(out, b)
 			pos = bClose + 1
 		case mArrowField:
 			closeParen, ok := matchTSParen(masked, c.after)
@@ -399,10 +397,11 @@ func scanTSClassMembers(masked, s, filename, className string, bodyOpen, bodyClo
 				pos = bOpen + 1
 				continue
 			}
+			b, start := tsBlockWithJSDoc(s, filename, className, c.name, c.start, bClose)
 			if firstMemberStart == -1 {
-				firstMemberStart = c.start
+				firstMemberStart = start
 			}
-			out = append(out, Block{File: filename, Class: className, Name: c.name, Line: tsLineAt(s, c.start), EndLine: tsLineAt(s, bClose)})
+			out = append(out, b)
 			pos = bClose + 1
 		}
 	}
@@ -528,6 +527,54 @@ func skipToTSBodyOpen(masked string, from int, isArrow bool) (int, bool) {
 
 func isTSSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// tsBlockWithJSDoc builds the Block for a declaration starting at byte
+// offset declStart and ending on the `}` at bodyClose, pulling Line back to a
+// leading JSDoc (`/** ... */`) directly above it — the TS sibling of
+// phpscan.go's pendingDocLine/pendingDocText: the doc's free text becomes
+// Block.Description (same phpDocDescription, JSDoc and PHPDoc share the
+// delimiter and the "prose first, @tags after" convention), and the doc
+// lines themselves are clipped from the displayed code by code.go's
+// enrichedCodeSide, exactly as for a PHP method. start is the block's
+// effective first byte (the doc's `/**` when one was pulled in), which the
+// class splitter needs so its residual <class-header> stops before it.
+func tsBlockWithJSDoc(s, filename, class, name string, declStart, bodyClose int) (b Block, start int) {
+	start = declStart
+	b = Block{File: filename, Class: class, Name: name, EndLine: tsLineAt(s, bodyClose)}
+	if docStart, raw, ok := tsLeadingJSDoc(s, declStart); ok {
+		start = docStart
+		b.Description = phpDocDescription(raw)
+	}
+	b.Line = tsLineAt(s, start)
+	return b, start
+}
+
+// tsLeadingJSDoc reports whether the declaration at declStart is directly
+// preceded — only whitespace in between — by a `/** ... */` comment that
+// opens its own line, and returns that comment's start offset and raw text.
+// A plain `/* ... */` (single star) or a `//` comment is not a doc and is
+// left out, same two-star-only rule as phpscan.go.
+func tsLeadingJSDoc(s string, declStart int) (docStart int, raw string, ok bool) {
+	j := declStart
+	for j > 0 && isTSSpace(s[j-1]) {
+		j--
+	}
+	if j < 2 || s[j-2:j] != "*/" {
+		return 0, "", false
+	}
+	open := strings.LastIndex(s[:j-2], "/**")
+	if open < 0 || strings.Contains(s[open+3:j-2], "*/") {
+		return 0, "", false
+	}
+	ls := open
+	for ls > 0 && (s[ls-1] == ' ' || s[ls-1] == '\t') {
+		ls--
+	}
+	if ls > 0 && s[ls-1] != '\n' {
+		return 0, "", false
+	}
+	return open, s[open:j], true
 }
 
 // tsLineAt returns the 1-based line number of byte offset `pos` in `s`.

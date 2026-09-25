@@ -51,7 +51,7 @@ func blockAlignedRows(baseDir, headDir string, b Block) (rows []alignRow, oldSid
 	if b.OldName != "" {
 		oldClass, oldName = b.OldClass, b.OldName
 	}
-	oldSide, newSide, _ = enrichedCodeSides(
+	oldSide, newSide, _ = enrichedCodeSidesFor(b.File,
 		extractBlockSource(filepath.Join(baseDir, oldRel), oldRel, oldClass, oldName),
 		extractBlockSource(filepath.Join(headDir, b.File), b.File, b.Class, b.Name),
 	)

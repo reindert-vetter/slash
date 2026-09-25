@@ -209,6 +209,12 @@ func leadingPHPDocRaw(text string) (raw string, ok bool) {
 // different kind of change than "an edit to an existing PHPDoc" and keeps
 // the ordinary fold/strip behavior, unchanged from before.
 func enrichedCodeSides(oldCS, newCS codeSide) (old, newSide codeSide, docChanged bool) {
+	return enrichedCodeSidesFor("", oldCS, newCS)
+}
+
+// enrichedCodeSidesFor is enrichedCodeSides for a block of `file` — see
+// enrichedCodeSideFor for what differs for a TypeScript file.
+func enrichedCodeSidesFor(file string, oldCS, newCS codeSide) (old, newSide codeSide, docChanged bool) {
 	oldDoc, oldOk := leadingPHPDocRaw(oldCS.Text)
 	newDoc, newOk := leadingPHPDocRaw(newCS.Text)
 	if oldOk && newOk && strings.TrimSpace(oldDoc) != strings.TrimSpace(newDoc) {
@@ -218,7 +224,7 @@ func enrichedCodeSides(oldCS, newCS codeSide) (old, newSide codeSide, docChanged
 			codeSide{Start: newCS.Start, End: newCS.End - newRemovedTail, Text: newText},
 			true
 	}
-	return enrichedCodeSide(oldCS), enrichedCodeSide(newCS), false
+	return enrichedCodeSideFor(file, oldCS), enrichedCodeSideFor(file, newCS), false
 }
 
 // trimTrailingBlankLine drops a single, wholly-blank trailing line from text,
