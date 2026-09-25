@@ -62,12 +62,53 @@ in `arrowjs-pitfalls.md`). Every OTHER Prism call site (the Underlying-code
 cards + comment hint in `RelatedPanel.mjs`, the footer) stays on the plain
 `highlight(code)` PHP default — untouched. Prism's own container CSS is
 deliberately omitted; only the token colors live in `index.html`'s `<style>`,
-**scoped via `:is(.language-php, .language-typescript)`** (three places: the
-light block, the `@media` dark fallback, the `:root[data-theme='dark']`
-mirror) so both grammars share one palette — so the diff panes, the
-Underlying-code cards, the comment hint and the footer all get the same
-colors regardless of which grammar tokenised them. (Scoping it to
-`[data-testid=code-diff]` left everything outside the diff panes colorless.)
+**scoped via `:is(.language-php, .language-typescript, .language-markdown)`**
+(three places: the light block, the `@media` dark fallback, the
+`:root[data-theme='dark']` mirror) so all three grammars share one palette —
+so the diff panes, the Underlying-code cards, the comment hint and the footer
+all get the same colors regardless of which grammar tokenised them. (Scoping
+it to `[data-testid=code-diff]` left everything outside the diff panes
+colorless.)
+
+### The PR-titel & omschrijving index block is markdown, and always wraps
+
+The synthetic PR-titel & omschrijving index block (`isPrDescriptionBlock`,
+`PR_DESC_FILE`, see "The PR-titel & omschrijving block" in
+`.claude/docs/detail-layout.md`) reviews the PR's own title + body line by
+line, like code — so it stays on the ordinary diff/approve machinery, never
+`renderMarkdown`/snarkdown (that would collapse several lines into one HTML
+block and break the per-line approve granularity this block is built
+around, see `prDescriptionBlock`'s own doc comment in `src/home.mjs`).
+Reviewer request: "zie pr description code blok als markdown en laat
+markdown altijd wrappen zodat het allemaal zichtbaar is" — read as syntax
+highlighting, not full rendering (confirmed).
+
+`langForFile` (`Block.mjs`) already special-cased `PR_DESC_FILE` to
+`'markdown'`, but no `markdown` grammar was ever vendored — `highlightForLang`
+silently fell back to `escapeHtml(code)`, so `## Problem` etc. rendered as
+plain, uncoloured text. `src/vendor/prism.js` now also vendors Prism's
+`markdown` component (cdnjs, same 1.29.0 release as every other component
+here; depends on the already-vendored `markup`/`yaml`) — headings, bold/
+italic, inline code, links and blockquotes now get real tokens. It registers
+`Prism.languages.md` as an alias itself, so no entry was needed in
+`LANGUAGE_ALIASES`.
+
+**Always wraps, in every `a` stand — not just `fit`.** Every other prose/
+config file (`isProseFile`, `.claude/docs/diff-card.md`) only wraps in the
+`fit` stand; outside it a long line ran off the card's right edge into an
+invisible `overflow-auto`/`no-scrollbar` horizontal scroll — read as the diff
+being clipped. `codeDiff`'s `wrap` flag is `isPrDescriptionBlock(b) ||
+(viewMode() === 'fit' && isProseFile(b))`: this ONE synthetic block wraps
+unconditionally, every real `.md`/`.json`/`.yaml`/`.svg`/image file elsewhere
+in a PR keeps the existing `fit`-only wrap. No width change was needed for
+this: `isProseFile(b)` already includes `PR_DESC_FILE`, so `widthCls` already
+gave it the fixed, bounded `boundedWrapWidthCls()` in every stand — only the
+row-level `wrap` flag (`whitespace-pre` → `whitespace-pre-wrap break-words`)
+was missing outside `fit`. This block is also always single-sided
+(`status: 'added'`, see `prDescriptionBlock`), so it always renders through
+`codeDiff`'s single-pane branch regardless of stand — there is no two-pane
+'split'/'unified' path to reach for it at all. Test:
+`tests/pr-description-block.spec.mjs`.
 
 ### A SQL comment (`-- ...`) embedded in a PHP string
 

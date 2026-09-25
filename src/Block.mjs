@@ -2505,7 +2505,18 @@ function codeDiff(
   // pane above, this only ever reaches the single-pane codePane branches
   // below (effectiveOnly === 'right'/'left') — there is no two-pane
   // wrapping path left to reach.
-  const wrap = viewMode() === 'fit' && isProseFile(b)
+  //
+  // The PR-titel & omschrijving index block (isPrDescriptionBlock) wraps in
+  // EVERY stand, not just 'fit' — reviewer request: "laat markdown altijd
+  // wrappen zodat het allemaal zichtbaar is". Its width is already bounded
+  // in every stand (isProseFile(b) includes PR_DESC_FILE, see widthCls), so
+  // only `wrap` was missing outside 'fit' — without it a long title/body
+  // line just ran off the card's right edge into an invisible
+  // `overflow-auto`/`no-scrollbar` horizontal scroll in split/unified.
+  // Scoped to this one synthetic block, not every prose/config file: a real
+  // .md/.json/.yaml file elsewhere in a PR keeps the existing "only wraps in
+  // 'fit'" behaviour unchanged.
+  const wrap = isPrDescriptionBlock(b) || (viewMode() === 'fit' && isProseFile(b))
   // Gates the collapsed-run breadcrumb (see yamlBreadcrumbsForSegs) — only a
   // yaml/yml whole-file fallback block gets the extra key-hierarchy line.
   const isYaml = isYamlFile(b)

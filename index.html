@@ -189,12 +189,15 @@
       }
 
       /* Prism token colours only — scoped to every Prism code excerpt via the
-         `.language-php`/`.language-typescript` class it carries (the diff panes
-         in Block.mjs pick one of the two per block's file extension — see
-         Block.mjs's langForFile — the Onderliggende-code cards + comment hint in
-         RelatedPanel.mjs and the footer stay on `.language-php`), matched here
-         via `:is(.language-php, .language-typescript)` so both share one
-         palette regardless of which grammar actually tokenised the block. We
+         `.language-php`/`.language-typescript`/`.language-markdown` class it
+         carries (the diff panes in Block.mjs pick one of the three per block's
+         file extension — see Block.mjs's langForFile, which returns 'markdown'
+         for the PR-titel & omschrijving index block (PR_DESC_FILE) — the
+         Onderliggende-code cards + comment hint in RelatedPanel.mjs and the
+         footer stay on `.language-php`), matched here via
+         `:is(.language-php, .language-typescript, .language-markdown)` so all
+         three share one palette regardless of which grammar actually
+         tokenised the block. We
          deliberately drop Prism's own container rules (padding/background/
          margins on pre|code[class*=language-]) so they can't fight the Tailwind
          layout; only the syntax colours come from the vendored theme.
@@ -203,61 +206,61 @@
          a clearly distinct, saturated hue so variables, keywords, functions,
          strings and numbers pull apart at a glance instead of blending into the
          muted default (magenta props ~= numbers, olive strings, brown operators). */
-      :is(.language-php, .language-typescript) .token.comment,
-      :is(.language-php, .language-typescript) .token.prolog,
-      :is(.language-php, .language-typescript) .token.doctype,
-      :is(.language-php, .language-typescript) .token.cdata {
+      :is(.language-php, .language-typescript, .language-markdown) .token.comment,
+      :is(.language-php, .language-typescript, .language-markdown) .token.prolog,
+      :is(.language-php, .language-typescript, .language-markdown) .token.doctype,
+      :is(.language-php, .language-typescript, .language-markdown) .token.cdata {
         color: #57606a; /* gray — recedes, darkened for AA contrast on the
                             light green/rose diff-row tints (Block.mjs) */
         font-style: italic;
       }
-      :is(.language-php, .language-typescript) .token.punctuation {
+      :is(.language-php, .language-typescript, .language-markdown) .token.punctuation {
         color: #24292e; /* near-black, not washed-out gray */
       }
-      :is(.language-php, .language-typescript) .token.namespace {
+      :is(.language-php, .language-typescript, .language-markdown) .token.namespace {
         opacity: 0.85;
       }
       /* object properties / accessors & variables — their own steady orange, no
          longer the same magenta as numbers, so `->id`/`$order` read as one kind */
-      :is(.language-php, .language-typescript) .token.property,
-      :is(.language-php, .language-typescript) .token.variable,
-      :is(.language-php, .language-typescript) .token.regex,
-      :is(.language-php, .language-typescript) .token.tag,
-      :is(.language-php, .language-typescript) .token.symbol,
-      :is(.language-php, .language-typescript) .token.deleted {
+      :is(.language-php, .language-typescript, .language-markdown) .token.property,
+      :is(.language-php, .language-typescript, .language-markdown) .token.variable,
+      :is(.language-php, .language-typescript, .language-markdown) .token.regex,
+      :is(.language-php, .language-typescript, .language-markdown) .token.tag,
+      :is(.language-php, .language-typescript, .language-markdown) .token.symbol,
+      :is(.language-php, .language-typescript, .language-markdown) .token.deleted {
         color: #bc4c00; /* orange, darkened for contrast */
       }
-      :is(.language-php, .language-typescript) .token.boolean,
-      :is(.language-php, .language-typescript) .token.number,
-      :is(.language-php, .language-typescript) .token.constant {
+      :is(.language-php, .language-typescript, .language-markdown) .token.boolean,
+      :is(.language-php, .language-typescript, .language-markdown) .token.number,
+      :is(.language-php, .language-typescript, .language-markdown) .token.constant {
         color: #0550ae; /* blue, darkened for contrast */
       }
-      :is(.language-php, .language-typescript) .token.selector,
-      :is(.language-php, .language-typescript) .token.attr-name,
-      :is(.language-php, .language-typescript) .token.string,
-      :is(.language-php, .language-typescript) .token.char,
-      :is(.language-php, .language-typescript) .token.builtin,
-      :is(.language-php, .language-typescript) .token.inserted {
+      :is(.language-php, .language-typescript, .language-markdown) .token.selector,
+      :is(.language-php, .language-typescript, .language-markdown) .token.attr-name,
+      :is(.language-php, .language-typescript, .language-markdown) .token.string,
+      :is(.language-php, .language-typescript, .language-markdown) .token.char,
+      :is(.language-php, .language-typescript, .language-markdown) .token.builtin,
+      :is(.language-php, .language-typescript, .language-markdown) .token.inserted {
         color: #116329; /* green, darkened so strings stay legible on the
                             light green "added"-line background (Block.mjs) */
       }
-      :is(.language-php, .language-typescript) .token.operator,
-      :is(.language-php, .language-typescript) .token.entity,
-      :is(.language-php, .language-typescript) .token.url,
-      :is(.language-php, .language-typescript) .token.atrule,
-      :is(.language-php, .language-typescript) .token.attr-value,
-      :is(.language-php, .language-typescript) .token.keyword {
+      :is(.language-php, .language-typescript, .language-markdown) .token.operator,
+      :is(.language-php, .language-typescript, .language-markdown) .token.entity,
+      :is(.language-php, .language-typescript, .language-markdown) .token.url,
+      :is(.language-php, .language-typescript, .language-markdown) .token.atrule,
+      :is(.language-php, .language-typescript, .language-markdown) .token.attr-value,
+      :is(.language-php, .language-typescript, .language-markdown) .token.keyword {
         color: #cf222e; /* red — keywords & operators, darkened for contrast */
       }
-      :is(.language-php, .language-typescript) .token.function,
-      :is(.language-php, .language-typescript) .token.class-name {
+      :is(.language-php, .language-typescript, .language-markdown) .token.function,
+      :is(.language-php, .language-typescript, .language-markdown) .token.class-name {
         color: #6639ba; /* purple — calls & types, darkened for contrast */
       }
-      :is(.language-php, .language-typescript) .token.important,
-      :is(.language-php, .language-typescript) .token.bold {
+      :is(.language-php, .language-typescript, .language-markdown) .token.important,
+      :is(.language-php, .language-typescript, .language-markdown) .token.bold {
         font-weight: 700;
       }
-      :is(.language-php, .language-typescript) .token.italic {
+      :is(.language-php, .language-typescript, .language-markdown) .token.italic {
         font-style: italic;
       }
       /* Mouse text selection inside a code excerpt (diff panes in Block.mjs,
@@ -265,7 +268,7 @@
          footer) gets its own tint instead of the browser default blue, so it
          reads as distinct from the app's own selection/cursor affordances
          above the green/rose diff-row tints and Prism token colours. */
-      :is(.language-php, .language-typescript) ::selection {
+      :is(.language-php, .language-typescript, .language-markdown) ::selection {
         background-color: rgba(79, 70, 229, 0.25); /* indigo-600 tint */
       }
 
@@ -399,49 +402,49 @@
         :root:not([data-theme='light']) .row-pair-hover {
           box-shadow: inset 2px 0 0 #71717a; /* zinc-500 */
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.comment,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.prolog,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.doctype,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.cdata {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.comment,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.prolog,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.doctype,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.cdata {
           color: #8b949e;
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.punctuation {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.punctuation {
           color: #c9d1d9;
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.property,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.variable,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.regex,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.tag,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.symbol,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.deleted {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.property,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.variable,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.regex,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.tag,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.symbol,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.deleted {
           color: #ffa657;
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.boolean,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.number,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.constant {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.boolean,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.number,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.constant {
           color: #79c0ff;
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.selector,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.attr-name,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.string,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.char,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.builtin,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.inserted {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.selector,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.attr-name,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.string,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.char,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.builtin,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.inserted {
           color: #7ee787;
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.operator,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.entity,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.url,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.atrule,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.attr-value,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.keyword {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.operator,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.entity,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.url,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.atrule,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.attr-value,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.keyword {
           color: #ff7b72;
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.function,
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) .token.class-name {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.function,
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) .token.class-name {
           color: #d2a8ff;
         }
-        :root:not([data-theme='light']) :is(.language-php, .language-typescript) ::selection {
+        :root:not([data-theme='light']) :is(.language-php, .language-typescript, .language-markdown) ::selection {
           background-color: rgba(129, 140, 248, 0.35); /* indigo-400 tint */
         }
 
@@ -492,49 +495,49 @@
       :root[data-theme='dark'] .row-pair-hover {
         box-shadow: inset 2px 0 0 #71717a; /* zinc-500 */
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.comment,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.prolog,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.doctype,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.cdata {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.comment,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.prolog,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.doctype,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.cdata {
         color: #8b949e;
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.punctuation {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.punctuation {
         color: #c9d1d9;
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.property,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.variable,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.regex,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.tag,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.symbol,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.deleted {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.property,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.variable,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.regex,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.tag,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.symbol,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.deleted {
         color: #ffa657;
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.boolean,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.number,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.constant {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.boolean,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.number,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.constant {
         color: #79c0ff;
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.selector,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.attr-name,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.string,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.char,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.builtin,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.inserted {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.selector,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.attr-name,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.string,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.char,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.builtin,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.inserted {
         color: #7ee787;
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.operator,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.entity,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.url,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.atrule,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.attr-value,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.keyword {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.operator,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.entity,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.url,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.atrule,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.attr-value,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.keyword {
         color: #ff7b72;
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.function,
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) .token.class-name {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.function,
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) .token.class-name {
         color: #d2a8ff;
       }
-      :root[data-theme='dark'] :is(.language-php, .language-typescript) ::selection {
+      :root[data-theme='dark'] :is(.language-php, .language-typescript, .language-markdown) ::selection {
         background-color: rgba(129, 140, 248, 0.35); /* indigo-400 tint */
       }
 
