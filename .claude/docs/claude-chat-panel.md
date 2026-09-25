@@ -2986,6 +2986,24 @@ resync, never re-appends the same text twice):
    both survive; a reviewer composing their own reply while Claude is
    mid-conversation keeps their own words on top.
 
+**A comment-index item without a source line has a different reply field.**
+An orphaned ("verouderd — code verdwenen"), PR-wide or PR-wide-AI comment
+(`isPrCommentScope()`) renders through `commentDetailCard`, whose reply field
+is `comment-detail-reply` backed by `prReplyDrafts` — there is no
+`reaction-compose`/`replyDrafts` for it at all. The ordinary path stored the
+draft where nothing reads it, so the "concept in comment-veld gezet" badge
+showed over an empty field (reviewer report + screenshot:
+`data/review-shots/task-chat-draft-not-in-comment-input.png`).
+`applyPendingDraftReplies` now hands such an item to
+`applyPendingPrCommentDraftReplies`: same three rules, but merged into
+`prReplyDrafts`, the reply field opened the way "Beantwoorden" opens it
+(`picm`), the keyboard handed back from Claude the way `←` does there
+(`exitRelated` + `enterPrCommentThread`, otherwise the merged card stays
+read-only on a narrow screen), and the write/focus/select applied one frame
+later. Sending stays `sendPrCommentReply`'s own path, so
+`pureChatDraftReplyIds` is not used here. Test: "a drafted reply on an
+orphaned comment-index item…" in `tests/claude-chat-panel.spec.mjs`.
+
 ### A pure (still-unedited) Claude draft is select-all'd, and Enter posts it straight to GitHub
 
 A later, explicit reviewer request on top of the three rules above: "als ik

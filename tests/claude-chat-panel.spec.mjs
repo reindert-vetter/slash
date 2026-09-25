@@ -1359,6 +1359,69 @@ test('Claude chat: a drafted reply lands in the comment composer, appended under
   await expect(page.getByTestId('reaction-bubble')).toHaveCount(1)
 })
 
+// Reviewer bug report with a screenshot
+// (data/review-shots/task-chat-draft-not-in-comment-input.png): an orphaned
+// ("verouderd — code verdwenen") comment is a comment-index item without a
+// source line, rendered through commentDetailCard — whose reply field is
+// comment-detail-reply, not reaction-compose. The draft used to land in the
+// wrong draft store and the field never even opened.
+test('Claude chat: a drafted reply on an orphaned comment-index item lands in and focuses comment-detail-reply', async ({
+  page,
+}) => {
+  const now = new Date().toISOString()
+  const comments = [
+    {
+      id: 'pw-draft-orphan',
+      runId: 'run-pw-draft-orphan',
+      pr: 12903,
+      file: 'gone.ts',
+      line: 137,
+      author: 'octocat',
+      body: 'an outdated finding',
+      createdAt: now,
+      reactionCount: 0,
+      status: 'open',
+      source: 'github',
+      anchorState: 'orphan',
+      gran: 'line',
+      label: 'Gone::method',
+      reactions: [],
+      rowStart: 9,
+      rowEnd: 9,
+    },
+  ]
+  await page.route('**/api/comments?*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(comments) }),
+  )
+  const draftBody = 'Accepted risk: alleen analytics-data.'
+  await page.route('**/api/chat?commentId=pw-draft-orphan*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ messages: [{ id: 'draft-orphan-1', role: 'assistant', kind: 'draft_reply', body: draftBody }] }),
+    }),
+  )
+
+  // The mocked comment has no real Execution behind it, so its conversation
+  // start is mocked too (the real server would start/return claude_chat).
+  await page.route('**/api/workflows/claude_chat', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ runId: 'chat-pw-draft-orphan' }) }),
+  )
+
+  await page.goto('/pr/12903')
+  await leaveSearchBox(page)
+  await page.locator('[data-idx]').filter({ hasText: 'an outdated finding' }).click()
+  await expect(page.getByTestId('comment-detail-card')).toBeVisible()
+
+  // Entering the Claude column is what loads the transcript WITH drafts applied.
+  await page.getByTestId('claude-chat-compose').click()
+
+  const reply = page.getByTestId('comment-detail-reply')
+  await expect(reply).toBeVisible()
+  await expect(reply).toHaveValue(draftBody)
+  await expect(reply).toBeFocused()
+})
+
 // Reviewer bug report with a screenshot: clicking straight into the Claude
 // composer with the MOUSE, on an ALREADY-anchored conversation (never
 // pressing → first), left the comment card collapsed and the drafted reply

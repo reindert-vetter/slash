@@ -2456,6 +2456,10 @@ function writeIntoReplyField(el, merged, pure) {
   else el.setSelectionRange(el.value.length, el.value.length)
 }
 function applyPendingDraftReplies(commentId) {
+  if (isPrCommentScope() && cs.scope.prComment.id === commentId) {
+    applyPendingPrCommentDraftReplies(cs.scope.prComment)
+    return
+  }
   let appended = false
   let pure = false
   for (const m of cc.messages) {
@@ -2507,6 +2511,59 @@ function applyPendingDraftReplies(commentId) {
       writeIntoReplyField(el2, merged, pure)
     })
   }
+}
+
+// applyPendingPrCommentDraftReplies is applyPendingDraftReplies' branch for a
+// comment-index item WITHOUT a source line of its own (isPrCommentScope: an
+// orphaned "verouderd — code verdwenen" comment, a genuinely PR-wide comment,
+// a PR-wide AI finding). Such an item renders through commentDetailCard, whose
+// reply field is `comment-detail-reply` backed by prReplyDrafts — there is no
+// `reaction-compose`/replyDrafts at all, so the ordinary path stored the draft
+// where nothing ever reads it and the "concept in comment-veld gezet" badge
+// showed over an empty field (reviewer report + screenshot:
+// data/review-shots/task-chat-draft-not-in-comment-input.png). Same three
+// rules as the ordinary path: append under an existing draft, only take the
+// keyboard when the reviewer is not mid-typing in the Claude composer, and a
+// purely-Claude draft is select-all'd. Sending stays sendPrCommentReply's own
+// path (a github-sourced thread posts straight away, a local one still asks
+// via the publish menu), so pureChatDraftReplyIds is not involved here.
+function applyPendingPrCommentDraftReplies(c) {
+  let appended = false
+  let pure = false
+  for (const m of cc.messages) {
+    if (m.kind !== 'draft_reply' || isDraftReplyApplied(m.id)) continue
+    markDraftReplyApplied(m.id)
+    const existing = getPrReplyDraft(c.id) || ''
+    setPrReplyDraft(c.id, existing ? existing + '\n\n' + m.body : m.body)
+    appended = true
+    pure = !existing
+  }
+  if (!appended) return
+  const merged = getPrReplyDraft(c.id)
+  const active = document.activeElement
+  const typingInClaude = !!(
+    active &&
+    active.matches &&
+    active.matches('[data-testid=claude-chat-compose]') &&
+    active.value.trim()
+  )
+  if (typingInClaude) return // the text is saved; "Beantwoorden" restores it later
+  // Hand the keyboard back from the Claude column exactly like ← does here
+  // (handleRelatedKey's isPrCommentScope ArrowLeft) — otherwise the merged
+  // card stays read-only on a narrow screen and hides the reply field.
+  if (cs.focus === 'claude') {
+    exitRelated()
+    enterPrCommentThread(c)
+  }
+  picm.replying = true
+  picm.commentId = c.id
+  picm.mode = 'reply'
+  const want = focusToken
+  requestAnimationFrame(() => {
+    if (want !== focusToken) return
+    const el = document.querySelector('[data-testid=comment-detail-reply]')
+    if (el) writeIntoReplyField(el, merged, pure)
+  })
 }
 
 // loadChatMessages re-fetches the transcript (read-only GET, safe to poll).
