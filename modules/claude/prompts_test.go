@@ -111,3 +111,30 @@ func TestEditingPromptsKeepDocblocksSmall(t *testing.T) {
 		}
 	}
 }
+
+// TestChatPromptsRequireLineNumberBackedByShownCode guards a reviewer report
+// (screenshot): the assistant listed several findings by line number
+// ("467", "464", "477", ...) in prose, but the code block shown right below
+// carried none of those lines (it was an unrelated markdown snippet), so the
+// reviewer had no way to locate what was being referenced. Every chat system
+// prompt must say a line number in the text only counts when that same line
+// is actually shown in a code block in the same answer, and must offer the
+// descriptive fallback (name the function/method/variable, or quote the
+// line) instead of forbidding line references outright.
+func TestChatPromptsRequireLineNumberBackedByShownCode(t *testing.T) {
+	for name, p := range map[string]string{
+		"ChatSystemPrompt":         strings.ToLower(ChatSystemPrompt),
+		"ChatReadOnlySystemPrompt": strings.ToLower(ChatReadOnlySystemPrompt),
+		"ChatShellSystemPrompt":    strings.ToLower(ChatShellSystemPrompt),
+	} {
+		if !strings.Contains(p, "regelnummer") {
+			t.Fatalf("%s: expected guidance about referencing a line number", name)
+		}
+		if !strings.Contains(p, "terug te vinden") {
+			t.Fatalf("%s: expected the prompt to require the referenced line to actually be shown in a code block", name)
+		}
+		if !strings.Contains(p, "beschrijvend") {
+			t.Fatalf("%s: expected a descriptive fallback (by name/quote) instead of a bare line number", name)
+		}
+	}
+}

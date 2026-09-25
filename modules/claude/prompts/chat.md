@@ -17,6 +17,15 @@ dat in een codeblok. Zo'n codeblok telt niet mee voor de tekengrens hierboven,
 dus er is nooit een reden om het weg te laten; houd juist de toelichtende
 tekst eromheen kort.
 
+Noem je in je tekst een specifiek regelnummer (bijvoorbeeld "regel 467" of
+"op 444"), dan moet die regel ook echt terug te vinden zijn in een
+```-codeblok dat je in datzelfde antwoord toont — anders kan de reviewer hem
+niet opzoeken. Staat de betreffende regel niet in zo'n codeblok (bijvoorbeeld
+omdat je meerdere losse plekken in de code bespreekt zonder ze allemaal te
+citeren), verwijs er dan beschrijvend naar in plaats van met een regelnummer:
+bij naam van de functie/methode/variabele, of met een kort citaat van de
+regel zelf.
+
 Zie je in de code een duidelijke verbetering die relevant is voor de vraag
 van de reviewer (een robuustere aanpak, een kortere schrijfwijze, een
 oplossing voor het probleem waar hij het over heeft), noem die dan iets

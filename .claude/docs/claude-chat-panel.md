@@ -3535,6 +3535,22 @@ backticked names. Deliberately only those three files — the other prompts
 conversational answers. If a future session wants fewer/more code blocks in
 chat answers, this paragraph is the knob; no frontend change is involved.
 
+### A line number in prose must be backed by a shown code block
+
+Reported symptom (screenshot): an answer listed several findings by line
+number in prose ("467", "464", "477", ...) but the ` ``` ` block shown right
+below was an unrelated markdown snippet — none of those lines were actually
+visible anywhere in the answer, so the reviewer had no way to locate what was
+being referenced. Same shared-paragraph shape as the two sections above: all
+three chat system prompts (`modules/claude/prompts/chat.md`, `chat_readonly.md`,
+`chat_shell.md`) got one more paragraph, right after the existing "emit a
+fence" paragraph, requiring that a line number named in the text is only used
+when that same line is actually shown in a ` ``` ` block in that same answer;
+otherwise the reference is descriptive instead (by function/method/variable
+name, or a short quote of the line) rather than forbidden outright. Test:
+`TestChatPromptsRequireLineNumberBackedByShownCode`
+(`modules/claude/prompts_test.go`).
+
 ### Volunteering a change proposal is also a PROMPT rule, not a new write path
 
 Reindert asked for the chat to somewhat more often suggest, on its own, how a
