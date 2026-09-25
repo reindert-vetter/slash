@@ -5903,9 +5903,18 @@ function findCallSites(rows, name, spanArgs = false) {
     // identifier has (':', '-'), so it can never be a method/property/enum name — it
     // appears only as the string literal of a ->command('name …') scheduler call.
     // Match that literal instead of the identifier forms.
-    const isCommand = /[^\w]/.test(name)
+    // A TypeScript private member (`#adoptHandedOverIds`, resolveTSCalls) also
+    // carries a non-word character, but it IS a call: match `#name(` — no
+    // leading `\b`, which never matches between the `.` and `#` that precede
+    // it (same shape as reTSCallName in tscallresolve_analysis.go). Without
+    // this it fell into the command branch, found no site, and every such
+    // child was scoped away in diff mode.
+    const isTSPrivate = /^#[A-Za-z_$][\w$]*$/.test(name)
+    const isCommand = !isTSPrivate && /[^\w]/.test(name)
     const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    if (name.startsWith('translation:')) {
+    if (isTSPrivate) {
+      re = new RegExp(esc + '\\s*\\(', 'g')
+    } else if (name.startsWith('translation:')) {
       const key = name.replace(/^translation:[^:]*:/, '')
       const escKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       // A key resolved from a STATIC literal (resolveTranslations) has that

@@ -837,6 +837,13 @@ diff segment it sits on.
   `covers` child whose own anchor row IS the selected row stays visible — see
   "A `covers` child stays visible at `gran='line'` on its own anchor row"
   below.
+- **A TS private-method key (`#name`) has its own `findCallSites` branch**
+  (`isTSPrivate`, `home.mjs`): it matches `#name(` without a leading `\b`,
+  mirroring `reTSCallName` (`tscallresolve_analysis.go`). The `#` is a
+  non-word character, so without it the key fell into the artisan-command
+  branch, matched nothing, and every `this.#foo()` child was scoped away in
+  diff mode ("Geen onderliggende code." on `PlugAndPayAnalytics::init`, PR
+  13885).
 - **A multi-line call's own argument rows count as its site too**
   (`findCallSites`' `spanArgs` parameter → `argListSites`, `home.mjs`). A call
   site is one row, but a call is not: selecting only

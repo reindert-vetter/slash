@@ -100,10 +100,13 @@ func resolveTSCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry 
 }
 
 // reTSCallName builds the regex used to detect a call to a same-file TS
-// function/method on the caller's changed lines — deliberately the exact
-// same shape home.mjs's findCallSites generic fallback matches a bare call
-// key against, so the frontend needs no change to scope the child to the
-// right call site.
+// function/method on the caller's changed lines — deliberately the same
+// shape home.mjs's findCallSites matches the call key against (its generic
+// fallback for a plain name, its own `#name(` branch for a private one), so
+// the child scopes to the right call site. Keep the two in sync: before that
+// `#` branch existed, findCallSites read a `#name` key as an artisan command
+// (non-word character), found no site, and hid every private-method child in
+// diff mode.
 //
 // A private method's name starts with `#` (e.g. `this.#adoptHandedOverIds(`)
 // — `#` is a non-word character, so is `.` right before it, and `\b` never
