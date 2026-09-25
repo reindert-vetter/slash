@@ -438,6 +438,33 @@ export function setCommentScope(scope) {
   cs.scopeSig = sig
   cs.scope = scope
   recomputeView()
+  // A pure scope change (the reviewer stepping to a different unit/block, a
+  // re-anchor pass moving a comment's row) can narrow the SCOPED list to zero
+  // without any new comment data arriving at all — dropDanglingCommentFocus
+  // must run here too, not only from loadComments' poll, or cs.focus stays
+  // stuck on 'comment'/'thread' with an empty view until the next 5s poll
+  // tick (or forever, if nothing else ever calls loadComments again). See
+  // that function's own doc comment.
+  dropDanglingCommentFocus()
+}
+
+// dropDanglingCommentFocus falls back to the new-comment composer whenever
+// cs.focus is stuck on 'comment'/'thread' but the SCOPED list
+// (visibleComments(), not the raw PR-wide cs.list) has nothing to show for
+// it — a comment/thread anchored on the currently selected unit scoped out
+// to zero. Shared by setCommentScope (a pure navigation/scope change) and
+// loadComments (a poll bringing in new/changed comment data); either can be
+// the one that empties the scoped list. Reported bug: cs.focus stayed
+// 'comment' with an empty visibleComments() forever — no comment card, no
+// reply field, no way to even reach Claude via → — because the ORIGINAL
+// check here compared against cs.list.length (the unfiltered, PR-wide list,
+// which is essentially never 0 once the PR has any comments at all) instead
+// of the scoped one.
+function dropDanglingCommentFocus() {
+  if ((cs.focus === 'comment' || cs.focus === 'thread') && visibleComments().length === 0) {
+    cs.focus = 'new'
+    cs.threadPos = 0
+  }
 }
 
 // commentUnder reports whether comment c sits at or below the selected unit t in
@@ -7004,10 +7031,9 @@ async function loadComments(pr) {
       // the end, or the focused/threaded row can vanish entirely — clamp back
       // onto the list and drop out of a now-dangling focus/thread.
       if (cs.sel >= cs.list.length) cs.sel = Math.max(0, cs.list.length - 1)
-      if ((cs.focus === 'comment' || cs.focus === 'thread') && cs.list.length === 0) {
-        cs.focus = 'new'
-        cs.threadPos = 0
-      }
+      // See dropDanglingCommentFocus's own doc comment — a freshly polled
+      // list can also be the thing that scopes the current view out to zero.
+      dropDanglingCommentFocus()
       // Comments just arrived — a pending refresh-restore that wanted a comment/
       // thread (or a sel) can now land. One-shot; see applyRelRestore.
       applyRelRestore()

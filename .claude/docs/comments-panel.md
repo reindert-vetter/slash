@@ -2683,6 +2683,29 @@ Test: `tests/reaction-status-icon.spec.mjs`, `tests/comment-delete.spec.mjs`,
 `tests/reply-publish-local-thread.spec.mjs` — all updated to assert the menu
 does NOT reopen after a send.
 
+### Ownership: "Verwijder comment" only appears on a comment that is yours
+
+The delete item is offered for a comment placed **in this app**
+(`source` `''`/`'ui'`), an **AI finding** (`isAiComment` — `source:'ai'` or
+`kind:'ai_warning'`), and an **imported GitHub comment written by the local
+reviewer** (`isOwnComment`, which compares `c.author` to `meLogin()`).
+Someone else's imported comment has no delete item at all — reviewer
+instruction: "ik wil geen comments van anderen kunnen verwijderen". Its menu
+keeps "Beantwoorden" and "Resolve comment"; only "Verwijder comment" is gone.
+
+Both menus apply it (`commentCommandsFor`'s block-scoped one and
+`prCommentCommandsFor`'s comment-index one, `home.mjs`), and
+`deleteCommentAndSelectRow` repeats the same gate at the top of its own body,
+so a stray direct call can't bypass the missing menu item — the same
+belt-and-braces shape `startEditMessage` already uses for `isOwnMessage`.
+
+This is the **UI** half of the rule. The backend enforces it independently and
+is the real guarantee: `deleteGithubComment` refuses to delete a foreign
+imported comment on GitHub even if the Signal reaches it (see
+"`deleteGithubComment` only ever deletes OUR OWN comment" in
+`.claude/docs/workflows-comments.md`, plus the incident that led to both
+halves). Test: `tests/pr-comment-delete.spec.mjs`.
+
 ### Deleting a comment hands the keyboard back to its diff row
 
 `deleteCommentAndSelectRow` (`home.mjs`) wraps `deleteFocusedComment`, which only
@@ -2702,6 +2725,43 @@ column's own `state.drillCursor` entry — and calls `leaveRelated()` (the expor
 target block is always the already-focused one (the panel only ever shows
 comments anchored on it), so no cross-block jump is needed. Test:
 `tests/comment-delete-selects-row.spec.mjs`.
+
+### The dangling-focus fallback must compare the SCOPED list, not `cs.list`
+
+A sibling of the delete-time clamp above: `cs.focus` (`'comment'`/`'thread'`)
+can also be left pointing at nothing when the **scope** narrows — the
+currently selected unit's `commentUnder`-filtered `visibleComments()`
+(`cs.view`) shrinks to zero — without the comment actually being deleted, so
+the raw PR-wide `cs.list` is untouched and still has entries (from other
+units/blocks). `loadComments`'s own reset (`cs.focus === 'comment' ...  &&
+cs.list.length === 0 → cs.focus = 'new'`) used to check exactly that wrong,
+unscoped list — essentially never `0` once the PR has any comment anywhere —
+so it never fired for this case, leaving `cs.focus` stuck on `'comment'` with
+`InlineComments` rendering nothing at all (no card, no reply field) and no
+way to even reach the Claude column via `→` (`claudeChatVisible()` only shows
+it for `cs.focus === 'claude'`). Reported: "ik zie hier helemaal geen chat" —
+the PR-wide `CommentClaudeFooter` (its "Selected: …"/"Andere chats in deze
+PR" lines, driven by the separate `cc.commentId` anchor, not by `cs.view`)
+kept showing something, which made the blank panel underneath it look even
+more like a bug with no visible cause.
+
+Fix: `dropDanglingCommentFocus()` (`RelatedPanel.mjs`) checks
+`visibleComments().length === 0` instead, and is called from **two** places —
+`setCommentScope` (right after `recomputeView()`, so a pure navigation/scope
+change self-heals immediately) and `loadComments` (a poll can be the thing
+that empties the scope too, e.g. a re-anchor pass moving a comment's row).
+One of the ways the scope can narrow while `cs.focus` is still `'comment'` in
+the first place: `applyRelRestore`'s own `comments === 0` gate for a
+`?rel.foc=comment` deep link can transiently pass on a genuinely-`null`
+`cs.scope` (before `state.blocks`/`commentTarget()` has loaded anything,
+`recomputeView`'s `!s → cs.view = anchored` branch shows *every* anchored
+comment in the whole PR, unscoped) and call `toComment()` — then, once the
+real block/diff data loads a moment later and the scope narrows to the
+actual selected unit, the originally-matched comment can fall right back out
+of view. Not fully proven as the only trigger (see the same load-order-race
+caveat as `applyRelRestore`'s own comments-note above) — the fix targets the
+general "scoped view emptied while `cs.focus` says otherwise" class, not one
+specific race.
 
 ### Converting an AI-controle finding into a real comment
 
