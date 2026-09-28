@@ -284,13 +284,14 @@ func isBadObjectErr(err error) bool {
 // attempt made by the caller (diffBetweenSHAs/detectRenames) before ever
 // calling in here. Plugged as a var, not a const, so a test can shrink it.
 //
-// Raised from 1 to 3 after PR 29 (plug-and-pay-ops) needed 5 separate
-// workflow retries (~6 minutes, via the pr_inbox auto-ingest poller) before a
-// single re-fetch attempt finally landed — see "commitExists can say yes and
-// the diff still fails" in .claude/docs/blocks-and-ingest.md. A single retry
-// assumes the object becomes fetchable again almost immediately; in practice
-// a just-pushed/just-merged commit can lag GitHub's own replication by more
-// than that.
+// Raised from 1 to 3: a single retry assumes the object becomes fetchable
+// again almost immediately, but a just-pushed/just-merged commit can lag
+// GitHub's own replication by more than that. See "commitExists can say yes
+// and the diff still fails" in .claude/docs/blocks-and-ingest.md — including
+// the PR 29 (plug-and-pay-ops) case that first prompted this, which turned
+// out NOT to be replication lag at all but a separate bug (an Activity
+// argument silently dropping Repo, so git ran against the wrong repo
+// entirely — no amount of retrying here would have helped that one).
 var badObjectRetryAttempts = 3
 
 // badObjectRetryBackoff is the pause between rounds. Short and fixed — this

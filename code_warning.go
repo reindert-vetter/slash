@@ -798,11 +798,12 @@ func dropDismissedFindings(ctx context.Context, store *warndismiss.Module, repo 
 // The second return value is the anchored block's id ("" when the finding
 // didn't anchor to a block), carried along on warningToCreate.
 func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (CodeCommentInput, string) {
+	repo := blocksRepo(blocks)
 	in := CodeCommentInput{
-		PR: pr, File: f.File, Line: f.Line, Author: warningAuthor,
+		Repo: repo, PR: pr, File: f.File, Line: f.Line, Author: warningAuthor,
 		Body: f.Text, Source: "ai", Local: true, RowStart: -1, RowEnd: -1,
 	}
-	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
+	baseDir, headDir := worktreeDirs(dataDir, repo, pr)
 	b, ok := blockForLine(baseDir, headDir, blocks, f.File, f.Line, "RIGHT")
 	if !ok {
 		in.Kind = "ai_warning"

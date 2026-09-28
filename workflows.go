@@ -1539,7 +1539,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if arg.RootID == 0 {
 			return nil, nil
 		}
-		id, err := gh.Reply(ctx, arg.PR, arg.RootID, arg.Body)
+		id, err := m.ghFor(arg.Repo).Reply(ctx, arg.PR, arg.RootID, arg.Body)
 		if err != nil {
 			m.logf("task_code_comment: github reply skipped: %v", err)
 			return json.Marshal(postResult{})
@@ -1584,7 +1584,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if arg.RootID == 0 {
 			return nil, nil
 		}
-		if err := gh.UnresolveReviewThread(ctx, arg.PR, arg.RootID); err != nil {
+		if err := m.ghFor(arg.Repo).UnresolveReviewThread(ctx, arg.PR, arg.RootID); err != nil {
 			m.logf("task_code_comment: github unresolve thread skipped: %v", err)
 		}
 		return nil, nil
@@ -4014,9 +4014,10 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 
 	var res ingestResult
 	arg := struct {
+		Repo string       `json:"repo,omitempty"`
 		PR   int          `json:"pr"`
 		Shas worktreeSHAs `json:"shas"`
-	}{PR: in.PR, Shas: shas}
+	}{Repo: in.Repo, PR: in.PR, Shas: shas}
 	if err := w.ExecuteActivity("scanAndStoreBlocks", arg, &res); err != nil {
 		return nil, fmt.Errorf("scan and store blocks: %w", err)
 	}
@@ -4032,7 +4033,7 @@ func ingestWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// Activity is a cheap no-op there. Deliberately after the blocks are stored:
 	// the matcher resolves each anchor against the PR's CURRENT blocks.
 	if err := w.ExecuteActivity("reanchorAfterRefresh", map[string]any{
-		"pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
+		"repo": in.Repo, "pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
 		"prevHeadSHA": res.PrevHeadSHA, "changedFiles": res.ChangedFiles,
 	}, nil); err != nil {
 		return nil, fmt.Errorf("reanchor after ingest: %w", err)
@@ -4521,7 +4522,7 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	}
 
 	if err := w.ExecuteActivity("supersedeFileWarnings", map[string]any{
-		"pr": in.PR, "files": scope.Files,
+		"repo": in.Repo, "pr": in.PR, "files": scope.Files,
 	}, nil); err != nil {
 		return nil, fmt.Errorf("supersede file warnings: %w", err)
 	}
@@ -4531,7 +4532,7 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		maxFindings = warningsPerBlock
 	}
 	reviewArg := warningReviewArg{
-		PR: in.PR, Files: scope.Files, BlockCount: scope.BlockCount, MaxFindings: maxFindings,
+		Repo: in.Repo, PR: in.PR, Files: scope.Files, BlockCount: scope.BlockCount, MaxFindings: maxFindings,
 		Title: scope.Title, Description: scope.Description, JiraDescription: scope.JiraDescription,
 	}
 	var toCreate []warningToCreate
@@ -4561,7 +4562,7 @@ func codeWarningWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// scope; an orphan naming a file the PR doesn't touch at all (the model
 		// misremembering a path) therefore survives every run and piles up. This
 		// clears them regardless of file.
-		if err := w.ExecuteActivity("purgeOrphanWarnings", map[string]any{"pr": in.PR}, nil); err != nil {
+		if err := w.ExecuteActivity("purgeOrphanWarnings", map[string]any{"repo": in.Repo, "pr": in.PR}, nil); err != nil {
 			return nil, fmt.Errorf("purge orphan warnings: %w", err)
 		}
 		toCreate = nil
@@ -4681,10 +4682,11 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		w.WaitSignal(SignalSet, &sig)
 		if sig.Viewed != nil {
 			arg := struct {
+				Repo   string `json:"repo,omitempty"`
 				PR     int    `json:"pr"`
 				File   string `json:"file"`
 				Viewed bool   `json:"viewed"`
-			}{PR: in.PR, File: sig.File, Viewed: *sig.Viewed}
+			}{Repo: in.Repo, PR: in.PR, File: sig.File, Viewed: *sig.Viewed}
 			if err := w.ExecuteActivity("setFileViewed", arg, nil); err != nil {
 				return nil, fmt.Errorf("set file viewed: %w", err)
 			}
@@ -4707,7 +4709,7 @@ func approveWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			Rows    []int                 `json:"rows"`
 			Calls   []string              `json:"calls"`
 			Anchors []approvals.RowAnchor `json:"anchors"`
-		}{PR: in.PR, BlockID: sig.BlockID, Rows: sig.Rows, Calls: sig.Calls, Anchors: sig.Anchors}
+		}{Repo: in.Repo, PR: in.PR, BlockID: sig.BlockID, Rows: sig.Rows, Calls: sig.Calls, Anchors: sig.Anchors}
 		if err := w.ExecuteActivity("saveApproval", arg, nil); err != nil {
 			return nil, fmt.Errorf("save approval: %w", err)
 		}
@@ -4904,7 +4906,7 @@ func ignoreCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			PR        int    `json:"pr"`
 			CommentID string `json:"commentId"`
 			Ignored   bool   `json:"ignored"`
-		}{PR: in.PR, CommentID: sig.CommentID, Ignored: sig.Ignored}
+		}{Repo: in.Repo, PR: in.PR, CommentID: sig.CommentID, Ignored: sig.Ignored}
 		if err := w.ExecuteActivity("saveCommentIgnore", arg, nil); err != nil {
 			return nil, fmt.Errorf("save comment ignore: %w", err)
 		}
@@ -5447,12 +5449,13 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if s.HeadSHA != "" {
 			var res ingestResult
 			arg := struct {
+				Repo        string   `json:"repo,omitempty"`
 				PR          int      `json:"pr"`
 				BaseSHA     string   `json:"baseSHA"`
 				HeadSHA     string   `json:"headSHA"`
 				LandedFiles []string `json:"landedFiles,omitempty"`
 				BaseRef     string   `json:"baseRef,omitempty"`
-			}{PR: in.PR, BaseSHA: s.BaseSHA, HeadSHA: s.HeadSHA, LandedFiles: s.LandedFiles, BaseRef: s.BaseRef}
+			}{Repo: in.Repo, PR: in.PR, BaseSHA: s.BaseSHA, HeadSHA: s.HeadSHA, LandedFiles: s.LandedFiles, BaseRef: s.BaseRef}
 			if err := w.ExecuteActivity("refreshIngestDelta", arg, &res); err != nil {
 				return nil, fmt.Errorf("refresh ingest delta: %w", err)
 			}
@@ -5464,12 +5467,12 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				// their place (see reanchor.go). Covers the full-fallback path too
 				// — ChangedFiles is then every path of the PR.
 				if err := w.ExecuteActivity("reanchorAfterRefresh", map[string]any{
-					"pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
+					"repo": in.Repo, "pr": in.PR, "prevBaseSHA": res.PrevBaseSHA,
 					"prevHeadSHA": res.PrevHeadSHA, "changedFiles": res.ChangedFiles,
 				}, nil); err != nil {
 					return nil, fmt.Errorf("reanchor after refresh: %w", err)
 				}
-				if err := w.ExecuteActivity("buildRelations", BuildRelationsInput{PR: in.PR}, nil); err != nil {
+				if err := w.ExecuteActivity("buildRelations", BuildRelationsInput{Repo: in.Repo, PR: in.PR}, nil); err != nil {
 					return nil, fmt.Errorf("rebuild relations after refresh: %w", err)
 				}
 				// Real new commits landed (this branch only runs when
@@ -5477,7 +5480,7 @@ func prStatusWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				// false) — exactly the "there are changes" signal the automatic
 				// code_warning trigger should fire on. Mirrors the one-time call
 				// in buildRelationsWorkflow for a PR's very first ingest.
-				if err := w.ExecuteActivity("autoStartCodeWarning", BuildRelationsInput{PR: in.PR}, nil); err != nil {
+				if err := w.ExecuteActivity("autoStartCodeWarning", BuildRelationsInput{Repo: in.Repo, PR: in.PR}, nil); err != nil {
 					return nil, fmt.Errorf("auto-start code warning after refresh: %w", err)
 				}
 			}
@@ -5750,7 +5753,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// diff line for a review comment — it goes to the flat conversation
 		// with the commented line quoted above it (descriptionIssueBody).
 		if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
-			"pr": in.PR, "body": descriptionIssueBody(in, in.Body),
+			"repo": in.Repo, "pr": in.PR, "body": descriptionIssueBody(in, in.Body),
 		}, &posted); err != nil {
 			return nil, fmt.Errorf("post github issue comment: %w", err)
 		}
@@ -5813,7 +5816,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var pr postResult
 		if postsAsIssueComment(in) {
 			if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
-				"pr": in.PR, "body": descriptionIssueBody(in, rootBody),
+				"repo": in.Repo, "pr": in.PR, "body": descriptionIssueBody(in, rootBody),
 			}, &pr); err != nil {
 				return err
 			}
@@ -5836,11 +5839,11 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				var mirrored postResult
 				if postsAsIssueComment(in) {
 					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
-						"pr": in.PR, "body": lr.Body,
+						"repo": in.Repo, "pr": in.PR, "body": lr.Body,
 					}, &mirrored)
 				} else {
 					_ = w.ExecuteActivity("replyGithub", map[string]any{
-						"pr": in.PR, "rootId": posted.RootID, "body": lr.Body,
+						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID, "body": lr.Body,
 					}, &mirrored)
 				}
 				if mirrored.RootID != 0 {
@@ -5958,7 +5961,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// Input-driven, so replay-deterministic.
 		if r.Action == "unresolve" {
 			if err := w.ExecuteActivity("reopenComment", map[string]any{
-				"id": runID, "pr": in.PR, "rootId": posted.RootID,
+				"id": runID, "repo": in.Repo, "pr": in.PR, "rootId": posted.RootID,
 			}, nil); err != nil {
 				return nil, fmt.Errorf("reopen comment: %w", err)
 			}
@@ -5970,7 +5973,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if !postsAsIssueComment(in) && posted.RootID != 0 {
 				_ = w.ExecuteActivity("unresolveGithubThread", map[string]any{
-					"pr": in.PR, "rootId": posted.RootID,
+					"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID,
 				}, nil)
 			}
 			continue
@@ -6057,7 +6060,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			// completed and never replayed) can't be shifted by it.
 			if in.Source == "ai" && r.Source != "ai" {
 				if err := w.ExecuteActivity("recordWarningDismissed", map[string]any{
-					"pr": in.PR, "file": in.File, "body": in.Body,
+					"repo": in.Repo, "pr": in.PR, "file": in.File, "body": in.Body,
 				}, nil); err != nil {
 					return nil, fmt.Errorf("record dismissed warning: %w", err)
 				}
@@ -6149,7 +6152,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				if !r.Done {
 					var mirrored postResult
 					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
-						"pr": in.PR, "body": r.Body,
+						"repo": in.Repo, "pr": in.PR, "body": r.Body,
 					}, &mirrored)
 					if mirrored.RootID != 0 {
 						replyGithubIDs[r.ID] = mirrored.RootID
@@ -6162,7 +6165,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				if body := strings.TrimSpace(r.Body); body != "" && body != resolveSentinel {
 					var mirrored postResult
 					_ = w.ExecuteActivity("replyGithub", map[string]any{
-						"pr": in.PR, "rootId": posted.RootID, "body": r.Body,
+						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID, "body": r.Body,
 					}, &mirrored)
 					if mirrored.RootID != 0 {
 						replyGithubIDs[r.ID] = mirrored.RootID
@@ -6173,7 +6176,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				}
 				if r.Done {
 					_ = w.ExecuteActivity("resolveGithubThread", map[string]any{
-						"pr": in.PR, "rootId": posted.RootID,
+						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID,
 					}, nil)
 				}
 			}

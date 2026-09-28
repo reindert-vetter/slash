@@ -199,3 +199,72 @@ func TestStartIngestPassesRepoThrough(t *testing.T) {
 		t.Fatalf("IngestInput.Repo = %q, want %q — StartIngest dropped its repo argument", gotRepo, repo)
 	}
 }
+
+// TestIngestWorkflowThreadsRepoIntoActivityArgs asserts the REAL ingestWorkflow
+// (not a stub) forwards IngestInput.Repo into every one of its own Activity
+// arguments. scanAndStoreBlocks and reanchorAfterRefresh used to build a
+// narrower ad-hoc struct/map that carried only PR/Shas, silently dropping
+// Repo — every Activity then ran git against the PRIMARY repo's worktree
+// regardless of which repo the PR actually belonged to, which is why PR 29
+// (plug-and-pay-ops) kept failing with a permanent "bad object"/"not our ref"
+// (see .claude/docs/blocks-and-ingest.md). Overrides prepareWorktrees/
+// scanAndStoreBlocks/reanchorAfterRefresh with fakes that only record the repo
+// they received, so this needs no gh/git access.
+func TestIngestWorkflowThreadsRepoIntoActivityArgs(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 999996
+	const repo = "plug-and-pay/plug-and-pay-ops"
+
+	db, err := openDB(filepath.Join(dataDir, "graph.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, nil, nil, db, dataDir, repoSlug)
+
+	var gotPrepareRepo, gotScanRepo, gotReanchorRepo string
+	engine.RegisterActivity("prepareWorktrees", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg IngestInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			t.Fatal(err)
+		}
+		gotPrepareRepo = arg.Repo
+		return json.Marshal(worktreeSHAs{})
+	})
+	engine.RegisterActivity("scanAndStoreBlocks", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Repo string `json:"repo,omitempty"`
+			PR   int    `json:"pr"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			t.Fatal(err)
+		}
+		gotScanRepo = arg.Repo
+		return json.Marshal(ingestResult{})
+	})
+	engine.RegisterActivity("reanchorAfterRefresh", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg struct {
+			Repo string `json:"repo,omitempty"`
+		}
+		if err := json.Unmarshal(in, &arg); err != nil {
+			t.Fatal(err)
+		}
+		gotReanchorRepo = arg.Repo
+		return nil, nil
+	})
+
+	if _, err := m.StartIngest(context.Background(), repo, pr); err != nil {
+		t.Fatalf("StartIngest: %v", err)
+	}
+	if gotPrepareRepo != repo {
+		t.Fatalf("prepareWorktrees got repo %q, want %q", gotPrepareRepo, repo)
+	}
+	if gotScanRepo != repo {
+		t.Fatalf("scanAndStoreBlocks got repo %q, want %q — Activity arg dropped Repo", gotScanRepo, repo)
+	}
+	if gotReanchorRepo != repo {
+		t.Fatalf("reanchorAfterRefresh got repo %q, want %q — Activity arg dropped Repo", gotReanchorRepo, repo)
+	}
+}

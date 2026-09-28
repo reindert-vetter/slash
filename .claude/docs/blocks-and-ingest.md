@@ -90,17 +90,32 @@ the extra (equally failing) fetch attempts. Test:
 `TestIsBadObjectErr`/`TestDiffBetweenSHAsSurfacesErrorAfterRetryingAGenuinelyMissingObject`
 (`gh_bad_object_test.go`).
 
-**Confirmed live, not just defensive, on PR 29 (`plug-and-pay/plug-and-pay-ops`)**:
-`prepareWorktrees` succeeded (both worktrees built fine), but the following
-`scanAndStoreBlocks`'s `git diff`/`git diff --name-status` then failed with
-`fatal: bad object <baseSHA>`, and the single re-fetch `retryAfterRefetch` used
-to perform itself intermittently failed too (`fatal: remote error: upload-pack:
-not our ref <headSHA>` — `git ls-remote` confirmed the branch still pointed at
-that exact SHA, so this was GitHub-side replication lag for a just-pushed
-commit, not a force-push). One retry round wasn't enough: the `pr_inbox`
-auto-ingest poller retried the whole `ingest` workflow 5 times over ~6 minutes,
-every one landing in the same single-attempt race, before the object became
-reliably fetchable a few minutes later on its own. `retryAfterRefetch` now
+**PR 29 (`plug-and-pay/plug-and-pay-ops`) was investigated as a live case of
+this and turned out to be a DIFFERENT bug, not a `retryAfterRefetch` case at
+all** — recorded here so the misdiagnosis isn't repeated. The observed
+`fatal: bad object <baseSHA>` / `git fetch origin <headSHA>: not our ref` was
+permanent, not transient: several `ExecuteActivity` call sites in the `ingest`
+workflow (`prepareWorktrees` → `scanAndStoreBlocks` → `reanchorAfterRefresh`,
+plus the ingest-refresh branch in `prStatusWorkflow`) built their Activity
+argument as a narrower ad-hoc struct/map that carried only `PR`/`Shas`, silently
+dropping `IngestInput.Repo`. Every one of those Activities therefore ran `git`
+in the **primary** repo's worktree (`repoDirFor("")`) instead of
+`~/dev/plug-and-pay-ops`, where the ops PR's SHAs genuinely don't exist — no
+amount of retrying or backing off ever finds them there, and no re-fetch
+against the wrong repo can either. `retryAfterRefetch` retrying more rounds
+could never have fixed this, and the "GitHub-side replication lag" read of the
+`git ls-remote`/`not our ref` evidence was wrong: the ref was simply being
+resolved against the wrong repo entirely. The actual fix was threading `Repo`
+through every one of those Activity args (see the `Repo`/`json:"repo,omitempty"`
+convention in `PRStatusInput`/`BuildRelationsInput`/`IngestInput`, and the same
+pattern audited across the rest of `workflows.go`'s `ExecuteActivity` call
+sites), not a change to `retryAfterRefetch`.
+
+None of this makes `retryAfterRefetch`'s own hardening (below) wrong or
+harmful in general — a just-pushed commit against the CORRECT repo can still
+race real GitHub replication lag, and retrying a few rounds with a short
+backoff before giving up is a reasonable defense for that genuine case. It was
+kept; only the PR-29 attribution above was corrected. `retryAfterRefetch`
 performs `badObjectRetryAttempts` (3) rounds with a `badObjectRetryBackoff`
 (300ms) pause in between, each round re-fetching both SHAs and retrying the
 original git command — only while the retried command keeps failing
