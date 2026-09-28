@@ -5685,7 +5685,26 @@ function recomputeCodePreviews() {
   // still compares equal to `null`, so a fence found with no ancestor at all
   // is never wrongly hidden just because that ancestor lookup came up empty.
   const containers = fences.map((el) => el.closest('[data-testid="claude-message"], [data-testid="comment-item"]'))
-  const lastContainer = containers.length ? containers[containers.length - 1] : undefined
+  // "Last" is tracked PER SIDE (comment-thread vs Claude-chat), not as one
+  // flat last-of-everything. `fences`/`containers` are in DOM order, which
+  // always lists the comment column's fences before the Claude column's
+  // (see the big comment above) — a single global `lastContainer` therefore
+  // meant a comment's own fence could never be `isLast` whenever the paired
+  // Claude conversation also had a fence, so it always started collapsed
+  // (just a title + an "uitklappen" affordance), even for the reviewer's own
+  // just-posted reaction. Reviewer report (screenshot
+  // data/review-shots/task-comment-code-preview-below.png): "laat code ook
+  // onder de comment zien, net als chat" — the comment's own latest fence
+  // should default-expand exactly like the chat's latest fence already does.
+  // `sideOf(c)` buckets by the container's own kind; `null` (no ancestor at
+  // all — not expected in practice, kept as a safety net) gets its own
+  // bucket too, so that edge case keeps comparing against its own last
+  // occurrence instead of leaking into either real side.
+  const sideOf = (c) => (c ? (c.matches('[data-testid="comment-item"]') ? 'comment' : 'claude') : 'none')
+  const lastContainerBySide = new Map()
+  containers.forEach((c) => {
+    lastContainerBySide.set(sideOf(c), c)
+  })
   // containerKey(c) — a STABLE id for the fence's owning message/comment
   // (its own `data-message-id`/`data-comment-id`, prefixed so the two id
   // spaces can never collide with each other), used to build each fence's
@@ -5740,7 +5759,7 @@ function recomputeCodePreviews() {
       lang,
       code,
       oldCode: suggestion && isPhp ? currentCode : null,
-      isLast: containers[i] === lastContainer,
+      isLast: containers[i] === lastContainerBySide.get(sideOf(containers[i])),
     }
   })
   // Most-recently-generated message/comment renders at the TOP (reviewer

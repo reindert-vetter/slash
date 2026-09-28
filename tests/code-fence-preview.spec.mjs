@@ -717,6 +717,71 @@ test('two cards from different messages get no dashed divider between them', asy
   await expect(page.getByTestId('code-preview-group-divider')).toHaveCount(0)
 })
 
+// Reviewer report (screenshot data/review-shots/task-comment-code-preview-
+// below.png): "laat code ook onder de comment zien, net als chat" — the
+// comment thread's own latest fence used to start COLLAPSED (title + an
+// "uitklappen" affordance only, no code) as soon as the Claude chat next to
+// it also carried a fence, because `isLast` used to be computed against one
+// flat "last fence in the whole comment-claude-columns container" — the
+// comment column always renders before the Claude column in DOM order, so a
+// comment's own fence could never win that comparison. Fixed by tracking
+// "last" PER SIDE (comment vs. Claude) — see "Default-collapsed cards…" in
+// .claude/docs/claude-chat-panel.md. Reuses the exact same fixture flow as
+// "two cards from different messages get no dashed divider between them"
+// right above.
+test("a comment's own latest fence defaults to expanded too, not just the Claude chat's", async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kijk hier eens naar:\n```php\n$fromComment = 1;\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  expect((await start.json()).runId).toBeTruthy()
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click() // -> cs.focus = 'comment', its own fence card appears
+
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(1)
+  // Still the only fence around — expanded on its own, same as before.
+  await expect(cards.first()).toHaveAttribute('data-expanded', 'true')
+
+  // Drive the shared Claude-chat turn fixture up to turn 4, which carries
+  // its own php fence — same sequence as the test right above.
+  await page.keyboard.press('ArrowRight') // comment -> claude
+  const composer = page.getByTestId('claude-chat-compose')
+  await expect(composer).toBeFocused()
+  await composer.fill('Kun je hier iets over zeggen?')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
+  await composer.fill('Stel een aanpak voor.')
+  await composer.press('Enter')
+  await page.getByTestId('claude-question-option').nth(1).click()
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('Bedankt, ik ga verder met Optie B.')
+  await composer.fill('Laat een voorbeeld zien.')
+  await composer.press('Enter')
+  await expect(page.getByTestId('claude-message-body').last()).toContainText('class FirstExample')
+
+  // Both the comment's own card AND the Claude reply's card default to
+  // expanded now — neither one demotes the other just for sitting in an
+  // earlier DOM position.
+  await expect(cards).toHaveCount(2)
+  await expect(cards.nth(0)).toHaveAttribute('data-expanded', 'true')
+  await expect(cards.nth(1)).toHaveAttribute('data-expanded', 'true')
+})
+
 // Reviewer report (screenshot): the code-preview card's trailing text
 // abruptly stopped mid-sentence ("Eén ding om te checken vo…") even though
 // the chat bubble right above it already showed the full, final answer.

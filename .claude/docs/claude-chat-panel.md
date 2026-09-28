@@ -4894,6 +4894,22 @@ changes, all in the same three files (`markdown.mjs`, `RelatedPanel.mjs`'s
   position AMONG that container's fences (stable, since one message/comment's
   body never reorders itself). Falls back to the old index-based key only
   when no ancestor at all is found (not expected in practice).
+- **"Last" is tracked PER SIDE (comment thread vs. Claude chat), not as one
+  flat last-of-everything.** `fences`/`containers` are always in DOM order,
+  which lists the comment column's fences before the Claude column's (see
+  the big comment above `recomputeCodePreviews`) — a single global "last"
+  container meant a comment's own fence could never be `isLast` whenever the
+  paired Claude conversation also had a fence, so it always started
+  collapsed, even for the reviewer's own just-posted reaction. Reviewer
+  report (screenshot `data/review-shots/task-comment-code-preview-below.png`):
+  "laat code ook onder de comment zien, net als chat" — the comment's own
+  latest fence should default-expand exactly like the chat's latest fence
+  already does. Fixed with `lastContainerBySide` (`RelatedPanel.mjs`): a
+  `Map` keyed by `sideOf(container)` (`'comment'`/`'claude'`/`'none'` for the
+  rare no-ancestor case), each holding that side's own last container in DOM
+  order; `it.isLast` compares against the container's own side instead of
+  one shared value. `cp.expandedOverride`/`toggleCodePreviewExpanded` are
+  unaffected — a manual toggle still wins over whatever `isLast` computes.
 - **A snippet spanning 2+ classes gets a label above EACH class's own code**,
   not just in the title — reviewer's own follow-up, "ook boven elke stukje
   code (als dat kan)". `CodePreview.mjs`'s `splitCodeByClasses(code)` is a
