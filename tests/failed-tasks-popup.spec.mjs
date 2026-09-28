@@ -144,4 +144,21 @@ test.describe('global failed-tasks dialog', () => {
     await expect(page.getByTestId('failed-tasks-note')).toHaveText('5 hervat, 0 overgeslagen.')
     expect(posted).toBe(1)
   })
+
+  test('retries one failure via its own row button, not the whole window', async ({ page }) => {
+    await enableFailedTasksPopup(page)
+    await stubProblems(page)
+    const posted = []
+    await page.route('**/api/workflows/retry', (route) => {
+      posted.push(JSON.parse(route.request().postData() || '{}'))
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, runId: 'run-boom-0' }) })
+    })
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const dialog = page.getByTestId('failed-tasks-dialog')
+    await dialog.getByTestId('problem-retry').first().click()
+    await expect(page.getByTestId('failed-tasks-note')).toHaveText('Opnieuw gestart.')
+    expect(posted).toEqual([{ runId: 'run-boom-0' }])
+  })
 })

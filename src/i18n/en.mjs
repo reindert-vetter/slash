@@ -79,6 +79,8 @@ export const EN = {
   Negeer: 'Ignore',
   'Negeer deze fout definitief (de taak verdwijnt uit de lijst)':
     'Ignore this error for good (the task disappears from the list)',
+  'Probeer alleen deze taak opnieuw, vanaf de laatste stap die wél lukte':
+    'Only retry this task, from the last step that did succeed',
 
   // ── src/workflowLabels.mjs ──────────────────────────────────────────────
   Comment: 'Comment',
@@ -327,6 +329,7 @@ export const EN = {
   'Negeer 5 minuten': 'Ignore for 5 minutes',
   'Bezig met opnieuw proberen…': 'Trying again…',
   'Opnieuw proberen is niet gelukt.': 'Trying again failed.',
+  'Opnieuw gestart.': 'Restarted.',
   '{n} hervat, {s} overgeslagen.': '{n} resumed, {s} skipped.',
   'Alles negeren': 'Ignore all',
   'Zeker? Alles negeren': 'Sure? Ignore all',

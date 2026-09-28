@@ -192,6 +192,36 @@ async function retryAll() {
   await refreshFailedTasks()
 }
 
+// retryRun starts a FRESH Execution of ONE failed run over from its last
+// successful step (POST /api/workflows/retry — a workflow START, the same
+// sanctioned write "Alles opnieuw proberen" uses, and the same endpoint the
+// "Taken" block's own row menu already calls, see retryFailedRun in
+// src/home.mjs). Reviewer request: "probeer opnieuw moet ook per item kunnen
+// net als negeer" — the per-row twin of ignoreRuns below, so a single stuck
+// failure can be resumed without waiting on/affecting the rest of the window.
+async function retryRun(runId) {
+  if (fs.busy || !runId) return
+  fs.busy = true
+  fs.note = t('Bezig met opnieuw proberen…')
+  try {
+    const res = await fetch('/api/workflows/retry', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ runId }),
+    })
+    const body = await res.json().catch(() => null)
+    if (!res.ok || !body || !body.ok) {
+      fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(res, body) + ')'
+    } else {
+      fs.note = t('Opnieuw gestart.')
+    }
+  } catch (err) {
+    fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(null, null) + ')'
+  }
+  fs.busy = false
+  await refreshFailedTasks()
+}
+
 // ignoreRuns permanently deletes the named failed runs — reviewer request:
 // "wil ik ook errors kunnen negeren". A retry is not always the answer: a
 // failure on a PR that has meanwhile been merged, or one that will never
@@ -264,7 +294,10 @@ function dialog() {
         </div>
 
         <div data-testid="failed-tasks-list" class="min-h-0 flex-1 overflow-y-auto">
-          ${() => visibleRows().map((run) => problemRunRow(run, fs.prTitles, { onIgnore: (r) => ignoreRuns([r.runId]) }))}
+          ${() =>
+            visibleRows().map((run) =>
+              problemRunRow(run, fs.prTitles, { onIgnore: (r) => ignoreRuns([r.runId]), onRetry: (r) => retryRun(r.runId) }),
+            )}
         </div>
 
         <div class="contents">

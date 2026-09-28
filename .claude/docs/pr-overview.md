@@ -1356,6 +1356,22 @@ same read-only `GET /api/problems`).
 - **"Alles opnieuw proberen"** POSTs `/api/workflows/retry-all` and reports
   `{retried, skipped}` in words next to the button — see
   `.claude/docs/tembed-endpoints.md`.
+- **"Opnieuw proberen" per row too** (`data-testid=problem-retry`), reviewer
+  request: "probeer opnieuw moet ook per item kunnen net als negeer" — the
+  per-row twin of "Alles opnieuw proberen". Reuses the exact same endpoint the
+  "Taken" block's own row menu already calls, `POST /api/workflows/retry
+  {runId}` (`retryFailedRun` in `src/home.mjs`; `handleRetryRun` →
+  `TaskManager.RetryRun`, `.claude/docs/tembed-endpoints.md`) — a workflow
+  START, the sanctioned write path. Only shown while the row's own
+  `run.retryable` is true (see `retryableWorkflow`, `run_errors.go`), same
+  gating the row menu already applies, since a non-retryable run (e.g. a
+  retired workflow type) has no meaningful "start it over" at all. Lives next
+  to `problemIgnoreButton` in `problems.mjs`'s own `problemRunRow` as
+  `problemRetryButton`, passed in via a new `onRetry` option (mirrors
+  `onIgnore`) — a call site with nowhere to send that decision simply omits
+  it, so only this drawer wires it (`retryRun` in `src/failedTasks.mjs`); the
+  `/pr-overview` drawer and the review tree's own Taken block keep their
+  existing retry entry points (the row popover, the row menu) unchanged.
 - **"Negeer" per row, and "Alles negeren"** — reviewer request: "wil ik ook
   errors kunnen negeren". A retry is not always the answer: a failure on a PR
   that has meanwhile been merged, or one that can never succeed (a `gh` call

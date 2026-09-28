@@ -103,12 +103,36 @@ export function problemIgnoreButton(onIgnore) {
   </button>`
 }
 
+// problemRetryButton — "probeer deze taak opnieuw": resumes just this one
+// failed run from its last successful step (POST /api/workflows/retry
+// {runId}, the same sanctioned write already used by the "Taken" block's own
+// row menu — see retryFailedRun in src/home.mjs). Only ever rendered for a
+// run the backend itself marked retryable (see retryableWorkflow in
+// run_errors.go), same shape/ordering rule as problemIgnoreButton above.
+export function problemRetryButton(onRetry) {
+  return html`<button
+    type="button"
+    data-testid="problem-retry"
+    title="${t('Probeer alleen deze taak opnieuw, vanaf de laatste stap die wél lukte')}"
+    class="shrink-0 self-start rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+    @click="${(e) => {
+      if (!e) return
+      e.stopPropagation()
+      onRetry()
+    }}"
+  >
+    ${t('Opnieuw proberen')}
+  </button>`
+}
+
 // problemRunRow — one workflow run that ended in `failed`. showPr (default
 // true) hides the PR chip when the caller already scopes the whole list to one
 // PR (the review-tree page) — the chip would just repeat what the page is
 // already about. onIgnore (default null) adds the per-row "Negeer" button
-// above; a caller that has nowhere to send that decision simply omits it.
-export function problemRunRow(run, prTitles, { showPr = true, onIgnore = null } = {}) {
+// above; onRetry (default null) adds a per-row "Opnieuw proberen" button next
+// to it, only shown while run.retryable — a caller that has nowhere to send
+// either decision simply omits the option.
+export function problemRunRow(run, prTitles, { showPr = true, onIgnore = null, onRetry = null } = {}) {
   return html`
     <div data-testid="problem-run" class="${PROBLEM_ROW_CLASS}">
       ${problemMark(t('mislukt'))}
@@ -121,7 +145,10 @@ export function problemRunRow(run, prTitles, { showPr = true, onIgnore = null } 
         <div class="contents">${() => (run.comment ? problemCommentLine(run.comment) : '')}</div>
         <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || t('geen foutmelding vastgelegd')}</p>
       </div>
-      <div class="contents">${() => (onIgnore ? problemIgnoreButton(() => onIgnore(run)) : '')}</div>
+      <div class="flex shrink-0 items-start gap-2">
+        <div class="contents">${() => (onRetry && run.retryable ? problemRetryButton(() => onRetry(run)) : '')}</div>
+        <div class="contents">${() => (onIgnore ? problemIgnoreButton(() => onIgnore(run)) : '')}</div>
+      </div>
     </div>
   `.key('problem-run:' + run.runId)
 }
