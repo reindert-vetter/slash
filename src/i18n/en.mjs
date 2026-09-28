@@ -697,6 +697,7 @@ export const EN = {
   methode: 'method',
   'Meer naar rechts': 'More to the right',
   'Terug (één stap)': 'Back (one step)',
+  'Terug naar PR-overzicht': 'Back to PR overview',
 
   // ── settings page rows + strays picked up in review ────────────────────
   'Keyboard hints': 'Keyboard hints',

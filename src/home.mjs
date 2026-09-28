@@ -11416,27 +11416,38 @@ function enterDescriptionFromList() {
 // stepMainLeftOneColumn — the click handler behind MainScrollLeftHint
 // (below): exactly one ← step from wherever the keyboard currently is,
 // mirroring stepMainRightOneColumn's own "one column per click" contract.
-// Covers the whole diff → list → description chain; a no-op everywhere else
-// (drilled column, list already showing the description) since
-// canStepMainLeft() gates the button's very visibility for those cases.
+// Covers the whole diff → list → description → /pr-overview chain; a no-op
+// for a drilled column, since canStepMainLeft() gates the button's very
+// visibility there. The last step leaves the page exactly like ← at stop 1
+// (overviewExitUrl) — reviewer request: "de terug knop moet ook naar
+// pr-overview kunnen gaan". A pinned-open description counts as "already
+// revealed" (see canStepMainLeft), so it exits straight to the overview too
+// rather than spending a click on a focus shift nothing visibly shows.
 function stepMainLeftOneColumn() {
   if (state.mode === 'diff' && state.focusLevel === 0) leaveDiffToList()
-  else if (state.mode === 'list' && !state.showDescription) enterDescriptionFromList()
+  else if (state.mode === 'list') {
+    if (mainLeftExitsToOverview()) location.href = overviewExitUrl()
+    else enterDescriptionFromList()
+  }
 }
 
-// canStepMainLeft — true while a further column exists to reveal to the LEFT
-// of whatever currently owns the keyboard, i.e. while MainScrollLeftHint
-// should show. Deliberately excludes a drilled column (state.focusLevel > 0)
-// — that already has its own per-column "Sluit deze kolom" button
-// (blockCloseColumnButton, Block.mjs) — and the list once the description is
-// already open (nothing further left to reveal).
+// mainLeftExitsToOverview — true when MainScrollLeftHint's next step leaves
+// the review tree for /pr-overview (the description is already open or
+// pinned, nothing further left on this page). Also drives its title.
+function mainLeftExitsToOverview() {
+  return state.mode === 'list' && (state.showDescription || state.descriptionPinned)
+}
+
+// canStepMainLeft — true while there is a further step to the LEFT of
+// whatever currently owns the keyboard, i.e. while MainScrollLeftHint should
+// show. Deliberately excludes a drilled column (state.focusLevel > 0) — that
+// already has its own per-column "Sluit deze kolom" button
+// (blockCloseColumnButton, Block.mjs). Always true in list mode: once the
+// description is open (or pinned) the next step is /pr-overview itself, see
+// stepMainLeftOneColumn.
 function canStepMainLeft() {
   if (state.mode === 'diff') return state.focusLevel === 0
-  // descriptionPinned: in list mode a pinned-open description column is
-  // already fully visible (see applyDiffColumnFit), so there is nothing left
-  // to reveal — same reason showDescription suppresses this button.
-  if (state.mode === 'list') return !state.showDescription && !state.descriptionPinned
-  return false
+  return state.mode === 'list'
 }
 
 // collapsedColumnHTML renders the narrow rail a non-focused column shrinks to
@@ -18721,7 +18732,7 @@ function MainScrollLeftHint(state) {
                 >
                   <button
                     type="button"
-                    title="${t('Terug (één stap)')}"
+                    title="${() => (mainLeftExitsToOverview() ? t('Terug naar PR-overzicht') : t('Terug (één stap)'))}"
                     data-testid="main-scroll-left-button"
                     class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition hover:bg-slate-100 hover:text-indigo-600 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"
                     @click="${(e) => {

@@ -8,7 +8,8 @@ import { test, expect } from './_fixtures.mjs'
 // a further column to reveal to the LEFT of whatever currently owns the
 // keyboard, and each click steps back exactly ONE stop — the same thing a
 // single ← already does — never a "jump straight to stop 1" shortcut:
-// diff (stop 3) -> block list (stop 2) -> PR description (stop 1).
+// diff (stop 3) -> block list (stop 2) -> PR description (stop 1) ->
+// /pr-overview.
 
 test('a left-edge hint steps back one stop per click: diff -> list -> description', async ({ page }) => {
   await page.goto('/pr/12903')
@@ -48,8 +49,14 @@ test('a left-edge hint steps back one stop per click: diff -> list -> descriptio
   await page.waitForTimeout(150)
   await expect(page.getByTestId('pr-info-column')).toBeVisible()
 
-  // Nothing left to reveal any more.
-  await expect(hint).toBeHidden()
+  // Nothing left on this page, but the button stays: its next step leaves
+  // for /pr-overview, exactly like ← at stop 1 (overviewExitUrl).
+  await expect(hint).toBeVisible()
+  await expect(button).toHaveAttribute('title', /PR-overzicht|PR overview/)
+
+  // Click 3: exits to the PR overview, handing the PR + selection back.
+  await button.dispatchEvent('click')
+  await page.waitForURL(/\/pr-overview\?pr=.*&sel=/)
 })
 
 test('never shown for a drilled column — that keeps its own close-column button', async ({ page }) => {

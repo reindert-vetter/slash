@@ -223,11 +223,19 @@ always-reachable button.
 
 - **Visibility:** `canStepMainLeft()` (`home.mjs`) — true while
   `state.mode==='diff' && state.focusLevel===0` (there's a diff to leave back
-  to the list) or `state.mode==='list' && !state.showDescription` (there's a
-  list to leave back to the description). **False** for a drilled column
-  (`focusLevel>0` — that keeps its own `block-close-column` button in its own
-  header, unaffected by this change, see `.claude/docs/mouse-navigation.md`)
-  and once the description is already open (nothing further left to reveal).
+  to the list) and **always** in list mode. **False** only for a drilled
+  column (`focusLevel>0` — that keeps its own `block-close-column` button in
+  its own header, see `.claude/docs/mouse-navigation.md`).
+- **The last step leaves for `/pr-overview`** (reviewer request: "de terug
+  knop moet ook naar pr-overview kunnen gaan"). Once the description is open
+  — or pinned open by a mouse click (`state.descriptionPinned`, already fully
+  visible, so a focus-only step would be a click that visibly does nothing) —
+  `mainLeftExitsToOverview()` is true and the click does
+  `location.href = overviewExitUrl()`, exactly what `←` at stop 1 does
+  (keeps `pr`/`sel`/`drill` for the round trip). The button's `title`
+  switches to "Terug naar PR-overzicht" for that step. It used to hide
+  itself there ("nothing further left to reveal"), leaving no mouse way out
+  of the review tree.
 - **Position is NOT a fixed corner in every mode**, unlike
   `MainScrollRightHint`: in diff mode the pr-index (`<aside>`) collapses to
   width 0 (a real flex sibling now, see "Columns instead of independently
@@ -348,8 +356,9 @@ keeps whichever left columns still fit, and drops the **left-most one first**.
   `ensureTopLevelDiffFocus`, the single function every mouse path into a
   top-level diff funnels through — which is what keeps every keyboard
   `enterDiff` caller on the old behaviour.
-- `canStepMainLeft()` treats a pinned description in list mode as "already
-  open": nothing left to reveal, so `main-scroll-left-hint` stays hidden.
+- `stepMainLeftOneColumn()` treats a pinned description in list mode as
+  "already open": the next `main-scroll-left-button` click exits to
+  `/pr-overview` instead of spending a click on revealing it.
 
 Test: `tests/diff-click-column-fit.spec.mjs` (a wide viewport keeps the index, a
 narrow one still collapses it, the keyboard path is unchanged, shrinking the
