@@ -588,10 +588,9 @@ func TestEnrichedCodeSidesFoldsWhenDocUnchanged(t *testing.T) {
 	}
 }
 
-func TestEnrichedCodeSidesAddedDocKeepsOrdinaryFold(t *testing.T) {
-	// Out of scope by design: the OLD side has no leading doc at all (it was
-	// newly added), so this must not be treated as "an edit to an existing
-	// PHPDoc" — the new side still gets the ordinary fold/strip treatment.
+func TestEnrichedCodeSidesAddedDocStaysVisible(t *testing.T) {
+	// The OLD side has no leading doc (it was newly added to an existing
+	// method): a new doc reads as code in the diff, not folded away.
 	old := codeSide{Start: 10, End: 12, Text: "private function getResource(): ?array\n{\n    return $this->resource;\n}"}
 	newCS := codeSide{Start: 10, End: 16, Text: "/**\n" +
 		" * A brand new doc.\n" +
@@ -603,15 +602,29 @@ func TestEnrichedCodeSidesAddedDocKeepsOrdinaryFold(t *testing.T) {
 		"    return $this->resource;\n" +
 		"}"}
 	gotOld, gotNew, docChanged := enrichedCodeSides(old, newCS)
-	if docChanged {
-		t.Fatalf("docChanged = true, want false (the doc was added, not edited)")
+	if !docChanged {
+		t.Fatalf("docChanged = false, want true (the doc was added)")
 	}
-	wantNew := enrichedCodeSide(newCS)
-	if gotNew != wantNew {
-		t.Fatalf("new side = %+v, want ordinary fold %+v", gotNew, wantNew)
+	if gotNew != newCS {
+		t.Fatalf("new side = %+v, want doc kept visible %+v", gotNew, newCS)
 	}
 	if gotOld != old {
-		t.Fatalf("old side = %+v, want unchanged %+v (nothing to fold)", gotOld, old)
+		t.Fatalf("old side = %+v, want unchanged %+v", gotOld, old)
+	}
+}
+
+// TestEnrichedCodeSidesAddedOrRemovedBlockKeepsDoc: a block that was itself
+// added (old side empty) or removed (new side empty) keeps its PHPDoc as code.
+func TestEnrichedCodeSidesAddedOrRemovedBlockKeepsDoc(t *testing.T) {
+	withDoc := codeSide{Start: 172, End: 180, Text: "/**\n * Whether it is outdated.\n */\nprivate function isOutdated(): bool\n{\n    return true;\n}"}
+	empty := codeSide{}
+	gotOld, gotNew, docChanged := enrichedCodeSides(empty, withDoc)
+	if !docChanged || gotNew != withDoc || gotOld != empty {
+		t.Fatalf("added block: docChanged=%v new=%+v old=%+v, want doc kept", docChanged, gotNew, gotOld)
+	}
+	gotOld, gotNew, docChanged = enrichedCodeSides(withDoc, empty)
+	if !docChanged || gotOld != withDoc || gotNew != empty {
+		t.Fatalf("removed block: docChanged=%v old=%+v new=%+v, want doc kept", docChanged, gotOld, gotNew)
 	}
 }
 

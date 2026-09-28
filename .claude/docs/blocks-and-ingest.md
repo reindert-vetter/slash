@@ -571,11 +571,13 @@ applies. It also reports `docChanged`, which `api.go`'s `handleCode` adds to
 description-toggle condition) — the same text is already visible in the diff,
 so showing it twice would be redundant.
 
-**Deliberately narrow scope:** this only fires when BOTH sides already have a
-leading PHPDoc. A PHPDoc that was newly added, fully removed, or belongs to a
-block that was itself added/removed keeps the ordinary fold/strip behavior —
-that is a different kind of change than "an edit to an existing PHPDoc" and
-was out of scope for this request.
+**Widened to every doc that is new or disappears** (reviewer follow-up, an
+added block's docblock showed up only as the prose strip): a doc on only ONE
+side — a block that was itself added/removed, or an existing method whose
+PHPDoc was newly added or fully removed — is kept visible as code too, with
+`docChanged` set. Only a doc identical on both sides is still folded/stripped.
+Tests: `TestEnrichedCodeSidesAddedDocStaysVisible`,
+`TestEnrichedCodeSidesAddedOrRemovedBlockKeepsDoc`.
 
 **Used at both places `enrichedCodeSide` used to be called on an old/new
 pair** — `api.go`'s `handleCode` and `blockstats.go`'s `blockAlignedRows` —

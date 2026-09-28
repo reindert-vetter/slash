@@ -203,11 +203,11 @@ func leadingPHPDocRaw(text string) (raw string, ok bool) {
 // separate Block.Description strip for this block (Block.mjs), since the
 // same text is now already visible in the diff itself.
 //
-// Deliberately narrow: this only fires when BOTH sides already have a
-// leading PHPDoc. A doc that was newly added or fully removed (or a block
-// that was itself added/removed, so one side has no text at all) is a
-// different kind of change than "an edit to an existing PHPDoc" and keeps
-// the ordinary fold/strip behavior, unchanged from before.
+// The same holds for a doc that only exists on ONE side: a block that was
+// itself added/removed (the other side has no text at all), or an existing
+// method whose PHPDoc was newly added or fully removed. Every doc that is
+// new or disappears reads as code in the diff (reviewer request) — only a
+// doc that is identical on both sides is still folded/stripped.
 func enrichedCodeSides(oldCS, newCS codeSide) (old, newSide codeSide, docChanged bool) {
 	return enrichedCodeSidesFor("", oldCS, newCS)
 }
@@ -217,7 +217,7 @@ func enrichedCodeSides(oldCS, newCS codeSide) (old, newSide codeSide, docChanged
 func enrichedCodeSidesFor(file string, oldCS, newCS codeSide) (old, newSide codeSide, docChanged bool) {
 	oldDoc, oldOk := leadingPHPDocRaw(oldCS.Text)
 	newDoc, newOk := leadingPHPDocRaw(newCS.Text)
-	if oldOk && newOk && strings.TrimSpace(oldDoc) != strings.TrimSpace(newDoc) {
+	if (oldOk || newOk) && strings.TrimSpace(oldDoc) != strings.TrimSpace(newDoc) {
 		oldText, oldRemovedTail := trimTrailingBlankLine(oldCS.Text)
 		newText, newRemovedTail := trimTrailingBlankLine(newCS.Text)
 		return codeSide{Start: oldCS.Start, End: oldCS.End - oldRemovedTail, Text: oldText},
