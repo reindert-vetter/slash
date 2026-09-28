@@ -81,14 +81,36 @@ object was reachable at that instant, not that it stays resolvable for the
 `git diff` moments later.
 
 Fix is defensive, not preventive: `diffBetweenSHAs`/`detectRenames`
-(`gh.go`) each retry once via `retryAfterRefetch` — an explicit
+(`gh.go`) each retry via `retryAfterRefetch` — an explicit
 `git fetch origin <sha>` for both base and head, the same per-SHA fallback
 `ensureCommits` already uses — whenever the underlying git command's error
 matches `isBadObjectErr` (`strings.Contains(err.Error(), "bad object")`). A
 genuinely missing/invalid SHA still fails the same way as before, just after
-one extra (equally failing) fetch attempt. Test:
+the extra (equally failing) fetch attempts. Test:
 `TestIsBadObjectErr`/`TestDiffBetweenSHAsSurfacesErrorAfterRetryingAGenuinelyMissingObject`
 (`gh_bad_object_test.go`).
+
+**Confirmed live, not just defensive, on PR 29 (`plug-and-pay/plug-and-pay-ops`)**:
+`prepareWorktrees` succeeded (both worktrees built fine), but the following
+`scanAndStoreBlocks`'s `git diff`/`git diff --name-status` then failed with
+`fatal: bad object <baseSHA>`, and the single re-fetch `retryAfterRefetch` used
+to perform itself intermittently failed too (`fatal: remote error: upload-pack:
+not our ref <headSHA>` — `git ls-remote` confirmed the branch still pointed at
+that exact SHA, so this was GitHub-side replication lag for a just-pushed
+commit, not a force-push). One retry round wasn't enough: the `pr_inbox`
+auto-ingest poller retried the whole `ingest` workflow 5 times over ~6 minutes,
+every one landing in the same single-attempt race, before the object became
+reliably fetchable a few minutes later on its own. `retryAfterRefetch` now
+performs `badObjectRetryAttempts` (3) rounds with a `badObjectRetryBackoff`
+(300ms) pause in between, each round re-fetching both SHAs and retrying the
+original git command — only while the retried command keeps failing
+`isBadObjectErr`; it stops (and returns) as soon as a round succeeds or once
+every round is exhausted. Both are runtime `var`s (not `const`) so a test can
+shrink them instead of paying the real backoff. Fine inside this Activity per
+`workflow-determinism.md` — `time.Sleep` is only forbidden in the *workflow*
+body, not in the Activity it calls — and still short enough (at most ~600ms
+total extra) to not meaningfully stall the ingest pipeline. Test:
+`TestRetryAfterRefetchRetriesMultipleRoundsThenGivesUp` (`gh_bad_object_test.go`).
 
 ### Runs as the `ingest` workflow (write boundary)
 

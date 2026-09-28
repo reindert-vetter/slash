@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // repoSlug is the built-in PRIMARY repo for gh --repo: the repo slash was built
@@ -278,22 +279,62 @@ func isBadObjectErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "bad object")
 }
 
+// badObjectRetryAttempts is how many extra re-fetch-and-retry rounds
+// retryAfterRefetch performs after the first failure, on top of the original
+// attempt made by the caller (diffBetweenSHAs/detectRenames) before ever
+// calling in here. Plugged as a var, not a const, so a test can shrink it.
+//
+// Raised from 1 to 3 after PR 29 (plug-and-pay-ops) needed 5 separate
+// workflow retries (~6 minutes, via the pr_inbox auto-ingest poller) before a
+// single re-fetch attempt finally landed — see "commitExists can say yes and
+// the diff still fails" in .claude/docs/blocks-and-ingest.md. A single retry
+// assumes the object becomes fetchable again almost immediately; in practice
+// a just-pushed/just-merged commit can lag GitHub's own replication by more
+// than that.
+var badObjectRetryAttempts = 3
+
+// badObjectRetryBackoff is the pause between rounds. Short and fixed — this
+// runs inside a tembed Activity (time.Sleep is fine there, see
+// .claude/rules/workflow-determinism.md: only the *workflow* body itself must
+// stay side-effect-free and non-blocking, an Activity may legitimately take
+// real wall-clock time), but the whole ingest pipeline must not stall for
+// long on a genuinely missing object. Plugged as a var so a test can shrink
+// it to keep the suite fast.
+var badObjectRetryBackoff = 300 * time.Millisecond
+
 // retryAfterRefetch re-fetches both SHAs by exact object id (the same
 // fallback ensureCommits already uses when commitExists first comes back
-// false) and retries the given git command once. Used by diffBetweenSHAs and
-// detectRenames as a defensive recovery from isBadObjectErr — see its doc
-// comment for why a commit that passed ensureCommits can still fail here.
+// false) and retries the given git command, up to badObjectRetryAttempts
+// extra rounds with a short backoff in between. It only keeps retrying while
+// the retried command itself still fails with isBadObjectErr — a genuinely
+// missing/invalid SHA fails the same way on every round and the last error is
+// returned once the attempts are exhausted, same as before this only ever ran
+// once. Used by diffBetweenSHAs and detectRenames as a defensive recovery
+// from isBadObjectErr — see its doc comment for why a commit that passed
+// ensureCommits can still fail here.
 func retryAfterRefetch(ctx context.Context, repo, baseSHA, headSHA string, args []string) ([]byte, error) {
-	var fetchErr error
-	for _, sha := range []string{baseSHA, headSHA} {
-		if _, err := runGitFor(ctx, repo, "fetch", "origin", sha); err != nil {
-			fetchErr = err
+	var out []byte
+	var err error
+	for attempt := 1; attempt <= badObjectRetryAttempts; attempt++ {
+		var fetchErr error
+		for _, sha := range []string{baseSHA, headSHA} {
+			if _, ferr := runGitFor(ctx, repo, "fetch", "origin", sha); ferr != nil {
+				fetchErr = ferr
+			}
+		}
+		if fetchErr != nil {
+			log.Printf("retryAfterRefetch: re-fetch failed (attempt %d/%d), retrying diff anyway: %v", attempt, badObjectRetryAttempts, fetchErr)
+		}
+		out, err = runGitFor(ctx, repo, args...)
+		if !isBadObjectErr(err) {
+			return out, err
+		}
+		if attempt < badObjectRetryAttempts {
+			log.Printf("retryAfterRefetch: still bad object after attempt %d/%d, backing off: %v", attempt, badObjectRetryAttempts, err)
+			time.Sleep(badObjectRetryBackoff)
 		}
 	}
-	if fetchErr != nil {
-		log.Printf("retryAfterRefetch: re-fetch failed, retrying diff anyway: %v", fetchErr)
-	}
-	return runGitFor(ctx, repo, args...)
+	return out, err
 }
 
 // ensureWorktree creates (idempotently) a detached worktree at sha in dir, owned

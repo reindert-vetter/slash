@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestIsBadObjectErr checks the narrow string match retryAfterRefetch's
@@ -49,6 +50,7 @@ func TestDiffBetweenSHAsSurfacesErrorAfterRetryingAGenuinelyMissingObject(t *tes
 	ctx := context.Background()
 	repoDir := t.TempDir()
 	t.Setenv("SLASH_REPO_DIR", repoDir)
+	withShortBadObjectRetry(t)
 
 	git := func(args ...string) {
 		t.Helper()
@@ -72,5 +74,62 @@ func TestDiffBetweenSHAsSurfacesErrorAfterRetryingAGenuinelyMissingObject(t *tes
 	}
 	if !strings.Contains(err.Error(), "bad object") {
 		t.Fatalf("unexpected error shape (retry path may have swallowed it): %v", err)
+	}
+}
+
+// withShortBadObjectRetry shrinks retryAfterRefetch's attempt count/backoff
+// for the duration of a test, so a test exercising the retry loop stays fast
+// and deterministic instead of sleeping for real (300ms per round).
+func withShortBadObjectRetry(t *testing.T) {
+	t.Helper()
+	prevAttempts, prevBackoff := badObjectRetryAttempts, badObjectRetryBackoff
+	badObjectRetryAttempts = 3
+	badObjectRetryBackoff = 5 * time.Millisecond
+	t.Cleanup(func() {
+		badObjectRetryAttempts, badObjectRetryBackoff = prevAttempts, prevBackoff
+	})
+}
+
+// TestRetryAfterRefetchRetriesMultipleRoundsThenGivesUp asserts the hardened
+// behavior added after PR 29 (plug-and-pay-ops): a genuinely unresolvable SHA
+// is retried badObjectRetryAttempts times (not just once) with a short
+// backoff between rounds, and the final "bad object" error still surfaces
+// once every round is exhausted — it must never silently succeed nor hang.
+func TestRetryAfterRefetchRetriesMultipleRoundsThenGivesUp(t *testing.T) {
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	t.Setenv("SLASH_REPO_DIR", repoDir)
+	withShortBadObjectRetry(t)
+
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	if err := os.WriteFile(repoDir+"/f.txt", []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-m", "c")
+
+	missing := "0000000000000000000000000000000000000000"
+	args := []string{"diff", "--no-color", "--find-renames", "--unified=0", missing, "HEAD", "--", "f.txt"}
+
+	start := time.Now()
+	_, err := retryAfterRefetch(ctx, "", missing, "HEAD", args)
+	elapsed := time.Since(start)
+
+	if err == nil || !strings.Contains(err.Error(), "bad object") {
+		t.Fatalf("expected a surfaced bad-object error, got: %v", err)
+	}
+	// badObjectRetryAttempts-1 backoffs must have actually happened between
+	// rounds — a regression back to a single attempt would finish near-instantly.
+	if minElapsed := time.Duration(badObjectRetryAttempts-1) * badObjectRetryBackoff; elapsed < minElapsed {
+		t.Fatalf("retryAfterRefetch returned too fast (%v), expected at least %v for %d rounds", elapsed, minElapsed, badObjectRetryAttempts)
 	}
 }
