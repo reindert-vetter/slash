@@ -7,10 +7,12 @@ import { test, expect, leaveSearchBox, openNewComment } from './_fixtures.mjs'
 // columns behind it) clipped off the right edge of the viewport.
 //
 // scrollRelatedIntoView() (home.mjs) + the watch on relatedActive() scrolls
-// <main> so the comment/composer/Claude-chat/Onderliggende-code column is
-// fully visible once the keyboard steps into it (cs.focus !== null), and
-// scrollFocusIntoView() restores the diff to its own flush-left rest position
-// on the way back out — see .claude/docs/detail-layout.md.
+// AppColumns (the row's own shared scroll container — PrInfoPanel/<aside>/
+// <main> together, see "AppColumns as a horizontally scrolling row" in
+// detail-layout.md) so the comment/composer/Claude-chat/Onderliggende-code
+// column is fully visible once the keyboard steps into it (cs.focus !==
+// null), and scrollFocusIntoView() restores the diff to its own flush-left
+// rest position on the way back out.
 //
 // Narrow viewport (matches main-scroll-rest-left.spec.mjs's own reasoning) so
 // <main>'s content genuinely overflows: the two-sided diff card alone is
@@ -28,30 +30,34 @@ test('entering the comment composer scrolls it fully into view, leaving restores
 
   const main = page.getByTestId('detail-panel')
   await expect(main).toHaveAttribute('data-testid', 'detail-panel')
+  const appColumns = page.getByTestId('app-columns')
 
   // At rest, flush-left.
-  expect(await main.evaluate((el) => el.scrollLeft)).toBe(0)
+  expect(await appColumns.evaluate((el) => el.scrollLeft)).toBe(0)
 
   await openNewComment(page)
   const composer = page.getByTestId('comment-compose')
   await expect(composer).toBeFocused()
 
-  // <main> scrolled right so the whole merged comment+Claude card
+  // AppColumns scrolled right so the whole merged comment+Claude card
   // (comment-claude-row) is fully within the viewport — not just the
   // composer itself, which alone would already fit: the Claude-chat column
   // shows optimistically right next to it (cs.focus === 'new') and is the
   // one that was reported clipped off the right edge.
   await expect(async () => {
-    const scrollLeft = await main.evaluate((el) => el.scrollLeft)
+    const scrollLeft = await appColumns.evaluate((el) => el.scrollLeft)
     expect(scrollLeft).toBeGreaterThan(0)
   }).toPass()
 
-  const mainBox = await main.boundingBox()
+  // AppColumns is the box that actually clips now (<main> itself always
+  // renders at its true, un-clipped content width) — compare against ITS
+  // visible box, not <main>'s own (which can be wider than the viewport).
+  const appColumnsBox = await appColumns.boundingBox()
   const row = page.getByTestId('comment-claude-row')
   await expect(async () => {
     const rowBox = await row.boundingBox()
-    expect(rowBox.x).toBeGreaterThanOrEqual(mainBox.x)
-    expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 1)
+    expect(rowBox.x).toBeGreaterThanOrEqual(appColumnsBox.x)
+    expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(appColumnsBox.x + appColumnsBox.width + 1)
   }).toPass()
 
   // Leaving the composer (Escape -> exitRelated) restores the diff to its
@@ -59,7 +65,7 @@ test('entering the comment composer scrolls it fully into view, leaving restores
   await page.keyboard.press('Escape')
   await expect(composer).toHaveCount(0)
   await expect(async () => {
-    expect(await main.evaluate((el) => el.scrollLeft)).toBe(0)
+    expect(await appColumns.evaluate((el) => el.scrollLeft)).toBe(0)
   }).toPass()
 })
 
@@ -103,20 +109,25 @@ test('a cold restore of rel.foc still scrolls into view once the delayed diff fi
   // Onderliggende code (rel.foc=code), diff mode, change group 0.
   await page.goto('/pr/12903?sel=app%2FActions%2FCreatePaymentAction.php%3A1&mode=diff&chg=0&rel.foc=code')
 
-  const main = page.getByTestId('detail-panel')
   const related = page.getByTestId('related-code')
+  const appColumns = page.getByTestId('app-columns')
   await expect(related).toBeVisible()
 
   releaseDelay()
 
   // Once the delayed code lands and the diff renders at full width, the
   // overflow observer's own re-check calls scrollRelatedIntoView(), scrolling
-  // <main> so Onderliggende code is fully visible.
-  const mainBox = await main.boundingBox()
+  // AppColumns (the row's own shared scroll container, see the other test in
+  // this file) so Onderliggende code is fully visible. AppColumns is the box
+  // that actually clips now (<main> itself always renders at its true,
+  // un-clipped content width), so the box comparison below reads its
+  // boundingBox() FRESH inside the retry — <main>'s own natural width can
+  // still be growing as the delayed code renders in.
   await expect(async () => {
-    const scrollLeft = await main.evaluate((el) => el.scrollLeft)
+    const scrollLeft = await appColumns.evaluate((el) => el.scrollLeft)
     expect(scrollLeft).toBeGreaterThan(0)
+    const appColumnsBox = await appColumns.boundingBox()
     const relatedBox = await related.boundingBox()
-    expect(relatedBox.x + relatedBox.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 1)
+    expect(relatedBox.x + relatedBox.width).toBeLessThanOrEqual(appColumnsBox.x + appColumnsBox.width + 1)
   }).toPass()
 })

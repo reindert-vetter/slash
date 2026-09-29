@@ -1,13 +1,15 @@
 import { test, expect } from './_fixtures.mjs'
 
-// Reviewer request: whenever <main>'s own column flow (DetailPanel, home.mjs)
-// has content scrolled out of view to the right, a small always-in-place
-// button (top-right corner of the viewport, mirroring Block.mjs's
-// diffLeaveRail in visual language) lets you reach it with the mouse — one
-// click hides exactly the current left-most column, a second click hides the
-// next one, and so on ("stap voor stap", never a jump-all-the-way shortcut).
-// It must never touch state.drill/state.focusLevel — purely a scroll-position
-// change — and must disappear again once nothing is left off-screen.
+// Reviewer request: whenever the row (AppColumns, home.mjs — PrInfoPanel/
+// <aside>/<main> sharing one scroll space, see "AppColumns as a horizontally
+// scrolling row" in detail-layout.md) has content scrolled out of view to
+// the right, a small always-in-place button (top-right corner of the
+// viewport, mirroring Block.mjs's diffLeaveRail in visual language) lets you
+// reach it with the mouse — one click hides exactly the current left-most
+// column, a second click hides the next one, and so on ("stap voor stap",
+// never a jump-all-the-way shortcut). It must never touch state.drill/
+// state.focusLevel — purely a scroll-position change — and must disappear
+// again once nothing is left off-screen.
 //
 // Uses PR 12903 (the default seeded fixture) with one synthetic relation so
 // there's a drillable child to force enough column width for overflow, same
@@ -30,7 +32,7 @@ test('a right-edge hint appears while <main> overflows and scrolls one column at
 
   const hint = page.getByTestId('main-scroll-right-hint')
   const button = page.getByTestId('main-scroll-right-button')
-  const main = page.getByTestId('detail-panel')
+  const appColumns = page.getByTestId('app-columns')
 
   await expect(hint).toBeHidden()
 
@@ -56,20 +58,20 @@ test('a right-edge hint appears while <main> overflows and scrolls one column at
   // narrow" in .claude/docs/underlying-code.md), this fixture's whole column
   // flow fits exactly at 1300 (measured: scrollWidth === clientWidth === 1252)
   // and there is no overflow left to test. 900 keeps it genuinely overflowing
-  // (56px collapsed block rail + 595px drilled column + 288px panel).
+  // (56px collapsed block rail + 609px drilled column + 288px panel).
   await page.setViewportSize({ width: 900, height: 900 })
-  await main.evaluate((el) => {
+  await appColumns.evaluate((el) => {
     el.scrollLeft = 0
   })
   await page.waitForTimeout(200)
 
   await expect(hint).toBeVisible()
 
-  const scrollBefore = await main.evaluate((el) => el.scrollLeft)
+  const scrollBefore = await appColumns.evaluate((el) => el.scrollLeft)
 
   await button.dispatchEvent('click')
   await page.waitForTimeout(150)
-  const scrollAfterOneClick = await main.evaluate((el) => el.scrollLeft)
+  const scrollAfterOneClick = await appColumns.evaluate((el) => el.scrollLeft)
   expect(scrollAfterOneClick).toBeGreaterThan(scrollBefore)
 
   // A pure scroll — never a drill-state change.
@@ -79,11 +81,11 @@ test('a right-edge hint appears while <main> overflows and scrolls one column at
   // Clicking again advances further right, one more column.
   await button.dispatchEvent('click')
   await page.waitForTimeout(150)
-  const scrollAfterTwoClicks = await main.evaluate((el) => el.scrollLeft)
+  const scrollAfterTwoClicks = await appColumns.evaluate((el) => el.scrollLeft)
   expect(scrollAfterTwoClicks).toBeGreaterThan(scrollAfterOneClick)
 
   // Once everything fits (fully scrolled), the hint disappears.
-  await main.evaluate((el) => {
+  await appColumns.evaluate((el) => {
     el.scrollLeft = el.scrollWidth
   })
   await page.waitForTimeout(200)

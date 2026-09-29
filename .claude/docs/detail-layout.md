@@ -85,16 +85,55 @@ Test: `tests/main-columns-no-overlap.spec.mjs` (asserts `<aside>`'s right edge
 never passes `<main>`'s left edge, in both the ordinary list-mode case and
 with `PrInfoPanel` open).
 
-## `<main>` as a horizontally scrolling column flow
+## `AppColumns` as a horizontally scrolling row (PrInfoPanel + `<aside>` + `<main>` together)
 
-`DetailPanel` (`home.mjs`) is a `<main>` **flex-row** that packs its columns
-**from the left** (`justify-start`, no stretching) and scrolls horizontally
-(`overflow-x-auto no-scrollbar`) once they're together wider than the screen —
-the `no-scrollbar` utility (`index.html`) hides the scrollbar chrome, the
-scrolling itself keeps working.
+**Superseded (2026-09-29):** horizontal scroll used to belong to `<main>`
+alone (`DetailPanel`'s own `overflow-x-auto`) — reviewer report, with a
+screenshot of `/pr/13906` in list mode with the description open: scrolling
+horizontally over `<main>`'s own column flow (e.g. a comment/Claude row
+running off the right edge) left `PrInfoPanel`/`<aside>` pinned in place,
+because they sat OUTSIDE the one element that actually scrolled —
+*"als ik hier horizontaal scroll, scrolt omschrijving en index niet mee"*.
+Confirmed explicitly to apply everywhere ("overal"), list and diff mode
+alike, not just the list-mode case in the screenshot.
+
+`AppColumns` (`home.mjs`, the `fixed left-6 right-0 top-6 ... flex
+items-stretch gap-6` row — see "Columns instead of independently fixed
+panels" above) is now the **single** horizontal scroll container for the
+whole row: it carries `overflow-x-auto no-scrollbar` itself, plus an
+explicit `overflow-y-hidden` (the same axis-coupling reason `<main>` needed
+it for, see below — without it AppColumns would become one shared vertical
+scrollbar for `PrInfoPanel`/`<aside>`/`<main>` at once). `<main>`
+(`DetailPanel`) no longer scrolls on its own: it dropped `flex-1 min-w-0
+overflow-x-auto no-scrollbar` for a plain `shrink-0` — it now always renders
+at its true content width (never clipped, never locally scrollable), exactly
+like `PrInfoPanel`/`<aside>` already do, so it's just one (variable-width)
+column among three sharing one scroll space. `overflow-y-hidden` stays on
+`<main>` too, cheap insurance, though with `<main>` always exactly as wide as
+its own content it can never actually produce a scrollbar of its own on
+either axis any more.
+
+The `main-overflow-sentinel` (below) and every scroll-position helper
+(`resetMainScroll`, `scrollMainRightOneColumn`, `setupMainOverflowObserver`)
+moved with it — all now query `[data-testid="app-columns"]` instead of
+`[data-testid="detail-panel"]`. `scrollMainRightOneColumn` additionally
+gained `rowColumns()` (`home.mjs`): a flat, left-to-right list of
+`PrInfoPanel`, `<aside>`, and then `<main>`'s own children flattened in one
+level (not `<main>` treated as a single atomic entry) — otherwise "one
+column per click" would coarsen into "one click hides the description, one
+hides the index, one hides the whole of `<main>` at once", losing the
+existing fine-grained stepping through `<main>`'s own column flow (block-
+column → comments-and-related → Underlying code, …).
+
+`DetailPanel` (`home.mjs`) is still a `<main>` **flex-row** that packs its
+own sub-columns **from the left** (`justify-start`, no stretching) — it just
+no longer scrolls that flow itself; `AppColumns`' own scrollbar carries it,
+`PrInfoPanel`/`<aside>` included. The `no-scrollbar` utility (`index.html`,
+now on `AppColumns`) hides the scrollbar chrome, the scrolling itself keeps
+working.
 
 **The resting position is always flush-left:** `resetMainScroll()` (`home.mjs`,
-next to `scrollFocusIntoView`) forces `<main>.scrollLeft = 0` on every
+next to `scrollFocusIntoView`) forces `AppColumns.scrollLeft = 0` on every
 transition *to* the resting position — `enterDiff`/`openTask` (list → diff with
 `focusLevel===0 && drill.length===0`), `applyNextUnapproved` for an empty
 `path`, and the two `←` paths in `onKeydown` that pop fully out of a drilled
@@ -175,31 +214,34 @@ functionality is gated behind either condition, and the click handler still
 fires regardless of visibility (`dispatchEvent('click')` in tests, same
 contract as `block-open-menu`).
 
-**Detection is a 1px sentinel, not per-call-site bookkeeping.** `<main>`'s
-template appends one near-zero-width `data-testid=main-overflow-sentinel` div
-as its very last child (after `related-code`); `setupMainOverflowObserver()`
-(`home.mjs`, called once right after `DetailPanel(state)(app)`) watches it with
-an `IntersectionObserver` rooted at `<main>` itself — `state.mainOverflowRight
-= !entry.isIntersecting`. This reacts to *any* change in `<main>`'s total
+**Detection is a 1px sentinel, not per-call-site bookkeeping.**
+`AppColumns`' own template appends one near-zero-width
+`data-testid=main-overflow-sentinel` div as its very last child (after
+`${DetailPanel(state)}` — moved out of `<main>`'s own template, see
+"Superseded" above); `setupMainOverflowObserver()` (`home.mjs`, called once
+right after `AppColumns(state)(app)`) watches it with an
+`IntersectionObserver` rooted at `AppColumns` itself — `state.mainOverflowRight
+= !entry.isIntersecting`. This reacts to *any* change in the row's total
 content width (a column appearing/disappearing, the description column
 toggling, a drilled column opening/closing, a manual column-width resize, a
 window resize) automatically, the same reasoning `tests/drill-left-hint-
 visible.spec.mjs` already relies on for `drill-left-hint` — no watch/call-site
-needs to remember to recompute it. The sentinel's own `-ml-4` cancels out the
-`gap-4` `<main>` puts before it, so its right edge lines up with the real last
-column's right edge instead of always reporting one gap's worth of phantom
-overflow even once everything already fits.
+needs to remember to recompute it. The sentinel's own `-ml-6` cancels out the
+`gap-6` `AppColumns` puts before it, so its right edge lines up with the real
+last column's right edge instead of always reporting one gap's worth of
+phantom overflow even once everything already fits.
 
 **A click hides exactly the current left-most (at least partly visible)
-column, one column per click** — `scrollMainRightOneColumn()` walks `<main>`'s
-own direct children (whatever they are for the current mode — block-column,
-a drilled column, `comments-and-related`, …), finds the first one whose right
-edge still reaches past `<main>`'s own left edge, and adds exactly that
-column's own width to `scrollLeft`. Reviewer's explicit "stap voor stap"
-request — deliberately **no** "scroll all the way right" shortcut. This is a
-**pure scroll-position change**: it never touches `state.drill`/
-`state.focusLevel`/anything reactive, unlike `expandColumn` (which actively
-discards drilled columns) — the two must not be confused. There is
+column, one column per click** — `scrollMainRightOneColumn()` walks
+`rowColumns()`'s flat list (`PrInfoPanel`, `<aside>`, then `<main>`'s own
+children flattened in — block-column, a drilled column,
+`comments-and-related`, …, see "Superseded" above), finds the first one
+whose right edge still reaches past the row's own left edge, and adds
+exactly that column's own width to `AppColumns.scrollLeft`. Reviewer's
+explicit "stap voor stap" request — deliberately **no** "scroll all the way
+right" shortcut. This is a **pure scroll-position change**: it never touches
+`state.drill`/`state.focusLevel`/anything reactive, unlike `expandColumn`
+(which actively discards drilled columns) — the two must not be confused. There is
 deliberately no matching "scroll back left" button in this rail: native
 scrolling and `MainScrollLeftHint`/`block-close-column` (below) already cover
 going back. Test: `tests/main-scroll-right-hint.spec.mjs`.

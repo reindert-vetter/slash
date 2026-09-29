@@ -896,16 +896,18 @@ const state = reactive({
   // rail) read this instead of state.mode, so the bar + its reserved space
   // disappear entirely rather than showing an empty balk.
   footerVisible: false,
-  // mainOverflowRight — true while <main>'s own column flow (detail-panel)
-  // has content scrolled out of view to the right, i.e. there is more to
-  // reach with a rightward scroll. Kept in sync by an IntersectionObserver
-  // watching a 1px sentinel appended as <main>'s own last child (see
-  // mainOverflowSentinel below) rather than hand-recomputed at every
-  // navigation/layout call site — the sentinel reacts to ANY change in
-  // <main>'s total content width (a column appearing/disappearing, the
-  // description column opening, a drilled column, a manual column-width
-  // resize) for free. Drives mainScrollRightHint's visibility; see "A mouse
-  // way to reach content overflowing to the right" in detail-layout.md.
+  // mainOverflowRight — true while AppColumns' own row (PrInfoPanel/<aside>/
+  // <main> together, the single shared horizontal scroll space — see
+  // AppColumns' own doc comment) has content scrolled out of view to the
+  // right, i.e. there is more to reach with a rightward scroll. Kept in sync
+  // by an IntersectionObserver watching a 1px sentinel appended as
+  // AppColumns' own last child (see setupMainOverflowObserver below) rather
+  // than hand-recomputed at every navigation/layout call site — the sentinel
+  // reacts to ANY change in the row's total content width (a column
+  // appearing/disappearing, the description column opening, a drilled
+  // column, a manual column-width resize) for free. Drives
+  // mainScrollRightHint's visibility; see "A mouse way to reach content
+  // overflowing to the right" in detail-layout.md.
   mainOverflowRight: false,
   // mouseActiveHints — true while the mouse has moved ANYWHERE on the page
   // within the last 5s (see the window `mousemove` listener next to the
@@ -11106,12 +11108,29 @@ function scrollFocusIntoView(level = state.focusLevel) {
     // exist for a drilled level (level > 0).
     const el =
       (level === 0 && document.querySelector('[data-testid="test-methods-column"]')) || focusedColumnEl(level)
-    // Always align to the *left* edge of the viewport: the top-level block
-    // column is the leftmost column, and a freshly-focused drilled column
-    // should land flush against <main>'s left edge too (rather than its right
-    // edge) so the columns it was drilled from stay hinted-at via the
-    // left-edge chevron below instead of scrolling fully out of reach.
-    if (el) el.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' })
+    if (!el) return
+    // Level 0 is meant to be exactly flush-left at rest (resetMainScroll's own
+    // "rest position" contract). It's no longer literally AppColumns' first
+    // scrollable child now that the whole row (PrInfoPanel/<aside>/<main>)
+    // shares one scroll space — even a fully collapsed `<aside>` (width 0)
+    // still reserves one flex `gap` before <main> (see
+    // canStepMainLeftZoneCls's own note on this) — so a generic
+    // `scrollIntoView({inline:'start'})` on the block-column/methodes-kolom
+    // itself can land a few px short of 0 rather than exactly flush. Scroll
+    // AppColumns itself to 0 directly instead; smooth to keep the same
+    // animation the drilled-column branch below still gets via
+    // scrollIntoView.
+    if (level === 0) {
+      const appColumns = document.querySelector('[data-testid="app-columns"]')
+      if (appColumns) appColumns.scrollTo({ left: 0, behavior: 'smooth' })
+      return
+    }
+    // Always align to the *left* edge of the viewport: a freshly-focused
+    // drilled column should land flush against <main>'s left edge (rather
+    // than its right edge) so the columns it was drilled from stay
+    // hinted-at via the left-edge chevron below instead of scrolling fully
+    // out of reach.
+    el.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' })
   })
 }
 
@@ -11166,49 +11185,79 @@ function scrollRelatedIntoView(tries = 10) {
   })
 }
 
-// resetMainScroll snaps <main>'s horizontal scroll hard back to 0. Called only
-// at the "rest position" transitions — entering list-mode, or popping all the
-// way back out of every drilled column (focusLevel===0 && drill.length===0) —
-// never while a drilled column is focused/being entered: that's
-// scrollFocusIntoView's territory, and it deliberately leaves earlier columns
-// scrolled off the left edge (with a chevron hint) while drilling, see its own
-// comment above. Without this, a stray manual horizontal scroll (trackpad/
-// scrollbar drag) on <main> would otherwise persist across a transition back
-// to the rest position, since scrollFocusIntoView's `inline:'start'` only
-// re-aligns relative to the block-column element — usually equivalent to 0
-// once it's the sole/leftmost child, but this makes the rest position exactly
-// 0 unconditionally rather than relying on that alignment. Deferred a frame
-// like the other scroll helpers so it runs after the fresh render.
+// resetMainScroll snaps the WHOLE row's horizontal scroll hard back to 0.
+// **Retargeted from `detail-panel` to `app-columns`**: AppColumns is now the
+// single horizontal scroll container for the whole row (PrInfoPanel/<aside>/
+// <main> together, see AppColumns' own doc comment) — <main> itself no
+// longer scrolls on its own. Called only at the "rest position" transitions
+// — entering list-mode, or popping all the way back out of every drilled
+// column (focusLevel===0 && drill.length===0) — never while a drilled column
+// is focused/being entered: that's scrollFocusIntoView's territory, and it
+// deliberately leaves earlier columns scrolled off the left edge (with a
+// chevron hint) while drilling, see its own comment above. Without this, a
+// stray manual horizontal scroll (trackpad/scrollbar drag) would otherwise
+// persist across a transition back to the rest position, since
+// scrollFocusIntoView's `inline:'start'` only re-aligns relative to the
+// block-column element — usually equivalent to 0 once it's the sole/leftmost
+// column, but this makes the rest position exactly 0 unconditionally rather
+// than relying on that alignment. Deferred a frame like the other scroll
+// helpers so it runs after the fresh render.
 function resetMainScroll() {
   requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid="detail-panel"]')
+    const el = document.querySelector('[data-testid="app-columns"]')
     if (el) el.scrollLeft = 0
   })
 }
 
+// rowColumns — the flat, left-to-right list of "columns" that together make
+// up AppColumns' one shared scroll space: PrInfoPanel, <aside>, and then
+// <main>'s OWN children flattened in one level deep (block-column,
+// comments-and-related, a drilled column, …) rather than treating <main>
+// itself as a single atomic entry. Without that one-level flatten,
+// scrollMainRightOneColumn's "one column per click" contract would coarsen
+// into "one click hides PrInfoPanel, one hides <aside>, one hides the whole
+// of <main> at once" — losing the existing fine-grained stepping through
+// <main>'s own column flow (hiding the block-column to reveal the
+// comments/Claude row, then that to reveal Underlying code, …) that predates
+// the "whole row scrolls together" change below. Skips both overflow
+// sentinels (AppColumns' own, and <main>'s already-empty child list has
+// none left — see AppColumns' own doc comment for where the sentinel moved).
+function rowColumns() {
+  const appColumns = document.querySelector('[data-testid="app-columns"]')
+  if (!appColumns) return []
+  const cols = []
+  for (const child of appColumns.children) {
+    if (child.getAttribute('data-testid') === 'main-overflow-sentinel') continue
+    if (child.getAttribute('data-testid') === 'detail-panel') {
+      for (const sub of child.children) cols.push(sub)
+    } else {
+      cols.push(child)
+    }
+  }
+  return cols
+}
+
 // scrollMainRightOneColumn — the click handler behind mainScrollRightHint
 // (below): hides exactly the current left-most (at least partly visible)
-// column of <main>'s own flex-row, one column per click, mirroring the
-// reviewer request ("1x naar rechts = hide de linkerblok, nog een klik =
+// column of the WHOLE row (rowColumns, above — PrInfoPanel/<aside> included,
+// not just <main>'s own content any more), one column per click, mirroring
+// the reviewer request ("1x naar rechts = hide de linkerblok, nog een klik =
 // ook de volgende"). Deliberately a PURE scroll-position change — it only
-// ever sets <main>.scrollLeft, never state.drill/state.focusLevel/anything
-// reactive, unlike expandColumn (which actively discards drilled columns).
-// Works identically in list mode and diff mode: it walks <main>'s own
-// direct children (whatever they are for the current mode) rather than
-// anything diff/drill-specific.
+// ever sets AppColumns' own scrollLeft, never state.drill/state.focusLevel/
+// anything reactive, unlike expandColumn (which actively discards drilled
+// columns). Works identically in list mode and diff mode.
 function scrollMainRightOneColumn() {
-  const main = document.querySelector('[data-testid="detail-panel"]')
-  if (!main) return
-  const mainLeft = main.getBoundingClientRect().left
-  for (const col of main.children) {
-    if (col.getAttribute('data-testid') === 'main-overflow-sentinel') continue
+  const appColumns = document.querySelector('[data-testid="app-columns"]')
+  if (!appColumns) return
+  const rowLeft = appColumns.getBoundingClientRect().left
+  for (const col of rowColumns()) {
     const rect = col.getBoundingClientRect()
-    // The first column whose right edge still reaches past <main>'s own
+    // The first column whose right edge still reaches past the row's own
     // left (visible) edge is the current left-most one, fully or partially
     // on screen. Scroll exactly its own width further so that edge lands
-    // flush with <main>'s left edge, i.e. hide it completely.
-    if (rect.right > mainLeft + 1) {
-      main.scrollLeft += rect.right - mainLeft
+    // flush with the row's left edge, i.e. hide it completely.
+    if (rect.right > rowLeft + 1) {
+      appColumns.scrollLeft += rect.right - rowLeft
       return
     }
   }
@@ -11228,11 +11277,13 @@ const PR_INDEX_COL_PX = 416
 const PR_INFO_COL_PX = 624
 
 // mainContentWidthPx — the real width <main>'s column flow WANTS, i.e. the sum
-// of its own columns plus their gaps. Deliberately not `main.scrollWidth`:
-// <main> is `flex-1`, so once everything already fits its scrollWidth is its
-// (stretched) client width, which would report "needs the whole screen" exactly
-// in the case this function exists to detect. The sentinel is skipped for the
-// same reason scrollMainRightOneColumn skips it, and a zero-width child (a
+// of its own columns plus their gaps. Still a plain sum rather than
+// `main.scrollWidth` even now that <main> is `shrink-0` (not `flex-1` — see
+// DetailPanel's own doc comment) and therefore never itself clips/scrolls: a
+// sum keeps this function's result independent of whatever AppColumns'
+// current scrollLeft happens to be, which `scrollWidth` is not guaranteed to
+// be across every browser. The sentinel is skipped for the same reason
+// rowColumns/scrollMainRightOneColumn skip it, and a zero-width child (a
 // column hidden via `hidden`/`w-0`) claims no gap either.
 //
 // This IS a live DOM measurement, unlike every width in diff-card.md — but it
@@ -11298,29 +11349,32 @@ function scheduleDiffColumnFit() {
 }
 
 // setupMainOverflowObserver keeps state.mainOverflowRight in sync with whether
-// <main>'s own 1px sentinel (its last child, see DetailPanel) is currently
-// scrolled out of view — i.e. whether there's more of <main>'s column flow
-// to reach with a rightward scroll. Set up once <main> exists in the DOM
-// (right after AppColumns(state)(app), below), observing the sentinel
-// against <main> itself as the intersection root. This reacts to ANY
-// change in <main>'s total content width (a column appearing/disappearing,
-// a drilled column, the description column, a manual column-width resize)
-// with no per-call-site bookkeeping — see the doc comment on
-// state.mainOverflowRight. The sentinel's own `-ml-4` cancels out the
-// flex gap-4 <main> puts before it, so its right edge lines up with the
-// real last column's right edge instead of always sitting one gap further
-// out (which would report overflow even once everything already fits).
+// the row's own 1px sentinel (AppColumns' last child, see its own doc
+// comment) is currently scrolled out of view — i.e. whether there's more of
+// the WHOLE row (PrInfoPanel/<aside>/<main> together) to reach with a
+// rightward scroll. **Retargeted from `detail-panel` to `app-columns`**:
+// AppColumns is now the single horizontal scroll container for the row, so
+// the sentinel lives there and the IntersectionObserver's root moves with
+// it. Set up once AppColumns exists in the DOM (right after
+// AppColumns(state)(app), below). This reacts to ANY change in the row's
+// total content width (a column appearing/disappearing, a drilled column,
+// the description column, a manual column-width resize) with no per-call-
+// site bookkeeping — see the doc comment on state.mainOverflowRight. The
+// sentinel's own `-ml-6` cancels out AppColumns' own `gap-6` before it, so
+// its right edge lines up with the real last column's right edge instead of
+// always sitting one gap further out (which would report overflow even once
+// everything already fits).
 function setupMainOverflowObserver() {
-  const main = document.querySelector('[data-testid="detail-panel"]')
+  const appColumns = document.querySelector('[data-testid="app-columns"]')
   const sentinel = document.querySelector('[data-testid="main-overflow-sentinel"]')
-  if (!main || !sentinel) return
+  if (!appColumns || !sentinel) return
   const observer = new IntersectionObserver(
     ([entry]) => {
       state.mainOverflowRight = !entry.isIntersecting
       // A column opening further right (drilling, the comments panel) is
       // exactly the moment a kept-open left column stops fitting — this
-      // observer already fires on ANY change of <main>'s content width, so it
-      // doubles as the re-check trigger. Only while something is actually
+      // observer already fires on ANY change of the row's content width, so
+      // it doubles as the re-check trigger. Only while something is actually
       // being kept, and applyDiffColumnFit itself only ever shrinks from here,
       // so this can't oscillate: giving the space back reduces the overflow,
       // it never creates more.
@@ -11338,7 +11392,7 @@ function setupMainOverflowObserver() {
         scrollRelatedIntoView()
       }
     },
-    { root: main, threshold: 0 },
+    { root: appColumns, threshold: 0 },
   )
   observer.observe(sentinel)
 }
@@ -17606,24 +17660,33 @@ function testClassPreviewCard(state, row) {
 // sync only by hand, with the bottom reservation (below) as the sole
 // remaining exception (see AppColumns in home.mjs's mount section for why
 // that one still needs to be dynamic). Now that all three are real siblings
-// in one flex row (AppColumns), <main> simply takes the remaining space
-// (`flex-1 min-w-0`) regardless of which of its neighbours are open/closed —
+// in one flex row (AppColumns), <main> simply sizes to its own content
+// (`shrink-0`) regardless of which of its neighbours are open/closed —
 // removing the entire magic-number system this file used to document here.
 //
-// `overflow-y-hidden` is explicit, not incidental: per the CSS overflow spec,
-// setting one axis to a non-`visible` value (here `overflow-x-auto`, for the
-// column-to-column scroll) forces the OTHER axis to compute to `auto` too if
-// left at its default `visible` — so without this, <main> itself silently
-// became ONE SHARED vertical scrollbar for every column at once (reviewer
-// report: columns scrolled together, not independently, and a DOM update
-// anywhere in that one shared container could reset the single scrollTop).
-// Each column now scrolls internally on its own instead (see block-column's
-// and drill-column's own `overflow-y-auto` below), so <main> itself has
-// nothing left to scroll vertically.
+// **Superseded (horizontal scroll moved to AppColumns):** <main> used to own
+// its own `overflow-x-auto` (`flex-1 min-w-0`) — reviewer report: scrolling
+// horizontally over <main>'s own column flow left PrInfoPanel/<aside> pinned
+// in place ("omschrijving en index scrollen niet mee"), because they sat
+// OUTSIDE the one element that actually scrolled. AppColumns itself is now
+// the single horizontal scroll container for the whole row (see its own doc
+// comment) — <main> is `shrink-0` and never clips/scrolls locally any more;
+// its own content simply renders at its true width and AppColumns' scrollbar
+// carries the whole row, PrInfoPanel/<aside> included. Applies in both list
+// and diff mode alike (explicit reviewer choice: "overal").
+//
+// `overflow-y-hidden` stays explicit here too, cheap insurance against the
+// same axis-coupling gotcha AppColumns' own comment describes (a non-`auto`
+// x axis forces a `visible` y axis to also stop being `visible` — though with
+// <main> now `shrink-0` and never narrower than its own content, its x axis
+// never actually produces a scrollbar of its own regardless). Each column
+// still scrolls internally on its own instead (see block-column's and
+// drill-column's own `overflow-y-auto` below), so <main> itself has nothing
+// left to scroll vertically either.
 function DetailPanel(state) {
   return html`
     <main
-      class="flex h-full min-h-0 min-w-0 flex-1 flex-row gap-4 overflow-x-auto overflow-y-hidden no-scrollbar transition-all duration-200 ease-out"
+      class="flex h-full min-h-0 shrink-0 flex-row gap-4 overflow-y-hidden transition-all duration-200 ease-out"
       data-testid="detail-panel"
     >
       ${() => {
@@ -18569,7 +18632,6 @@ function DetailPanel(state) {
         ${() =>
           RelatedPanel(state, commentTarget, { drill: handleRelatedDrill }).key('related-panel')}
       </div>
-      <div class="-ml-4 h-1 w-px shrink-0" data-testid="main-overflow-sentinel"></div>
     </main>
   `
 }
@@ -18744,10 +18806,9 @@ function MainScrollLeftHint(state) {
 // genuinely gives its space back to its neighbours instead of merely being
 // covered by a translate/opacity trick while <main> separately (and
 // fragilely) computed a matching offset by hand — that hand-synced-offset
-// system is gone; <main> is just `flex-1 min-w-0` now (see DetailPanel's own
-// doc comment) and reflows automatically whichever of its neighbours are
-// open. See "Columns instead of independently fixed panels" in
-// detail-layout.md.
+// system is gone; <main> is just `shrink-0` now (see DetailPanel's own doc
+// comment) and reflows automatically whichever of its neighbours are open.
+// See "Columns instead of independently fixed panels" in detail-layout.md.
 //
 // The wrapper itself keeps the one offset that still has to react to state:
 // the bottom footer reservation. PrInfoPanel/<aside> never need it — the
@@ -18755,15 +18816,46 @@ function MainScrollLeftHint(state) {
 // collapsed (see BlockList.mjs) — so applying it to the whole row is
 // equivalent to the old <main>-only reservation, without a separate
 // per-child value.
+//
+// **AppColumns is now the single horizontal scroll container for the WHOLE
+// row** (`overflow-x-auto no-scrollbar`) — moved here from <main>'s own
+// class (see DetailPanel's "Superseded" doc comment): reviewer report,
+// scrolling over <main>'s own column flow used to leave PrInfoPanel/<aside>
+// pinned in place, unreachable by a horizontal scroll gesture, because they
+// sat OUTSIDE the one element (<main>) that actually scrolled. Applies in
+// both list and diff mode (explicit reviewer choice, "overal").
+//
+// `overflow-y-hidden` is explicit here for the same axis-coupling reason
+// <main> used to need it for: per the CSS overflow spec, setting one axis to
+// a non-`visible` value (here `overflow-x-auto`) forces the OTHER axis to
+// compute to `auto` too if left at its default `visible` — without this,
+// AppColumns itself would become ONE SHARED vertical scrollbar for
+// PrInfoPanel/<aside>/<main> at once, exactly the bug this codebase already
+// hit once at the <main>-only level (see detail-layout.md's "A mouse way to
+// reach content..." history). Each column still scrolls internally on its
+// own (its own `overflow-y-auto`), so AppColumns itself has nothing left to
+// scroll vertically.
+//
+// `main-overflow-sentinel` (a 1px marker, last child of the whole row) moved
+// here from being <main>'s own last child — it must reflect whether there's
+// more of the WHOLE row to reach, not just more of <main>'s own content, now
+// that <main> is only one (variable-width) column among three in the same
+// scroll space. Its `-ml-6` cancels out AppColumns' own `gap-6` before it, so
+// its right edge lines up with the row's real last column instead of
+// reporting a phantom gap's worth of overflow. See
+// scrollMainRightOneColumn/rowColumns/setupMainOverflowObserver/
+// resetMainScroll below, all retargeted from `detail-panel` to
+// `app-columns` for the same reason.
 function AppColumns(state) {
   return html`
     <div
       class="${() =>
-        'fixed left-6 right-0 top-6 z-10 flex min-h-0 items-stretch gap-6 transition-all duration-200 ease-out ' +
+        'fixed left-6 right-0 top-6 z-10 flex min-h-0 items-stretch gap-6 overflow-x-auto overflow-y-hidden no-scrollbar transition-all duration-200 ease-out ' +
         (!state.footerVisible ? 'bottom-6' : `bottom-[${footerBoxPx(state) + PROGRESS_BAR_PX}px]`)}"
       data-testid="app-columns"
     >
       ${PrInfoPanel(state)} ${BlockList(state, isPrWideComposing, revealApprovedBlocks)} ${DetailPanel(state)}
+      <div class="-ml-6 h-1 w-px shrink-0" data-testid="main-overflow-sentinel"></div>
     </div>
   `
 }
