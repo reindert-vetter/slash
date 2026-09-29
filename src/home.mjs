@@ -18644,48 +18644,40 @@ function MainScrollRightHint(state) {
 // for a drilled column (its own "Sluit deze kolom" button in Block.mjs
 // covers that) and once the description is already open.
 //
-// Position: `left-0` matches MainScrollRightHint's own corner (`right-0`)
-// exactly, in BOTH modes — reviewer request: the back button must sit flush
-// against the true viewport edge, not tucked in next to the pr-index. In
-// diff mode <main> effectively starts at the viewport's own left-6 (the
-// pr-index (<aside>) is collapsed to width 0 then, see detail-layout.md) so
-// there's nothing to overlap. In list mode the pr-index occupies that
-// top-left corner too (`w-[26rem]`, visually pinned there via AppColumns'
-// own fixed `left-6`, see BlockList.mjs) whenever this button would show
-// (canStepMainLeft() is only true there while the description ISN'T open
-// yet, i.e. the pr-index is fully visible) — the button now sits in the
-// blank `left-6` gutter to its left, matching the diff-mode gutter case
-// below, rather than past its right edge.
+// Position: `left-6` — reviewer follow-up request: give the button as much
+// room on the left as it already has above (`top-6`), i.e. match AppColumns'
+// own `left-6`/`top-6` inset (both 24px, see AppColumns below) instead of the
+// earlier flush-`left-0` placement. Accepted consequence, confirmed by the
+// reviewer: the button now sits at the exact x where the pr-index card (list
+// mode) / the diff card (diff mode, after AppColumns' `left-6` + the
+// `gap-6` that still reserves space for the collapsed <aside>, see
+// canStepMainLeftZoneCls below) itself starts, so it visually falls over
+// that card's top-left corner rather than beside it.
 // canStepMainLeftPositionCls() is its own small reactive slot so only the
 // position (not the whole button) reruns on a mode change.
 // In diff mode it stretches from top-6 to bottom-6 — the hover-catching zone
 // spans the whole (blank) left gutter, see canStepMainLeftZoneCls below for
 // why. The visible icon itself still sits at the very top (`items-start`).
 function canStepMainLeftPositionCls() {
-  return state.mode === 'diff' ? 'top-6 bottom-6 left-0' : 'top-6 left-0'
+  return state.mode === 'diff' ? 'top-6 bottom-6 left-6' : 'top-6 left-6'
 }
 // canStepMainLeftZoneCls() — the width of the invisible HOVER-CATCHING zone,
 // separate from the visible icon box nested inside it (`group`/
 // `group-hover:`, same reasoning as `block-open-menu`'s reveal — see
-// mouse-navigation.md). In diff mode there is a real, empty gap between the
-// true viewport edge (where the icon itself sits, per the "tegen de rand"
-// request) and the diff card's own visible left edge: AppColumns' own
-// `left-6` inset PLUS one `gap-6` that still applies before <main> even
-// though the collapsed <aside> takes zero width (a flex `gap` reserves its
-// space between EVERY pair of children, collapsed-width or not) — about 48px
-// of blank page background. Regression found after the AppColumns merge
-// (0fe3d4b): the icon's own hover target used to double as "hover the visible
-// card's corner", because before that merge the card sat flush against this
-// same x:0 spot; once the card moved ~48px right, that blank gap became a
-// dead zone nobody would think to point at, and the hint was reported as
-// "never shows even when I move the mouse around". Widening the invisible
-// catcher (not the visible icon) to span that whole gutter means a mouse
-// travelling from the edge toward the card passes over it either way. List
-// mode now has the same kind of gap since the button moved flush to
-// `left-0` (the pr-index itself starts at `left-6`), just narrower (~24px,
-// no extra `gap-6` in front of it since <aside> is the first flex child) —
-// it keeps a tight zone matching the icon's own size regardless, since that
-// narrower gutter is still comfortably wider than the icon box itself.
+// mouse-navigation.md). This is a fixed z-30 box, so unlike the merely
+// visible icon it also SWALLOWS clicks meant for whatever sits underneath —
+// it must stop before the diff/pr-index card's own left edge, not reach into
+// it. AppColumns' own `left-6` inset plus one `gap-6` that still applies
+// before <main> even though a collapsed <aside> takes zero width (a flex
+// `gap` reserves its space between EVERY pair of children regardless) puts
+// the diff card's left edge at 48px from the viewport edge in diff mode; the
+// pr-index card's own left edge sits at 24px (AppColumns' `left-6` itself) in
+// list mode. Since the position class above now starts the zone at `left-6`
+// (24px) rather than the old `left-0`, its width is shortened by that same
+// 24px so the zone's total reach from the viewport edge is unchanged from
+// before this reviewer follow-up (48px in diff mode, 36px in list mode) —
+// still enough for a mouse travelling in from the edge to pass over it, but
+// not swallowing more of the card underneath than it already did.
 //
 // In diff mode that zone also spans the FULL height of the viewport
 // (`top-6 bottom-6` via the position class, `h-9` dropped), on reviewer
@@ -18693,20 +18685,13 @@ function canStepMainLeftPositionCls() {
 // dan zien als ik met mijn muis beweeg — hij bestaat al, maar is niet
 // zichtbaar". A 36px-tall catcher in the top-left corner is simply not
 // something a mouse passes over by accident, so the button that walks back to
-// that hidden column was effectively undiscoverable. The whole left gutter is
-// blank page background in diff mode (see above), so widening the catcher
-// downward swallows no click: the diff card's own left edge starts to the
-// right of it. `group`/`group-hover` still stays as one of two ways to reveal
-// it (see MainScrollRightHint's own doc comment above for the other,
-// `state.mouseActiveHints`), so this remains an accepted exception to Rule 4
-// in mouse-navigation.md, not a state read that gates any keyboard-only
-// functionality.
-//
-// List mode keeps the small `h-9` box: there the hint now sits at `left-0`,
-// just left of the pr-index's own `left-6` edge, and a full-height strip
-// there WOULD swallow clicks/drag-selections along that card's left edge.
+// that hidden column was effectively undiscoverable. `group`/`group-hover`
+// still stays as one of two ways to reveal it (see MainScrollRightHint's own
+// doc comment above for the other, `state.mouseActiveHints`), so this remains
+// an accepted exception to Rule 4 in mouse-navigation.md, not a state read
+// that gates any keyboard-only functionality.
 function canStepMainLeftZoneCls() {
-  return state.mode === 'diff' ? 'w-12' : 'h-9 w-9'
+  return state.mode === 'diff' ? 'w-6' : 'h-9 w-3'
 }
 function MainScrollLeftHint(state) {
   return html`

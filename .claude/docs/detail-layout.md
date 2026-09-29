@@ -236,17 +236,14 @@ always-reachable button.
   switches to "Terug naar PR-overzicht" for that step. It used to hide
   itself there ("nothing further left to reveal"), leaving no mouse way out
   of the review tree.
-- **Position is NOT a fixed corner in every mode**, unlike
-  `MainScrollRightHint`: in diff mode the pr-index (`<aside>`) collapses to
-  width 0 (a real flex sibling now, see "Columns instead of independently
-  fixed panels" below — not the old translate-based hide), so `top-6 left-0`
-  (flush against the true viewport edge, not `left-6`) lines up exactly with
-  the right-hand hint's own corner. In list mode, though, that corner is where
-  the pr-index (`w-[26rem]`, `BlockList.mjs`) itself sits whenever this button
-  would show (`canStepMainLeft()` is only true there before the description
-  opens, i.e. exactly while the pr-index is fully visible) — so
-  `canStepMainLeftPositionCls()` switches to `top-6 left-[28rem]`, just past
-  the pr-index's own right edge, instead of overlapping its header/search row.
+- **Position is `left-6` in both modes** (`canStepMainLeftPositionCls()`) —
+  reviewer follow-up request: give the button as much room on the left as it
+  already has above (`top-6`), matching AppColumns' own `left-6`/`top-6` inset
+  (both 24px). Accepted consequence: the button now sits at the exact x where
+  the pr-index card (list mode) / the diff card (diff mode) itself starts, so
+  it visually falls over that card's top-left corner rather than beside it —
+  an earlier version kept it flush at `left-0` specifically to avoid that
+  overlap, which the reviewer explicitly reversed.
 - **Hidden by default, same as `MainScrollRightHint` above** — `opacity-0
   group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity`
   **OR** `state.mouseActiveHints` (any mouse movement anywhere on the page in
@@ -256,36 +253,28 @@ always-reachable button.
   used to sit on top of the diff card's own header (overlapping the file
   name/badges); moving it flush to the edge and hiding it until hovered
   removes that permanent overlap.
-- **The invisible hover-catching zone is wider than the visible icon in diff
-  mode** (`canStepMainLeftZoneCls()`, `w-12` vs. the icon's own `w-9`/`h-9`
-  box, a `group`/`group-hover` pair rather than a plain `hover:` on the icon
-  itself). Found as a regression after the AppColumns merge
-  (`.claude/docs/detail-layout.md`'s own "Columns instead of independently
-  fixed panels" below): a flex `gap-6` still reserves its space between
-  `<aside>` and `<main>` even while `<aside>` is collapsed to width 0, so in
-  diff mode there is a real ~48px strip of blank page background between the
-  true left edge (where the icon sits) and the diff card's own visible left
-  edge. Before that merge the card sat flush against the same spot, so
-  hovering the card's own corner doubled as reaching the (already invisible)
-  hint; once the card moved right, that gap became a dead zone with no visual
-  cue, and the hint was reported as "not showing even when I move the mouse
-  around" (`git blame` reference for this fix: the commit right after
-  `9ffd73b`, which introduced the plain `hover:`-on-icon version). List mode
-  has no such gap (the pr-index already sits within ~8px of this hint), so it
-  keeps a tight zone matching the icon's own size.
+- **The invisible hover-catching zone (`canStepMainLeftZoneCls()`) is a fixed
+  z-30 box, so unlike the merely visible icon it also SWALLOWS clicks meant
+  for whatever sits underneath** — it must stop before the diff/pr-index
+  card's own left edge, not reach into it. AppColumns' own `left-6` inset plus
+  one `gap-6` that still reserves its space between `<aside>` and `<main>`
+  even while `<aside>` is collapsed to width 0 puts the diff card's left edge
+  at 48px from the viewport edge in diff mode; the pr-index card's own left
+  edge sits at 24px (AppColumns' `left-6` itself) in list mode. Since the
+  position class now starts the zone at `left-6` (24px) rather than the
+  earlier `left-0`, the zone's width is shortened by that same 24px so its
+  total reach from the viewport edge is unchanged from before this reviewer
+  follow-up (`w-6` in diff mode, `w-3` in list mode — 48px/36px total reach,
+  same as before) — still enough for a mouse travelling in from the edge to
+  pass over it, but not swallowing more of the card underneath than it
+  already did.
 - **In diff mode that zone also spans the FULL height** of the row
   (`top-6 bottom-6` in `canStepMainLeftPositionCls()`, and the wrapper's own
-  `h-9` dropped so the height comes from the position/zone class). Widening it
-  sideways still wasn't enough to make the button discoverable — a 36px-tall
-  catcher in one corner is not something a mouse crosses by accident, and it
-  was reported again as "die knop bestaat al, maar is niet zichtbaar" once the
-  PR-description column started disappearing on width grounds (see the fit rule
-  below). The whole left gutter is blank page background in diff mode, so a
-  full-height catcher swallows no click: the diff card's own left edge starts
-  to the right of it. **List mode deliberately keeps its `h-9` box** — there
-  the hint sits at `left-[28rem]`, already ~20px over `<main>`'s own first
-  column, and a full-height strip there *would* swallow clicks and
-  drag-selections along that card's left edge.
+  `h-9` dropped so the height comes from the position/zone class), on
+  reviewer request — a 36px-tall catcher in one corner is not something a
+  mouse crosses by accident. **List mode deliberately keeps its `h-9` box** —
+  a full-height strip there would swallow clicks and drag-selections along
+  the pr-index card's left edge.
 - Own glyph: a chevron docked against a vertical bar (same shape as
   `block-close-column`'s icon, mirrored), never colour alone, per the
   colorblind rule.
