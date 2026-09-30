@@ -143,6 +143,17 @@ column back to `focusLevel===0` resp. leave the diff session
 `focusLevel > 0`, `scrollFocusIntoView`'s intentional scroll-to-the-right wins
 (see "Unfocused columns collapse into a narrow rail" in
 `.claude/docs/drilling.md`). Test: `tests/main-scroll-rest-left.spec.mjs`.
+**One exception: an auto-drilled comment/chat anchor while the index still
+has the keyboard.** `openCommentAnchorDrill` already sets `focusLevel = 1`
+while the reviewer is still walking the index with ↑/↓
+(`commentAnchorAwaitingEntry`, no → yet), so `scrollFocusIntoView` treats that
+state as the resting position (`scrollLeft = 0`) instead of aligning the
+drilled column flush-left. Since AppColumns is the one scroll space for the
+whole row (index included), that alignment pushed the index being navigated
+off the left edge. It came back on every code load through the
+`relatedActive`/`codeVersion` watch, which is why it read as "it sometimes
+jumps right". Test: "keeps the row at rest (index visible) while the keyboard
+is still in the index" in `tests/comment-anchor-expanded-view.spec.mjs`.
 
 **Each column scrolls vertically on its own, independently of its
 neighbours** (`overflow-y-auto` on `block-column`/`comments-and-related`/each

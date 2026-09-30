@@ -11138,7 +11138,17 @@ function scrollFocusIntoView(level = state.focusLevel) {
     // AppColumns itself to 0 directly instead; smooth to keep the same
     // animation the drilled-column branch below still gets via
     // scrollIntoView.
-    if (level === 0) {
+    //
+    // Same rest position for a comment/chat index item's auto-drilled anchor
+    // column (openCommentAnchorDrill) while the keyboard is still in the
+    // index (commentAnchorAwaitingEntry — no → pressed yet). focusLevel is
+    // already 1 there, so this used to align that drilled column flush-left —
+    // and since AppColumns became the one scroll space for the whole row
+    // (index included), that pushed the index the reviewer was navigating
+    // off the left edge. The relatedActive/codeVersion watch re-runs this on
+    // every code load, which is why it read as "it sometimes jumps right".
+    // The first → (commentAnchorEntered) switches to the drilled branch below.
+    if (level === 0 || commentAnchorAwaitingEntry(level)) {
       const appColumns = document.querySelector('[data-testid="app-columns"]')
       if (appColumns) appColumns.scrollTo({ left: 0, behavior: 'smooth' })
       return

@@ -114,6 +114,28 @@ test.describe('a comment-index item anchored to a real block', () => {
     await expect(item).toHaveAttribute('data-expanded', 'true')
   })
 
+  // Reviewer report: "ook als ik in de blokken index zit, toch schiet het soms
+  // naar rechts". The auto-drill sets focusLevel=1 while the keyboard stays in
+  // the index, and scrollFocusIntoView used to align that drilled column
+  // flush-left — which, since AppColumns is one scroll space for the whole
+  // row, pushed the index itself off the left edge (re-run on every code
+  // load). Until the first → the row must stay at its rest position.
+  test('keeps the row at rest (index visible) while the keyboard is still in the index', async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 800 })
+    await mockAnchoredComment(page)
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+
+    const row = page.locator('[data-idx]').filter({ hasText: 'please rename this variable' })
+    await row.click()
+    await expect(page.getByTestId('drill-column')).toBeVisible()
+    // Give the smooth scroll and any code-load re-run time to land.
+    await page.waitForTimeout(800)
+    const scrollLeft = await page.getByTestId('app-columns').evaluate((el) => el.scrollLeft)
+    expect(scrollLeft).toBe(0)
+    await expect(page.getByTestId('pr-index')).toBeInViewport()
+  })
+
   // Reviewer request: "als ik navigeer door comments op regels wil ik aan de
   // rechterkant alleen die comment en chat zien" — a SECOND, unrelated open
   // comment on the exact same block must not also render next to this row's
