@@ -1923,7 +1923,14 @@ func advancePendingRefFromCheckout(ctx context.Context, dir, repo string, pr int
 	}
 	sha := strings.TrimSpace(string(shaOut))
 
-	if _, err := runGitFor(ctx, repo, "fetch", dir, sha); err != nil {
+	// --no-recurse-submodules: this only copies one local commit between two
+	// local repos, but git's default fetch.recurseSubmodules=on-demand still
+	// tried to fetch every submodule whose pointer moved from ITS remote over
+	// ssh — and failed the whole landing with "Permission denied (publickey)"
+	// once the ssh-agent had no key loaded, even though the commit itself had
+	// already arrived (reviewer report, PR 13848). The pending ref only needs
+	// the superproject commit; submodule objects are never read here.
+	if _, err := runGitFor(ctx, repo, "fetch", "--no-recurse-submodules", dir, sha); err != nil {
 		return fmt.Errorf("fetch checkout commit into shared clone: %w", err)
 	}
 
