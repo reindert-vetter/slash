@@ -131,6 +131,14 @@ type Client interface {
 	// per-thread poll hits a 404: only the former may delete anything locally.
 	// See IsNotFound below.
 	RepoAccessible(ctx context.Context) (bool, error)
+	// CommentExists reports whether the single comment commentID still exists
+	// on GitHub. It is the targeted counterpart of RepoAccessible: a 404 from a
+	// PR-WIDE listing call (FetchReplies lists every review comment of the PR)
+	// says nothing about one specific comment, so nothing may ever conclude
+	// "this comment was deleted" from such a listing alone. Checks the review-
+	// comment endpoint first and the issue-comment one as a fallback, since a
+	// thread root can be either; "false" means both answered 404.
+	CommentExists(ctx context.Context, commentID int64) (bool, error)
 	// PRMeta fetches the PR's title and web URL.
 	PRMeta(ctx context.Context, pr int) (Meta, error)
 	// DeleteComment removes a review comment (the root of a thread) from the PR.
@@ -478,6 +486,33 @@ func IsNotFound(err error) bool {
 // second case checkable on its own.
 func (m *Module) RepoAccessible(ctx context.Context) (bool, error) {
 	_, err := m.api(ctx, "GET", fmt.Sprintf("repos/%s", m.repo))
+	if err == nil {
+		return true, nil
+	}
+	if IsNotFound(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// CommentExists reports whether commentID still exists on GitHub — see the
+// Client interface doc for why this exists. A review comment and an issue
+// comment live at different endpoints and a thread root can be either, so a
+// 404 on the first is not yet an answer: only when BOTH answer 404 is the
+// comment really gone. Any other error is returned as-is, so a caller can
+// tell "gone" apart from "could not tell".
+func (m *Module) CommentExists(ctx context.Context, commentID int64) (bool, error) {
+	if commentID == 0 {
+		return false, nil
+	}
+	_, err := m.api(ctx, "GET", fmt.Sprintf("repos/%s/pulls/comments/%d", m.repo, commentID))
+	if err == nil {
+		return true, nil
+	}
+	if !IsNotFound(err) {
+		return false, err
+	}
+	_, err = m.api(ctx, "GET", fmt.Sprintf("repos/%s/issues/comments/%d", m.repo, commentID))
 	if err == nil {
 		return true, nil
 	}

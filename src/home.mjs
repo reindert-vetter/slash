@@ -8521,6 +8521,10 @@ function defaultSel(list, native) {
 // whatever state.selected happens to be afterward.
 async function deleteCommentAndSelectRow() {
   const c = focusedComment()
+  // Ownership gate, mirroring the one that hides the menu item — so a stray
+  // direct call (a keybinding, a future caller) can never delete someone
+  // else's imported comment either. See commentCommandsFor's own comment.
+  if (!isOwnComment(c) && !isAiComment(c)) return
   const b = focusedBlock()
   const wasCommentIndexRow = isCommentIndexRowActive()
   const beforeIdx = state.selected
@@ -8746,12 +8750,22 @@ function commentCommandsFor() {
           },
     )
   }
-  items.push({
-    id: 'delete-comment',
-    label: t('Verwijder comment'),
-    hint: 'delete',
-    run: () => deleteCommentAndSelectRow(),
-  })
+  // "Verwijder comment" is only offered for a comment that is OURS to remove:
+  // one placed in this app, an AI finding, or an imported comment the local
+  // reviewer wrote themselves (isOwnComment covers that last case). Someone
+  // else's remark imported from GitHub is never deletable from here —
+  // reviewer instruction, "ik wil geen comments van anderen kunnen
+  // verwijderen". The backend enforces the same rule independently (see
+  // deleteGithubComment's ownership guard in workflows.go), so hiding the
+  // item is the UI half of it, never the only line of defence.
+  if (isOwnComment(focused) || isAiComment(focused)) {
+    items.push({
+      id: 'delete-comment',
+      label: t('Verwijder comment'),
+      hint: 'delete',
+      run: () => deleteCommentAndSelectRow(),
+    })
+  }
   const c = focused
   // "Bewerk bericht" edits whichever message the keyboard is currently ON —
   // the root/opening message at rest, or the specific reply stepped into via
@@ -9154,11 +9168,13 @@ function prCommentCommandsFor() {
   // that helper's own doc comment. It is never "own" either, so the list is
   // simply [Beantwoorden, Verwijder]: replying stays the default, deleting
   // stays out of first place.
+  // Same ownership rule as the block-scoped menu above: a foreign imported
+  // comment keeps Beantwoorden/Resolve but loses Verwijder entirely.
   const items = isAiComment(c)
     ? [replyItem, deleteItem]
     : isOwnComment(c)
       ? [resolveItem, replyItem, deleteItem]
-      : [replyItem, resolveItem, deleteItem]
+      : [replyItem, resolveItem]
   // "Bewerk bericht" edits whichever message the keyboard is currently ON in
   // this item's own thread (→/enterPrCommentThread + pct, see
   // focusedPrThreadMessage) — only for the reviewer's OWN message.

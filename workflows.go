@@ -1492,16 +1492,34 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 
 	// Activity: delete the GitHub review comment (best-effort — a failure must
 	// not block removing our own record of it).
+	//
+	// It only ever deletes a comment this app POSTED ITSELF. A comment imported
+	// from GitHub (Source "github") belongs to whoever wrote it there, and
+	// slash must never remove someone else's remark from a PR — a delete of
+	// such a comment stays local: the row disappears from the review tree, the
+	// comment stays on GitHub. The one exception is an imported comment whose
+	// author is the local reviewer themselves; deleting your own comment is
+	// yours to do. The ownership test lives HERE, in the Activity, rather than
+	// in the workflow body, for two reasons: it needs a live lookup of the
+	// authenticated user (CurrentUser — not allowed in a workflow body, see
+	// .claude/rules/workflow-determinism.md), and keeping the workflow's own
+	// Activity sequence unchanged means no stored history shifts.
 	engine.RegisterActivity("deleteGithubComment", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg struct {
 			Repo   string `json:"repo,omitempty"`
 			PR     int    `json:"pr"`
 			RootID int64  `json:"rootId"`
+			Source string `json:"source,omitempty"`
+			Author string `json:"author,omitempty"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
 		if arg.RootID == 0 {
+			return nil, nil
+		}
+		if arg.Source == "github" && !m.ownGithubAuthor(ctx, arg.Author) {
+			m.logf("task_code_comment: github delete refused for comment %d — imported comment by %q, not ours (removed locally only)", arg.RootID, arg.Author)
 			return nil, nil
 		}
 		if err := m.ghFor(arg.Repo).DeleteComment(ctx, arg.PR, arg.RootID); err != nil {
@@ -4442,6 +4460,24 @@ func (m *TaskManager) CurrentUser(ctx context.Context) (github.Collaborator, err
 	return u, nil
 }
 
+// ownGithubAuthor reports whether login is the local reviewer's own GitHub
+// account — "may slash delete this imported comment on GitHub?". It is
+// deliberately strict: an unknown login, an empty one, or a CurrentUser lookup
+// that fails (offline, no gh credential) all answer false, so the fallback is
+// always "leave the other person's comment alone". Case-insensitive, since
+// GitHub logins are.
+func (m *TaskManager) ownGithubAuthor(ctx context.Context, login string) bool {
+	login = strings.TrimSpace(login)
+	if login == "" {
+		return false
+	}
+	me, err := m.CurrentUser(ctx)
+	if err != nil || strings.TrimSpace(me.Login) == "" {
+		return false
+	}
+	return strings.EqualFold(me.Login, login)
+}
+
 // Reviewers returns the repo's collaborators as reviewer candidates, sorted
 // most-used-first (by the local reviewer-usage counts), ties and never-used
 // collaborators broken alphabetically. Read — both the github collaborator
@@ -6043,6 +6079,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("deleteGithubComment", map[string]any{
 				"pr": in.PR, "rootId": posted.RootID,
+				"repo": in.Repo, "source": in.Source, "author": in.Author,
 			}, nil); err != nil {
 				return nil, fmt.Errorf("delete github comment: %w", err)
 			}
@@ -7722,12 +7759,30 @@ func (m *TaskManager) poll(ctx context.Context, runID string, repo string, pr in
 					continue
 				}
 				if accErr == nil && accessible {
-					// The repo is reachable but this specific thread's root
-					// comment 404s: it was deleted on GitHub itself. Reuse the
-					// existing delete flow so nothing is duplicated here — it
-					// removes our own record (comment + reactions) and ends
-					// the Execution, which also stops this poller for good.
-					m.logf("task_code_comment: comment gone on GitHub (404, repo reachable) — deleting run=%s", runID)
+					// The repo is reachable, but that alone does NOT mean this
+					// thread's root comment is gone: FetchReplies lists the
+					// PR's comments (GET repos/<repo>/pulls/<pr>/comments), so
+					// its 404 is a statement about the PR-wide call, never
+					// about one comment. Reading it as "deleted" once wiped six
+					// live comments of another reviewer on one transient 404
+					// (PR 12112, 15 Sep 2026) — every open thread of that PR at
+					// the same second. So ask about THIS comment specifically,
+					// and only act on a clean "no": any error, and we stay put.
+					gone, exErr := m.ghFor(repo).CommentExists(ctx, rootID)
+					if exErr != nil || gone {
+						m.logf("task_code_comment: replies 404 but comment %d still there (or uncertain: %v) — leaving run=%s untouched", rootID, exErr, runID)
+						m.logf("task_code_comment: fetch replies pr=%d root=%d: %v", pr, rootID, err)
+						continue
+					}
+					// Confirmed: the root comment itself 404s, so it really was
+					// deleted on GitHub. Reuse the existing delete flow so
+					// nothing is duplicated here — it removes our own record
+					// (comment + reactions) and ends the Execution, which also
+					// stops this poller for good. Nothing is deleted ON GitHub
+					// by that flow for an imported comment (see
+					// deleteGithubComment's own ownership guard); it is already
+					// gone there anyway.
+					m.logf("task_code_comment: comment %d gone on GitHub (confirmed 404 on the comment itself) — deleting run=%s", rootID, runID)
 					if err := m.Signal(runID, ReactionSignal{
 						ID: "sys-" + newUIReactionID(), Source: "ai", Action: "delete",
 					}); err != nil {

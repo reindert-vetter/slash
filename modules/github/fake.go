@@ -33,6 +33,8 @@ type Fake struct {
 	general           []GeneralComment
 	repoInaccessible  bool                 // set by SetRepoAccessible(false): RepoAccessible reports false
 	repoAccessibleErr error                // RepoAccessible fails outright instead of reporting a bool
+	commentGone       bool                 // set by SetCommentGone: CommentExists reports false
+	commentExistsErr  error                // CommentExists fails outright instead of reporting a bool
 	prState           string               // "" reads as "open"
 	prStateErr        error                // set by SetPRStateErr: PRState fails instead of reporting a state
 	prMeta            Meta                 // returned by PRMeta (SetPRMeta overrides), PR-independent fallback
@@ -221,6 +223,35 @@ func (f *Fake) SetRepoAccessible(accessible bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.repoInaccessible = !accessible
+}
+
+// CommentExists reports commentGone/commentExistsErr — a fresh Fake says every
+// comment still exists, which is what a reachable repo with a live comment
+// looks like.
+func (f *Fake) CommentExists(_ context.Context, commentID int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.commentExistsErr != nil {
+		return false, f.commentExistsErr
+	}
+	return !f.commentGone, nil
+}
+
+// SetCommentGone makes the next CommentExists calls report the comment as
+// deleted on GitHub.
+func (f *Fake) SetCommentGone(gone bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commentGone = gone
+}
+
+// SetCommentExistsErr makes every later CommentExists call fail with err
+// instead of reporting a state — mirrors SetFetchRepliesErr's own
+// error-injection shape.
+func (f *Fake) SetCommentExistsErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commentExistsErr = err
 }
 
 // SetPRState makes the next PRState calls report state ("open"|"merged"|"closed").

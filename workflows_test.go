@@ -1089,8 +1089,10 @@ func TestPollDeletesCommentOnGoneButRepoAccessible404(t *testing.T) {
 	}
 
 	gh.SetFetchRepliesErr(errors.New(`gh api GET repos/plug-and-pay/plug-and-pay/pulls/52/comments?per_page=100: exit status 1: gh: Not Found (HTTP 404)`))
-	// RepoAccessible defaults to true on a fresh Fake — the repo is reachable,
-	// only this thread's comment is gone.
+	// RepoAccessible defaults to true on a fresh Fake — the repo is reachable.
+	// The comment itself must be confirmed gone before anything is deleted:
+	// the PR-wide 404 alone is never enough (see the sibling test below).
+	gh.SetCommentGone(true)
 
 	waitFor(t, func() bool {
 		s, _ := m.engine.Status(runID)
@@ -1099,6 +1101,106 @@ func TestPollDeletesCommentOnGoneButRepoAccessible404(t *testing.T) {
 	list, _ := cs.List(ctx, "", 52)
 	if len(list) != 0 {
 		t.Fatalf("comments = %+v, want none after the gone-comment cleanup", list)
+	}
+}
+
+// TestPollKeepsCommentWhenOnlyTheListing404s is the regression test for the
+// incident that motivated the targeted CommentExists check: a transient 404 on
+// the PR-WIDE replies listing (GET .../pulls/<pr>/comments) deleted six live
+// comments of another reviewer at once, on GitHub as well as locally. The
+// listing's 404 says nothing about one comment, so as long as that comment is
+// still there, nothing may be removed.
+func TestPollKeepsCommentWhenOnlyTheListing404s(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 53, File: "a.php", Line: 1, Author: "mweghorst", Body: "q",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gh.SetFetchRepliesErr(errors.New(`gh api GET repos/plug-and-pay/plug-and-pay/pulls/53/comments?per_page=100: exit status 1: gh: Not Found (HTTP 404)`))
+	// CommentExists defaults to true on a fresh Fake: the comment is still there.
+
+	// Give the poller several cycles to make its (wrong) move, then assert it
+	// didn't: the comment survives, the Execution keeps waiting, and nothing
+	// was deleted on GitHub.
+	time.Sleep(300 * time.Millisecond)
+	list, _ := cs.List(ctx, "", 53)
+	if len(list) != 1 {
+		t.Fatalf("comments = %+v, want the comment to survive a listing-only 404", list)
+	}
+	if s, _ := m.engine.Status(runID); s == tembed.StatusCompleted {
+		t.Fatalf("run completed — the thread was deleted on a listing-only 404")
+	}
+	if len(gh.Deleted) != 0 {
+		t.Fatalf("deleted on GitHub = %v, want nothing", gh.Deleted)
+	}
+}
+
+// TestDeleteLeavesForeignGithubCommentOnGithub pins the ownership rule: a
+// comment imported from GitHub and written by someone else is removed from our
+// own read-model but never from GitHub — "ik wil geen comments van anderen
+// kunnen verwijderen".
+func TestDeleteLeavesForeignGithubCommentOnGithub(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gh.SetCurrentUser(github.Collaborator{Login: "reindert-vetter"})
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 54, File: "a.php", Line: 1, Author: "mweghorst", Body: "q",
+		Source: "github", ImportedRootID: 4243,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Author: "reindert", Action: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		s, _ := m.engine.Status(runID)
+		return s == tembed.StatusCompleted
+	})
+	if list, _ := cs.List(ctx, "", 54); len(list) != 0 {
+		t.Fatalf("comments = %+v, want the local row gone", list)
+	}
+	if len(gh.Deleted) != 0 {
+		t.Fatalf("deleted on GitHub = %v, want nothing for a foreign comment", gh.Deleted)
+	}
+}
+
+// TestDeleteRemovesOwnImportedCommentOnGithub is the other half of the rule:
+// your OWN comment, even one written on GitHub and imported here, is still
+// yours to delete.
+func TestDeleteRemovesOwnImportedCommentOnGithub(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gh.SetCurrentUser(github.Collaborator{Login: "reindert-vetter"})
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 55, File: "a.php", Line: 1, Author: "Reindert-Vetter", Body: "q",
+		Source: "github", ImportedRootID: 4244,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-1", Source: "ui", Author: "reindert", Action: "delete"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		s, _ := m.engine.Status(runID)
+		return s == tembed.StatusCompleted
+	})
+	if list, _ := cs.List(ctx, "", 55); len(list) != 0 {
+		t.Fatalf("comments = %+v, want the local row gone", list)
+	}
+	if len(gh.Deleted) != 1 || gh.Deleted[0] != 4244 {
+		t.Fatalf("deleted on GitHub = %v, want [4244]", gh.Deleted)
 	}
 }
 
