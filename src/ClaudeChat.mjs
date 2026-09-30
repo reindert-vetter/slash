@@ -1360,6 +1360,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
         ${() => (readOnly ? '' : claudeMenuButton(callbacks.onOpenMenu))}
       </div>
       <div class="relative min-h-0 flex-1">
+        <div class="${opts.inOverlay ? 'absolute inset-0' : 'relative'}" data-testid="claude-chat-thread-host">
         <div
           class="${opts.inOverlay
             ? 'no-scrollbar absolute inset-0 flex min-h-0 flex-col gap-2 overflow-y-auto p-0.5'
@@ -1415,6 +1416,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
         </div>
         ${scrollHint('up')}
         ${scrollHint('down')}
+        </div>
         <div class="contents">
           ${() =>
             view.claudePos() === 0 && !view.pinned()

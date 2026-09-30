@@ -126,11 +126,18 @@ function splitCodeByClasses(code) {
 // cap above), it just no longer needs to also carry the horizontal case now
 // that a line wraps instead of running off the right edge.
 function highlightedPre(code, lang) {
-  return html`<pre
-    class="no-scrollbar code m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words p-2 text-xs leading-relaxed"
-    data-scroll-body
-    @scroll="${(e) => updateScrollHints(e.target)}"
-  ><code class="language-php" .innerHTML="${() => highlightForLang(code, lang)}"></code></pre>`
+  // The hint pair lives in a `relative` host that wraps ONLY this scroller, so
+  // the static top-0/bottom-0 hint classes sit exactly on the scroller's own
+  // edges — no measured position that can go stale (see scrollFade.mjs).
+  return html`<div class="relative">
+    <pre
+      class="no-scrollbar code m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words p-2 text-xs leading-relaxed"
+      data-scroll-body
+      @scroll="${(e) => updateScrollHints(e.target)}"
+    ><code class="language-php" .innerHTML="${() => highlightForLang(code, lang)}"></code></pre>
+    ${scrollHint('up')}
+    ${scrollHint('down')}
+  </div>`
 }
 
 // segmentBlock — one class-labelled (or label-less) chunk of a multi-class
@@ -217,8 +224,6 @@ function pane(titleText, code, lang) {
         </button>
       </div>
       ${body}
-      ${scrollHint('up')}
-      ${scrollHint('down')}
     </div>
   `
 }

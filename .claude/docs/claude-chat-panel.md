@@ -5613,3 +5613,22 @@ bucket — terwijl de al geplakte afbeeldingen nog onder de oude hangen.
   sending, once the composer is empty" in `tests/claude-chat-panel.spec.mjs`.
   The merge/append/never-auto-post behavior itself is also covered (see
   above).
+
+### Scroll hints are statically anchored to their own scroller (no measured position)
+
+`updateScrollHints` (`scrollFade.mjs`) used to write inline `top`/`bottom` from
+`getBoundingClientRect` (container vs scroller), and only on `@scroll` or a
+few `refreshScrollHints()` calls. A size change with no scroll event (card
+expand/collapse, the Prism highlight arriving via `.innerHTML`, a resize)
+left the green down chevron stranded mid-code (reviewer screenshot
+`data-scroll-body` in the code-preview pane, "down icon bovenin"). Now every
+`data-scroll-body` scroller has a `relative` host that wraps ONLY it (code
+preview: `highlightedPre`, one host per scroller; Claude thread:
+`claude-chat-thread-host`; comment threads already had exactly that wrapper),
+and the hint pair is a direct child of that host, on the static `top-0`/
+`bottom-0` classes of `scrollHint`. `updateScrollHints` only writes `opacity`,
+and a ResizeObserver + MutationObserver (attached to every scroller as it
+appears) keep that on/off state fresh. **Don't reintroduce:** a hint pair as a
+sibling of header + scroller, or any measured/inline hint position. Block.mjs's
+diff `updateHints` is a separate mechanism (changed-row based) and still
+measures. Test: `tests/code-preview-scroll-hint.spec.mjs`.
