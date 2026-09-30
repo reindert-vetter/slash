@@ -29,6 +29,11 @@ blocks of the same class since `splitClassHeaderMembers` (`phpscan.go`), so they
 group in as well and show under their own name (`TENANT_ID`, `$fixtures`) — no
 special label needed, and a member referenced from a changed method of the same
 class drops out of the column like any other resolved-call target.
+The same holds for a **test-support method** — a data provider or helper that
+another changed test of the PR calls: it drops out of the column and shows only
+as Onderliggende code under that test, and the class pill/checkbox no longer
+count or approve it (see "Test-support code is NOT covered by that exception"
+in `.claude/docs/underlying-code.md`).
 
 ## `curBlock()` resolves through the active method
 

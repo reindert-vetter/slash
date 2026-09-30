@@ -4951,6 +4951,8 @@ function exitSearch() {
 function resolvedCallTargetIds() {
   const prBlockIds = new Set(state.allBlocks.map((x) => x.id))
   const testTargets = testCallTargetIds()
+  const testSupport = testSupportTargetIds()
+  const callerCategory = new Map(state.allBlocks.map((b) => [b.id, b.category]))
   const ids = new Set()
   for (const r of state.callResolve || []) {
     if (r.status !== 'resolved' && r.status !== 'found') continue
@@ -4986,9 +4988,72 @@ function resolvedCallTargetIds() {
     if (r.kind === 'class_ctor' || r.kind === 'class_first_method') continue
     const childId =
       blockIdPrefix() + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
-    if (prBlockIds.has(childId) && !testTargets.has(childId)) ids.add(childId)
+    if (!prBlockIds.has(childId) || testTargets.has(childId)) continue
+    // A TEST→TEST target (a data provider, a same-class helper) is hidden
+    // only when testSupportTargetIds says so — i.e. it is not itself a real
+    // test and a visible TEST block reaches it, so a cycle can never hide
+    // every member of itself.
+    if (callerCategory.get(r.callerId) === 'TEST' && callerCategory.get(childId) === 'TEST') {
+      if (!testSupport.has(childId)) continue
+    }
+    ids.add(childId)
   }
   return ids
+}
+
+// looksLikeRealTest is the frontend's cheap stand-in for testcovers_analysis.go's
+// isTestMethod: only the conventional "test…" name prefix is visible here (a
+// #[Test]/@test marker lives in the block's source, which is loaded lazily), so
+// an attribute-only test method is NOT recognised — accepted, since a real test
+// being called by another test is rare to begin with.
+function looksLikeRealTest(b) {
+  return /^test/i.test(b.name || '')
+}
+
+// testSupportTargetIds returns the ids of changed TEST blocks that are only
+// test-support code for another changed TEST block — a #[DataProvider] method
+// (callresolve kind data_provider) or a helper a test calls (a resolved
+// method call from a TEST caller onto a TEST definition). Such a block shows
+// only as Onderliggende code under the test that uses it, exactly like any
+// other resolved call target (reviewer request: "dataproviders kunnen altijd
+// als onderliggende code blok aanwezig zijn", widened to every test→test
+// call). Production code a test calls is NOT in here — that stays a visible
+// row (testCallTargetIds).
+//
+// Two guards keep a block from vanishing entirely: (1) a target that looks
+// like a real test (looksLikeRealTest) stays its own row; (2) reachability —
+// a candidate is hidden only when a chain of TEST→TEST calls leads to it from
+// a TEST block that is NOT itself a candidate. Two helpers calling each other
+// with no visible caller would otherwise both disappear from the index while
+// no panel could show them either.
+function testSupportTargetIds() {
+  const byId = new Map(state.allBlocks.map((b) => [b.id, b]))
+  const isTest = (id) => byId.has(id) && byId.get(id).category === 'TEST'
+  const edges = new Map() // caller id -> Set(child id), TEST→TEST only
+  const candidates = new Set()
+  for (const r of state.callResolve || []) {
+    if (r.status !== 'resolved' && r.status !== 'found') continue
+    if (!isTest(r.callerId)) continue
+    const childId = callChildId(r)
+    if (childId === r.callerId || !isTest(childId)) continue
+    if (!edges.has(r.callerId)) edges.set(r.callerId, new Set())
+    edges.get(r.callerId).add(childId)
+    if (r.kind === 'class_ctor' || r.kind === 'class_first_method') continue
+    if (looksLikeRealTest(byId.get(childId))) continue
+    candidates.add(childId)
+  }
+  if (candidates.size === 0) return candidates
+  const reached = new Set()
+  const queue = [...edges.keys()].filter((id) => !candidates.has(id))
+  while (queue.length) {
+    const id = queue.pop()
+    for (const kid of edges.get(id) || []) {
+      if (reached.has(kid)) continue
+      reached.add(kid)
+      queue.push(kid)
+    }
+  }
+  return new Set([...candidates].filter((id) => reached.has(id)))
 }
 
 // testCallTargetIds returns the ids of PR blocks that are the definition of a
@@ -5008,6 +5073,9 @@ function testCallTargetIds() {
     if (callerCategory.get(r.callerId) !== 'TEST') continue
     const childId =
       blockIdPrefix() + ':' + r.childFile + ':' + (r.childClass ? r.childClass + '::' + r.childMethod : r.childMethod)
+    // A TEST definition is test-support code, not primary PR code — see
+    // testSupportTargetIds, which decides whether it hides instead.
+    if (callerCategory.get(childId) === 'TEST') continue
     if (prBlockIds.has(childId)) ids.add(childId)
   }
   return ids

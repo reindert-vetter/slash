@@ -267,6 +267,28 @@ a changed production method plus new tests for it showed a single index entry �
 the test class — with the actual changed code hidden entirely, reachable only by
 drilling from the test's own Onderliggende-code panel.
 
+**Test-support code is NOT covered by that exception.** A changed TEST block
+that another changed TEST block calls — a `#[DataProvider]`/`@dataProvider`
+method (callresolve kind `data_provider`), a same-class helper like
+`ViewableSaveTest::productChanged` — is not primary PR code but part of the
+test that uses it. `testCallTargetIds` therefore skips a TEST definition, and
+`testSupportTargetIds` (`home.mjs`) feeds it into `resolvedCallTargetIds`'s
+ordinary hidden set instead: it leaves the index **and** the methodes-kolom and
+shows only as Onderliggende code under each test that uses it (reviewer
+request, "dataproviders kunnen altijd als onderliggende code blok aanwezig
+zijn", widened to every test→test call). Production code a test calls stays
+exempt as above. Two guards keep such a block from vanishing entirely:
+a target that looks like a real test (`looksLikeRealTest`: a `test…` name —
+the frontend cannot see a `#[Test]`/`@test` marker without the lazily loaded
+source, so an attribute-only test called by another test IS hidden, an
+accepted rare case) keeps its own row; and a candidate only hides when a chain
+of TEST→TEST calls reaches it from a TEST block that is not itself a candidate
+— two helpers calling only each other stay visible. The class pill/checkbox
+in the methodes-kolom (own methods only, see
+`.claude/docs/test-class-grouping.md`) no longer count or approve such a
+block; the PR-wide total still does, once, via the using test's subtree. Test:
+`tests/testclass-support-underlying.spec.mjs`.
+
 **A `testCallTargetIds` row with a CONFIRMED zero approval total gets no index
 row at all.** Such a row's card already shows no checkbox (see "A block with
 zero changed rows has nothing to approve" in `.claude/docs/approval.md`), so

@@ -566,7 +566,10 @@ unmappable case yields **silently nothing**, never `unresolved`, never a search:
   itself, usually unchanged. No ambiguity to resolve: a bare `#[DataProvider]`
   always names a method **on the test's own class** (the `DataProviderExternal`
   form is out of scope). Reuses `methodZone` to read the attribute/docblock
-  text. Key `data_provider:<name>`.
+  text. Key `data_provider:<name>`. When the provider is itself changed by the
+  PR, the frontend hides its own index/methodes-kolom row and shows it only as
+  Onderliggende code (`testSupportTargetIds`, see "Test-support code" in
+  `.claude/docs/underlying-code.md`).
 - **Translation keys (`resolveTranslations`).** A `trans('file.key')` / `__()` /
   `@lang()` / `trans_choice()` call on a **changed line** surfaces the Laravel
   lang file(s) — **one child per locale**. The key splits on the **first** `.`
