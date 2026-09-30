@@ -10919,7 +10919,10 @@ export function buildTaskRows(state) {
   const failedIds = new Set(failed.map((r) => r.runId))
   const live = foldIdenticalRuns(
     visibleWorkflowRuns(state)
-      .filter((r) => r.status !== 'failed' && !failedIds.has(r.runId))
+      // claude_chat is never shown from /api/workflows: its run stays
+      // `waiting` even DURING a turn, and a running turn gets its own row
+      // below (chatTurnRows) — this only guards against a double row.
+      .filter((r) => r.status !== 'failed' && !failedIds.has(r.runId) && r.workflow !== 'claude_chat')
       .map((run) => {
         const badge = STATUS_BADGES[run.status] || {
           label: run.status,
@@ -10944,7 +10947,53 @@ export function buildTaskRows(state) {
         }
       })
   )
-  return [...trouble, ...live].sort((a, b) => b.at - a.at)
+  return [...trouble, ...live, ...chatTurnRows()].sort((a, b) => b.at - a.at)
+}
+
+// chatTurnRows — one "draait · Claude-chat" row per conversation with a turn
+// running RIGHT NOW (reviewer: "hier moet ook zichtbaar zijn als claude bezig
+// is met een chat"). Not from /api/workflows: a claude_chat run is one
+// long-lived Execution per conversation and tembed never flips it to
+// `running` while a Signal-driven turn is being processed (SignalWorkflow →
+// advanceLoaded only ever writes `waiting` at the end), so visibleWorkflowRuns
+// drops it like every other idle tracker. The live truth is the claudeTurns.mjs
+// registry instead (SSE chat.progress + the PR-wide /api/chat/progress resync),
+// the same source as the index row's "Claude bezig" pill. Only while running —
+// a finished turn just disappears (the reviewer is notified elsewhere).
+// Includes auto-started turns: that is real background work too.
+//
+// The key is stable ('chat:' + id, no phase) so a keyboard focus on the row
+// survives every phase step; the changing "title · phase" text is therefore a
+// FUNCTION (`liveNote`) that taskRow binds via its own `() =>` slot — a
+// reused keyed node never re-runs a static slot (arrowjs-pitfalls.md).
+function chatTurnRows() {
+  return runningTurnIds(null).map((id) => {
+    const c = cs.list.find((x) => String(x.id) === id) || null
+    if (c) ensureOtherTaskTitle(c)
+    const liveNote = () => {
+      const title = c ? (isGeneralChatAnchor(c) ? t('Algemene chat') : otherTaskTitleFor(c)) : ''
+      const phase = claudeStatusText(turnProgress(id), 0)
+      return title ? title + ' · ' + phase : phase
+    }
+    return {
+      kind: 'chat',
+      problem: false,
+      key: 'chat:' + id,
+      at: Date.now(),
+      word: t(STATUS_BADGES.running.label),
+      wordCls: TASK_WORD_BASE + STATUS_BADGES.running.cls,
+      status: 'running',
+      runId: '',
+      label: labelForWorkflow('claude_chat'),
+      note: '',
+      liveNote,
+      when: t('bezig'),
+      error: '',
+      comment: null,
+      chatComment: c,
+      retryable: false,
+    }
+  })
 }
 
 // foldIdenticalRuns collapses several rows that are indistinguishable to the
@@ -11080,8 +11129,12 @@ function taskRow(row, actions) {
         >
         <span class="shrink-0 text-[10px] text-slate-400 dark:text-zinc-600" data-testid="workflow-updated">${row.when}</span>
       </div>
-      <p class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500" data-testid="workflow-note" title="${row.note}">
-        ${row.note}
+      <p
+        class="truncate text-[11px] leading-snug text-slate-500 dark:text-zinc-500"
+        data-testid="workflow-note"
+        title="${() => (row.liveNote ? row.liveNote() : row.note)}"
+      >
+        ${() => (row.liveNote ? row.liveNote() : row.note)}
       </p>
     </div>
   `

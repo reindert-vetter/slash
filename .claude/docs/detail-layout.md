@@ -1043,6 +1043,42 @@ The row key encodes **runId + status** so a status change forces a fresh node;
 the empty state wraps in an array of one (`.key('no-workflows')`) — both per
 `.claude/rules/arrowjs-pitfalls.md`.
 
+### A running Claude chat turn is its own row — from `claudeTurns.mjs`, not `/api/workflows`
+
+Reviewer: *"hier moet ook zichtbaar zijn als claude bezig is met een chat"*.
+A `claude_chat` run is one long-lived Execution per conversation, and tembed
+never flips it to `running` while a Signal-driven turn is processed
+(`SignalWorkflow` → `advanceLoaded` only writes `waiting` at the end) — so
+`visibleWorkflowRuns` drops it like every idle tracker, and a busy chat was
+simply absent from Taken. `buildTaskRows` therefore appends `chatTurnRows()`
+(`RelatedPanel.mjs`): one row per id in `runningTurnIds()` — the
+`claudeTurns.mjs` registry the index row's "Claude bezig" pill already reads
+(SSE `chat.progress` + the PR-wide `/api/chat/progress?pr=N` resync). Any
+`claude_chat` run from `/api/workflows` is filtered out of the live runs so it
+can never double up.
+
+- `kind: 'chat'`, word **"draait"** (amber running badge), label
+  **"Claude-chat"**, `when` "bezig", sorted on top (`at: Date.now()`).
+- Only **while running** — a finished turn simply disappears (no 2-minute
+  "klaar" linger here). Auto-started turns (kilo's auto-check) are included:
+  real background work.
+- The note is **"title · live phase"** (`otherTaskTitleFor` /
+  "Algemene chat", then `claudeStatusText`, e.g. "Claude leest Foo.php"). The
+  row key stays stable (`'chat:' + id`, no phase) so `state.taskFocus`
+  survives a phase step; the changing text is a `liveNote` **function** the
+  row binds through its own `${() => …}` slot. `taskRow`'s note slot (and its
+  `title`) are now always function bindings — never a static slot that is
+  sometimes a string and sometimes a function (arrowjs-pitfalls.md).
+- Row menu (`taskCommandsFor`, `home.mjs`): **"Open de chat"** →
+  `jumpToClaudeConversation`, the same jump as a row of "Andere chats in deze
+  PR". Only when the conversation's comment is in `cs.list`.
+- Also on `/plan/<KEY>` (same `TasksPanel`, same registry); there the comment
+  isn't in `cs.list`, so the note is just the phase and there is no "Open de
+  chat" item.
+
+Test: "a running Claude chat turn shows as its own row, with a live phase" in
+`tests/workflows-panel-notes.spec.mjs`.
+
 The old dummy Tasks placeholder (`ui.task`,
 `data-testid=task-list`/`chat`/`chat-bubble`/`new-task`) no longer exists — no
 chat, no `ui.task`.

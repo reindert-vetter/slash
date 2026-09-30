@@ -17670,6 +17670,12 @@ function taskCommandsFor() {
   const row = focusedTaskRow
   if (!row) return withClose([])
   const items = []
+  // A running Claude turn (RelatedPanel.mjs's chatTurnRows): jump into that
+  // conversation, the same action as a row of "Andere chats in deze PR".
+  if (row.kind === 'chat' && row.chatComment) {
+    const c = row.chatComment
+    items.push({ id: 'task-open-chat', label: t('Open de chat'), hint: 'open chat claude', run: () => jumpToClaudeConversation(c) })
+  }
   if (row.comment) {
     items.push({ id: 'task-open-comment', label: t('Open de comment'), hint: 'open comment', run: () => openTask(row.run) })
   }

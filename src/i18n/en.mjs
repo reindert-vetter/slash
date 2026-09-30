@@ -692,6 +692,8 @@ export const EN = {
   'meer…': 'more…',
   'geen omschrijving': 'no description',
   'Open de comment': 'Open the comment',
+  'Open de chat': 'Open the chat',
+  'Claude-chat': 'Claude chat',
   'Kan niet opnieuw proberen — deze taak start alleen bij de bron': 'Cannot retry — this task can only be started from its source',
   'Kopieer foutmelding': 'Copy error message',
   'Negeer deze fout': 'Ignore this error',

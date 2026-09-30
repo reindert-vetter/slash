@@ -117,4 +117,61 @@ test.describe('PR Review Tree — Taken panel: waiting note + relative update ti
     await expect(row.getByTestId('workflow-status')).toHaveText('draait')
     await expect(row.getByTestId('workflow-updated')).toHaveText(/net nu/)
   })
+
+  // A claude_chat run stays `waiting` in tembed even DURING a turn, so a
+  // running chat turn comes from the claudeTurns.mjs registry instead
+  // (chatTurnRows, RelatedPanel.mjs): one "draait" row per running turn,
+  // "title · live phase" as its note under a STABLE key, gone once it stops.
+  test('a running Claude chat turn shows as its own row, with a live phase', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+
+    await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const mod = await import('/src/RelatedPanel.mjs')
+      const turns = await import('/src/claudeTurns.mjs')
+      const state = reactive({
+        pr: 12903,
+        workflows: [
+          {
+            runId: 'claude-chat-wfpanel',
+            workflow: 'claude_chat',
+            status: 'waiting',
+            createdAt: new Date(Date.now() - 20 * 60000).toISOString(),
+            updatedAt: new Date(Date.now() - 10 * 60000).toISOString(),
+          },
+        ],
+        relations: [],
+        callResolve: [],
+        testCovers: [],
+      })
+      turns.setTurnProgress('wfpanel-chat', { running: true, phase: 'tool', tool: 'Read', detail: 'Foo.php' })
+      const host = document.createElement('div')
+      host.id = 'wf-chat-host'
+      document.body.appendChild(host)
+      mod.TasksPanel(state, null)(host)
+    })
+
+    const host = page.locator('#wf-chat-host')
+    const row = host.locator('[data-testid=workflow-row][data-task-kind=chat]')
+    await expect(row).toHaveCount(1)
+    await expect(host.getByTestId('workflow-row')).toHaveCount(1) // no double row from the waiting run
+    await expect(row).toHaveAttribute('data-task-key', 'chat:wfpanel-chat')
+    await expect(row.getByTestId('workflow-status')).toHaveText('draait')
+    await expect(row.getByTestId('workflow-label')).toHaveText('Claude-chat')
+    await expect(row.getByTestId('workflow-note')).toContainText('Claude leest Foo.php')
+
+    // A phase step updates the note in place (same key, same node).
+    await evaluateSettled(page, async () => {
+      const turns = await import('/src/claudeTurns.mjs')
+      turns.setTurnProgress('wfpanel-chat', { running: true, phase: 'tool', tool: 'Edit', detail: 'Bar.php' })
+    })
+    await expect(row.getByTestId('workflow-note')).toContainText('Claude bewerkt Bar.php')
+
+    await evaluateSettled(page, async () => {
+      const turns = await import('/src/claudeTurns.mjs')
+      turns.setTurnProgress('wfpanel-chat', null)
+    })
+    await expect(host.getByTestId('workflow-row')).toHaveCount(0)
+  })
 })

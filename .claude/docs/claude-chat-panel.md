@@ -645,6 +645,10 @@ and an ordinary code row through `scopes`' `file|label`, and it reads the
 reactive store straight from its own nested slot — no `state.*` rollup and no
 watch of its own, exactly like `batchPill`.
 
+The same registry also feeds a "draait · Claude-chat" row in the PR-info
+column's Taken block while a turn runs — see "A running Claude chat turn is
+its own row" in `.claude/docs/detail-layout.md`.
+
 ### "Selected: …" plus a navigable list of other running conversations, in the footer
 
 `claudeChatPill` above answers "is a turn running on THIS row's code"; it does
