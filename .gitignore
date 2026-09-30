@@ -72,3 +72,11 @@ tests/.tmp/
 # plan_artifacts.go) — derived from the plan document, thrown away once the
 # PR is merged (cleanup.go), so never committed.
 data/plans/
+# Screenshots attached to review tasks (the workflow-prompt skill copies each
+# pasted image here for its subagent). Local working material, never committed;
+# the few already tracked (referenced from .claude/docs/) stay tracked.
+data/review-shots/
+# Per-ticket planning artifacts the running app regenerates in the repo root
+# (timestamps change on every refresh). Never committed, otherwise the
+# self_update workflow keeps refusing on a dirty working tree.
+/plans/
