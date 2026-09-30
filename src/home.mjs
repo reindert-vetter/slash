@@ -130,6 +130,8 @@ import RelatedPanel, {
   canEditClaudeMessage,
   startEditClaudeMessage,
   clearClaudeChat,
+  currentClaudeChatComment,
+  commentById,
   retryClaudeTurn,
   cancelClaudeTurn,
   claudeAnchorIsPlaceholder,
@@ -8378,8 +8380,68 @@ async function openTaskDrilledAnchor(c, runId) {
 // the full mechanism, including the "opgeruimd zodra bekeken" cleanup rule
 // (isChatSeenAndAnswered) that keeps such a row from lingering forever once
 // the reviewer has actually seen its answer.
-async function jumpToClaudeConversation(c) {
+// chatPlaceStack — where the reviewer stood right before jumping to a chat
+// (reviewer request: "als ik een chat verwijder, wil ik naar de plek voordat ik
+// navigeerde naar de chat"). One entry per jump, so chat A -> chat B, delete B
+// returns to A, not to the first origin. `forId` is the chat the jump opened;
+// an entry only applies when THAT chat is the one deleted (an Escape/back out
+// leaves entries behind, which are discarded on the next mismatch).
+// Deliberately plain, non-reactive state.
+const chatPlaceStack = []
+
+function captureChatPlace(forId) {
+  const b = state.blocks[state.selected]
+  chatPlaceStack.push({
+    forId,
+    chat: currentClaudeChatComment(),
+    blockId: b && b.id,
+    mode: state.mode,
+    gran: state.gran,
+    change: state.change,
+    drill: state.drill.slice(),
+    drillCursor: state.drillCursor.slice(),
+    focusLevel: state.focusLevel,
+    classMethodSel: state.classMethodSel,
+    testColumnFocused: state.testColumnFocused,
+  })
+  if (chatPlaceStack.length > 20) chatPlaceStack.shift()
+}
+
+// restoreChatPlace walks back to the place captured for `deletedId`; false when
+// there is none (or the block is gone) and the caller keeps its own fallback.
+async function restoreChatPlace(deletedId) {
+  let i = chatPlaceStack.length - 1
+  while (i >= 0 && chatPlaceStack[i].forId !== deletedId) i--
+  if (i < 0) return false
+  const p = chatPlaceStack[i]
+  chatPlaceStack.length = i // drop it and everything stacked on top
+  if (p.chat && commentById(p.chat.id)) {
+    // The previous place was another chat: reopen it (no new push).
+    await jumpToClaudeConversation(p.chat, true)
+    return true
+  }
+  const idx = state.blocks.findIndex((b) => b.id === p.blockId)
+  if (idx < 0) return false
+  leaveRelated()
+  state.selected = idx
+  state.mode = p.mode
+  state.gran = p.gran
+  state.change = p.change
+  state.drill = p.drill
+  state.drillCursor = p.drillCursor
+  state.focusLevel = p.focusLevel
+  state.classMethodSel = p.classMethodSel
+  state.testColumnFocused = p.testColumnFocused
+  scrollSelectedIntoView()
+  return true
+}
+
+async function jumpToClaudeConversation(c, noCapture = false) {
   if (!c) return
+  if (!noCapture) {
+    const cur = currentClaudeChatComment()
+    if (!cur || cur.id !== c.id) captureChatPlace(c.id)
+  }
   if (isGeneralChatAnchor(c)) {
     openGeneralChat()
     return
@@ -8850,7 +8912,9 @@ async function runClearClaudeChat() {
   const wasCommentIndexRow = isCommentIndexRowActive()
   const beforeIdx = state.selected
   const beforeId = curBlock() && curBlock().id
+  const deleted = currentClaudeChatComment()
   const removed = await clearClaudeChat()
+  if (removed && deleted && (await restoreChatPlace(deleted.id))) return
   if (removed && wasCommentIndexRow) await afterCommentRowRemoved(beforeIdx, beforeId)
 }
 

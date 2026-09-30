@@ -1644,6 +1644,23 @@ fixed alongside `tests/general-chat.spec.mjs`'s own "empty Enter…" test:
    never-had-messages conversation, ready for the very next Enter, with no
    second menu round trip needed.
 
+**Deleting a chat walks back to where you came from (`chatPlaceStack`,
+`home.mjs`).** Reviewer request: *"als ik een chat verwijder, wil ik naar de
+plek voordat ik navigeerde naar de chat"*. `jumpToClaudeConversation` ("Andere
+chats in deze PR" / task-row jump) pushes a plain, non-reactive place snapshot
+first: block id, mode/gran/change, drill path + cursors, focusLevel, test-column
+state, and — if the keyboard was in a chat — that chat's comment
+(`currentClaudeChatComment`, `RelatedPanel.mjs`). It is a STACK, one entry per
+jump: chat A -> chat B, delete B returns to A, not to the first origin. Each
+entry carries `forId` (the chat the jump opened) and only applies when that
+chat is the one deleted; mismatching leftovers (an Escape out leaves them) are
+discarded. `runClearClaudeChat` calls `restoreChatPlace` after a real delete
+and then skips `afterCommentRowRemoved`; no entry (or a vanished block) falls
+back to the old `exitRelated()`/next-row behaviour. Not covered on purpose:
+entering a chat by plain `→` or an index-row selection (no jump, no snapshot),
+the general-chat overlay (recreates a fresh chat) and the plan page. Test:
+`tests/claude-chat-delete-returns.spec.mjs`.
+
 **The one case this correctly leaves as "leegmaken" instead of "verwijderen":**
 if the reviewer had, at some earlier point, used "Comment hiervan maken" on
 the general chat's own placeholder anchor, it is no longer

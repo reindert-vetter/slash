@@ -3846,6 +3846,13 @@ export function enterClaudeChatOrFromNew(pr) {
 // stay 'claude' after the reviewer had already navigated to a different unit
 // (see advanceToNextBlockFromClaudeChat, home.mjs), which used to keep this
 // column showing with nothing behind it.
+// currentClaudeChatComment — the comment backing the conversation the keyboard
+// is in right now (null when no chat column has focus). home.mjs snapshots it
+// as a "place" before jumping to another chat, so deleting that chat can walk
+// back (see chatPlaceStack, home.mjs).
+export function currentClaudeChatComment() {
+  return cs.focus === 'claude' && cc.commentId != null ? commentById(cc.commentId) || null : null
+}
 export function isClaudeChatFocused() {
   return cs.focus === 'claude'
 }
@@ -7984,7 +7991,7 @@ function openPublishMenu(info) {
   })
 }
 
-function commentById(id) {
+export function commentById(id) {
   return cs.list.find((c) => c.id === id) || null
 }
 
