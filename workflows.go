@@ -31,6 +31,7 @@ import (
 	"slash/modules/langpref"
 	"slash/modules/plan"
 	"slash/modules/prmeta"
+	"slash/modules/prsnooze"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
 	"slash/modules/testcovers"
@@ -1045,6 +1046,10 @@ type TaskManager struct {
 	// above; a nil store makes AutoIngestPrefMode report "own" (the default)
 	// and saveAutoIngestPrefMode a no-op.
 	autoingestpref *autoingestpref.Module
+	// prsnooze holds the /pr-overview snoozes (see pr_snooze.go). Set
+	// post-construction in newTasks; a nil store makes the pr_snooze Activities
+	// no-ops and GET /api/prsnoozes empty.
+	prsnooze *prsnooze.Module
 	// langpref is the repo-wide LANGUAGE preference per output type
 	// ("ui"|"explain"|"reply"), read by LangFor while an Activity builds a
 	// Claude prompt and by GET /api/langpref. Set post-construction like the
@@ -1138,6 +1143,7 @@ type TaskManager struct {
 	jiraIssuesRun     string           // jira_issues Run ID (one per process — the issue lists are per-user, see jira_issues.go)
 	autoWarnRun       string           // auto_warn Run ID (one per repo/process)
 	autoIngestPrefRun string           // auto_ingest_pref Run ID (one per repo/process)
+	prSnoozeRun       string           // pr_snooze Run ID (one per process, see pr_snooze.go)
 	langPrefRun       string           // lang_pref Run ID (one per repo/process)
 	appSettingsRun    string           // app_settings Run ID (one per process, no repo scope)
 	importPolled      map[string]bool  // imported-thread Run ID → poller running (dedup, operational)
@@ -3752,6 +3758,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// The one Activity that posts a Jira comment (see jira_comment.go).
 	m.registerJiraCommentActivities(engine)
 	m.registerPlanExecuteActivities(engine)
+	// The two snooze Activities (see pr_snooze.go).
+	m.registerPrSnoozeActivities(engine)
 
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)
@@ -3774,6 +3782,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowCodeWarning, codeWarningWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoIngestPref, autoIngestPrefWorkflow)
+	engine.RegisterWorkflow(WorkflowPrSnooze, prSnoozeWorkflow)
 	engine.RegisterWorkflow(WorkflowLangPref, langPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)

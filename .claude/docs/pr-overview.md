@@ -1002,6 +1002,65 @@ The row is never an `<a href="/pr/<id>">`, so the old hover-only
 `regenerateButton` and the separate `data-row` wrapper were removed — they only
 existed to avoid nesting an interactive element in an `<a>`.
 
+### "Snooze…" — hide a PR until a chosen moment
+
+Reviewer request (screenshot `data/review-shots/task-overview-snooze-pr.png`):
+"ik wil prs kunnen snoozen, dat moet een menu item zijn onder open jira
+ticket … morgen 8 uur, volgende week maandag, 7 dagen".
+
+- **The item** (`snoozeAction`, `data-testid=snooze-pr`, `clock` icon) sits
+  directly below "Open Jira-ticket" (below "Kopieer GitHub URL" when the title
+  has no Jira key). Clicking it expands three inline options in the same
+  popover (`data-testid=snooze-option`, `data-option=tomorrow_8|next_monday_8|
+  days_7`) and focuses the first one, so ↓/Enter pick with the existing
+  focus-based popover keyboard model — no submenu component. Each option names
+  its own resolved moment in words ("do 1 okt 08:00", `formatSnoozeMoment`),
+  never a colour. A PR that is snoozed right now also gets **"Snooze
+  opheffen"** (`data-testid=snooze-clear`).
+- **The three moments are all 08:00 local time** (the server's `time.Local`):
+  tomorrow; the Monday of NEXT calendar week (ISO, Monday-first — on a Monday
+  that is +7 days, on a Sunday it is tomorrow); the day 7 days out. Computed
+  **inside the workflow** from `w.Now()` (`snoozeUntil`, `pr_snooze.go`);
+  `src/snooze.mjs`'s `snoozePreviewUntil` is the same rule, used only to label
+  the options and for the optimistic update.
+- **Write path:** `POST /api/workflows/pr_snooze` (ensure the one tracker),
+  then `.../signals/pr_snooze {repo, pr, option}` — see `pr_snooze` in
+  `.claude/docs/workflows-trackers.md`. Read: `GET /api/prsnoozes`, loaded
+  into `state.snoozes` (prUid → `{until, snoozedAt}`) and **awaited before the
+  rows are pushed** (`loadInbox`/`reloadSnapshot`), so a snoozed row never
+  flashes in its section first. After a successful snooze the row leaves at
+  once (optimistic `state.snoozes` update), the selection moves to the top
+  row (`selectTopRow`, which skips snoozed rows) and the snoozes are re-read.
+- **Where a snoozed PR goes:** out of its section (and out of any stack), into
+  one collapsed block at the very bottom of the inbox sections,
+  **"Gesnoozed (N)"** (`snoozedSection`, `data-testid=snoozed-section`/
+  `snoozed-toggle`, `state.snoozedOpen`). Its rows are ordinary `prRow`s —
+  same popover — and carry a **"gesnoozed tot ma 5 okt 08:00"** word in the
+  meta line (`snoozeMark`, `data-testid=snooze-mark`). The header's "N PRs"
+  count leaves snoozed rows out. Only `/pr-overview` knows about snoozes; a
+  **search hit** that is snoozed still shows (search drops every category),
+  with that same mark.
+- **Waking up is a read-side check, never a write** (`isSnoozeActive`,
+  `src/snooze.mjs`): a snooze stops hiding the PR once `until` has passed, or
+  as soon as the PR saw **new activity after it was snoozed** — GitHub's own
+  `updatedAt` (the light row's and the status backfill's, whichever is later)
+  is newer than `snoozedAt`. GitHub bumps `updatedAt` on a new commit, a new
+  comment or review and a (re-)requested review, which is exactly the set
+  asked for. Why not a durable "lift" write: the snooze row itself never
+  becomes wrong — "set at T, until U" stays true — and the activity lives in
+  the inbox read-model already, so the outcome is a pure function of two
+  read-models; a write would only duplicate that and add a second writer to
+  the `refreshInbox` Activity. A stale row is inert forever (`updatedAt` only
+  grows) and is dropped by the next `Set`'s housekeeping or once it expires.
+  **Accepted trade-off:** your OWN comment/review on the PR bumps `updatedAt`
+  too and therefore also wakes it — GitHub does not say who caused the bump.
+  A wake-up timer (`scheduleSnoozeWake`, one `setTimeout` to the earliest
+  `until`, bumping `state.snoozeTick`) brings a row back while the tab stays
+  open; activity arrives with the ordinary 60s snapshot poll.
+- Tests: `tests/overview-snooze.spec.mjs` (real workflow end-to-end, the
+  activity wake-up, the search mark), `pr_snooze_test.go`,
+  `modules/prsnooze/prsnooze_test.go`.
+
 ## A manual "Refresh" button above every category
 
 Reviewer request: "in pr overview wil ik een refresh knop boven elke

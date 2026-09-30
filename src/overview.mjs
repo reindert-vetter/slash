@@ -17,6 +17,7 @@ import { ensureAutoWarn, autoWarnToggleButton } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { assigneeMark, avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
+import { SNOOZE_OPTIONS, snoozePreviewUntil, formatSnoozeMoment, isSnoozeActive, snoozeMarkText } from './snooze.mjs'
 import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
@@ -83,6 +84,13 @@ const state = reactive({
   searching: false,
   searchResults: null, // null = no active search
   recentOpen: false,
+  // snoozes: prUid -> {until, snoozedAt} from GET /api/prsnoozes (replaced
+  // wholesale). snoozedOpen: the bottom "Gesnoozed (N)" section is expanded.
+  // snoozeTick: bumped by the wake-up timer so the list re-derives which
+  // snoozes are still active. See "Snoozen" in .claude/docs/pr-overview.md.
+  snoozes: {},
+  snoozedOpen: false,
+  snoozeTick: 0,
   recentLoading: false,
   recentPrs: [], // [{ pr, blocks, files, title, author?, additions?, deletions?, changedFiles?, headRefName?, updatedAt? }]
   // Preset-filter drawer (a second expandable button like "Recent gegenereerd").
@@ -151,6 +159,9 @@ const ui = reactive({
   openPopover: null, ingestingByPr: {}, ingestStageByPr: {}, ingestError: null, ingestErrorFor: null, copiedFor: null,
   readyFor: null, reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
   removingReviewer: null, removeReviewerError: null,
+  // snoozeFor: the prUid whose snooze options are expanded in the popover;
+  // snoozeBusy: a pr_snooze Signal in flight; snoozeError: its last failure.
+  snoozeFor: null, snoozeBusy: false, snoozeError: null,
   popoverAbove: false,
   // sectionsRefreshing/jiraIssuesRefreshing — the busy flag behind the manual
   // "Refresh" button now shown above every category (see refreshButton
@@ -805,7 +816,7 @@ function rowMeta(pr) {
         ${repoBadge(pr)}
         <span class="text-slate-300 dark:text-zinc-700">·</span>
         <span title="${pr.updatedAt || ''}">${t('Bijgewerkt {time}', { time: relativeTime(pr.updatedAt) })}</span>
-        ${rowStateMark(pr)} ${newSinceMark(pr)}
+        ${rowStateMark(pr)} ${newSinceMark(pr)} ${snoozeMark(pr)}
       </div>
       ${stat || branch
         ? html`<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -961,6 +972,8 @@ function togglePopover(uid) {
   ui.readyFor = null
   ui.reviewersError = null
   ui.removeReviewerError = null
+  ui.snoozeFor = null
+  ui.snoozeError = null
   // Default focus lands on the 2nd item (the first real action) — the pinned
   // "Sluit menu" item (see popover() below) always sits first so a stray
   // Enter never merely closes the menu; focusPopoverItem clamps, so a
@@ -1431,6 +1444,206 @@ function removeReviewerAction(pr) {
   `
 }
 
+// ── snoozing a PR ──────────────────────────────────────────────────────────
+// "Snooze…" (popover, right below "Open Jira-ticket") hides a PR until
+// tomorrow 08:00 / next week's Monday 08:00 / 08:00 in 7 days. The write is the
+// pr_snooze workflow (start + Signal, never a direct write); the wake-up moment
+// is computed there from w.Now(). Whether a snooze still hides the row is a
+// READ-side check (isSnoozeActive): the moment passed, or the PR saw new
+// activity since. See "Snoozen" in .claude/docs/pr-overview.md.
+
+let snoozeRunId = ''
+let snoozeWakeTimer = null
+
+// activeSnooze — the stored snooze that currently hides this PR, or null.
+// Reads state.snoozeTick so a re-render follows the wake-up timer.
+function activeSnooze(pr) {
+  const sn = state.snoozes[prUid(pr)]
+  if (!sn) return null
+  void state.snoozeTick
+  const st = state.statuses[prUid(pr)]
+  return isSnoozeActive(sn, [pr.updatedAt, st && st.updatedAt]) ? sn : null
+}
+
+// loadSnoozes pulls GET /api/prsnoozes (read-only) into state.snoozes and
+// re-arms the wake-up timer. Best-effort: a failure keeps what we had.
+async function loadSnoozes() {
+  try {
+    const res = await fetch('/api/prsnoozes')
+    if (!res.ok) return
+    const body = await res.json()
+    if (!body || !body.ok || !Array.isArray(body.snoozes)) return
+    const next = {}
+    body.snoozes.forEach((sn) => {
+      next[prUid({ repo: sn.repo, number: sn.pr })] = { until: sn.until, snoozedAt: sn.snoozedAt }
+    })
+    state.snoozes = next
+    scheduleSnoozeWake()
+  } catch (e) {
+    // keep the current snoozes
+  }
+}
+
+// scheduleSnoozeWake bumps state.snoozeTick right after the earliest pending
+// wake-up moment, so a snoozed row comes back on its own while the tab is open.
+function scheduleSnoozeWake() {
+  clearTimeout(snoozeWakeTimer)
+  const now = Date.now()
+  const next = Object.values(state.snoozes)
+    .map((sn) => Date.parse(sn.until))
+    .filter((u) => u > now)
+    .sort((a, b) => a - b)[0]
+  if (!next) return
+  snoozeWakeTimer = setTimeout(() => {
+    state.snoozeTick++
+    scheduleSnoozeWake()
+  }, Math.min(next - now + 1000, 2 ** 31 - 1))
+}
+
+async function ensureSnoozeRun() {
+  if (snoozeRunId) return snoozeRunId
+  const res = await fetch('/api/workflows/pr_snooze', { method: 'POST' })
+  if (!res.ok) throw new Error('pr_snooze start failed')
+  const body = await res.json()
+  snoozeRunId = body.runId || ''
+  if (!snoozeRunId) throw new Error('pr_snooze: no run id')
+  return snoozeRunId
+}
+
+// sendSnooze signals one {repo, pr, option} to the pr_snooze tracker, then
+// updates the list optimistically (snooze: hidden at once, like
+// removeSelfAsReviewer; clear: back at once) and re-reads the server's truth.
+async function sendSnooze(pr, option) {
+  if (ui.snoozeBusy) return
+  ui.snoozeBusy = true
+  ui.snoozeError = null
+  const uid = prUid(pr)
+  try {
+    const runId = await ensureSnoozeRun()
+    const res = await fetch('/api/workflows/' + runId + '/signals/pr_snooze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo: pr.repo || undefined, pr: pr.number, option }),
+    })
+    if (!res.ok) throw new Error('pr_snooze signal failed')
+    closePopover()
+    const next = { ...state.snoozes }
+    if (option === 'clear') {
+      delete next[uid]
+    } else {
+      const until = snoozePreviewUntil(option)
+      next[uid] = { until: until.toISOString(), snoozedAt: new Date().toISOString() }
+    }
+    state.snoozes = next
+    scheduleSnoozeWake()
+    if (option !== 'clear') selectTopRow()
+    scheduleRepaint()
+    loadSnoozes()
+  } catch (e) {
+    ui.snoozeError = t('Snoozen mislukt')
+  } finally {
+    ui.snoozeBusy = false
+  }
+}
+
+// toggleSnoozeOptions expands/collapses the three options inside the open
+// popover and, on expand, moves focus onto the first one (so ↓/Enter pick
+// straight away).
+function toggleSnoozeOptions(pr) {
+  const uid = prUid(pr)
+  ui.snoozeFor = ui.snoozeFor === uid ? null : uid
+  ui.snoozeError = null
+  if (ui.snoozeFor !== uid) return
+  requestAnimationFrame(() => {
+    const first = document.querySelector('[data-testid="pr-popover"] [data-testid="snooze-option"]')
+    const idx = popoverItems().indexOf(first)
+    if (idx >= 0) focusPopoverItem(idx)
+  })
+}
+
+// snoozeAction — the popover's "Snooze…" item, its inline options, and (for a
+// PR that is snoozed right now) "Snooze opheffen". Stable `contents` root, and
+// every toggling part is its own ${() => …} binding returning a keyed array
+// (see .claude/rules/arrowjs-pitfalls.md). Each option names its own moment in
+// words ("do 1 okt 08:00") — no colour carries meaning.
+function snoozeAction(pr) {
+  const uid = prUid(pr)
+  return html`
+    <div class="contents">
+      <button type="button" data-testid="snooze-pr" class="${popoverRowCls()}" @click="${() => toggleSnoozeOptions(pr)}">
+        ${icon('clock', 'h-3.5 w-3.5')} <span class="flex-1 truncate">${t('Snooze…')}</span>
+      </button>
+      ${() =>
+        ui.snoozeFor === uid
+          ? SNOOZE_OPTIONS.map((o) =>
+              html`<button
+                type="button"
+                data-testid="snooze-option"
+                data-option="${o.key}"
+                disabled="${() => ui.snoozeBusy}"
+                class="${popoverRowCls('pl-8')}"
+                @click="${() => sendSnooze(pr, o.key)}"
+              >
+                <span class="flex-1 truncate">${t(o.label)}</span>
+                <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-500">${formatSnoozeMoment(snoozePreviewUntil(o.key))}</span>
+              </button>`.key('snooze-opt:' + o.key),
+            )
+          : []}
+      ${() =>
+        activeSnooze(pr)
+          ? [
+              html`<button type="button" data-testid="snooze-clear" disabled="${() => ui.snoozeBusy}" class="${popoverRowCls()}" @click="${() => sendSnooze(pr, 'clear')}">
+                ${icon('x', 'h-3.5 w-3.5')} <span class="flex-1 truncate">${t('Snooze opheffen')}</span>
+              </button>`.key('snooze-clear'),
+            ]
+          : []}
+      ${() =>
+        ui.snoozeError
+          ? [html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="snooze-error">${ui.snoozeError}</p>`.key('snooze-err')]
+          : []}
+    </div>
+  `
+}
+
+// snoozeMark — "· gesnoozed tot ma 5 okt 08:00" in the row's meta line, for a
+// snoozed row (the "Gesnoozed" section, and a search hit). Stable root, the
+// toggle lives inside it (same shape as newSinceMark).
+function snoozeMark(pr) {
+  return html`<span class="contents">${() => {
+    const sn = activeSnooze(pr)
+    if (!sn) return null
+    return html`
+      <span class="inline-flex items-center gap-2" data-testid="snooze-mark">
+        <span class="text-slate-300 dark:text-zinc-700">·</span>
+        <span class="inline-flex items-center gap-1 font-medium text-slate-600 dark:text-zinc-400">${icon('clock', 'h-3 w-3')} ${snoozeMarkText(sn)}</span>
+      </span>
+    `
+  }}</span>`
+}
+
+// snoozedSection — the collapsed "Gesnoozed (N)" block at the very bottom of
+// the inbox sections. Rows are ordinary prRows (same popover, which then also
+// offers "Snooze opheffen"). A keyed array per branch, like recentDrawer.
+function snoozedSection(prs) {
+  return html`
+    <section data-testid="snoozed-section" class="mt-16">
+      <button
+        type="button"
+        data-testid="snoozed-toggle"
+        class="group flex w-full cursor-pointer items-center gap-2 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-900/60 px-4 py-3 text-left transition-colors hover:bg-slate-100 dark:hover:bg-zinc-800/40"
+        @click="${() => (state.snoozedOpen = !state.snoozedOpen)}"
+      >
+        <span class="${() => 'inline-flex shrink-0 transition-transform ' + (state.snoozedOpen ? 'rotate-90' : '')}"
+          >${chevronFilled('h-4 w-4 text-slate-500 dark:text-zinc-500')}</span
+        >
+        ${icon('clock', 'h-3.5 w-3.5 text-slate-500 dark:text-zinc-500')}
+        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t('Gesnoozed ({n})', { n: prs.length })}</span>
+      </button>
+      ${() => (state.snoozedOpen ? [html`<div class="mt-2">${listBox(prs.map((pr) => ({ pr })))}</div>`.key('snoozed:open')] : [html`<span class="hidden"></span>`.key('snoozed:closed')])}
+    </section>
+  `.key('snoozed:' + prs.map(prUid).join(','))
+}
+
 // ── preset filters (live gh-search for a fixed, allow-listed query) ─────────
 
 let presetSeq = 0
@@ -1672,6 +1885,7 @@ function popover(pr) {
                     ${icon('external-link', 'h-3.5 w-3.5')} ${t('Open Jira-ticket')}
                   </a>`
                 : ''}
+            ${snoozeAction(pr)}
             ${() => (canRemoveSelf(pr) ? removeReviewerAction(pr) : '')}
             ${() => (pr.isDraft ? [readyForReviewSection(pr).key('ready-section')] : [])}
           </div>`
@@ -1938,7 +2152,7 @@ function headerBlock() {
         ${() => runningBadge()}
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
           >${() => {
-            const n = state.sections.reduce((acc, s) => acc + s.prs.length, 0)
+            const n = state.sections.reduce((acc, s) => acc + s.prs.filter((pr) => !activeSnooze(pr)).length, 0)
             return n + ' PR' + (n === 1 ? '' : 's')
           }}</span
         >
@@ -2709,8 +2923,15 @@ function mainContent() {
         // the reactive PR objects themselves (that would trigger reactivity
         // from inside this very render pass).
         const sectionOf = new Map()
+        // A snoozed PR leaves its section (and any stack) for the collapsed
+        // "Gesnoozed (N)" block at the bottom — see snoozedSection.
+        const snoozed = []
         state.sections.forEach((sec) => {
           sec.prs.forEach((pr) => {
+            if (activeSnooze(pr)) {
+              if (!snoozed.some((p) => prUid(p) === prUid(pr))) snoozed.push(pr)
+              return
+            }
             all.push(pr)
             if (!sectionOf.has(prUid(pr))) sectionOf.set(prUid(pr), sec.title)
           })
@@ -2736,7 +2957,7 @@ function mainContent() {
         // back to the end of the list rather than disappearing with it.
         let issuesAt = -1
         state.sections.forEach((sec) => {
-          const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)))
+          const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)) && !activeSnooze(pr))
           const block = sectionBlock(sec, filtered)
           if (block) out.push(block)
           if (block && sec.title === 'Needs your review') issuesAt = out.length
@@ -2746,11 +2967,12 @@ function mainContent() {
           if (issuesAt >= 0) out.splice(issuesAt, 0, ...issueBlocks)
           else out.push(...issueBlocks)
         }
-        if (!chains.length && !issueBlocks.length && state.sections.every((s) => s.prs.length === 0)) {
+        if (!chains.length && !issueBlocks.length && all.length === 0) {
           out.push(
             html`<p class="py-10 text-center text-sm text-slate-500 dark:text-zinc-500">${t('Even geen open pull requests.')}</p>`.key('empty'),
           )
         }
+        if (snoozed.length) out.push(snoozedSection(snoozed))
         return out
       }}
       </div>
@@ -3025,6 +3247,10 @@ async function loadInbox() {
       const body = await res.json()
       if (gen !== loadGen) return
       if (body && body.ok && body.live) {
+        // The snoozes decide which section a row renders in, so they land
+        // before the rows do (no flash of a snoozed row in its section).
+        await loadSnoozes()
+        if (gen !== loadGen) return
         await applyLive(body)
         kickOffStatuses(gen)
         kickOffApprovals(gen)
@@ -3229,7 +3455,7 @@ function trySelectTopAfterApprove() {
 // simply be released (reanchorSelection can't find selKey anymore) and the page
 // would sit there with no ring at all.
 function selectTopRow() {
-  const firstRow = state.sections.flatMap((s) => s.prs)[0]
+  const firstRow = state.sections.flatMap((s) => s.prs).find((pr) => !activeSnooze(pr))
   if (!firstRow) return false
   setSelKey('row:' + prUid(firstRow))
   return true
@@ -3556,6 +3782,8 @@ function closePopover() {
   ui.readyFor = null
   ui.reviewersError = null
   ui.removeReviewerError = null
+  ui.snoozeFor = null
+  ui.snoozeError = null
 }
 
 // handlePopoverKey is the entire keyboard surface while a popover is open:
@@ -4232,6 +4460,10 @@ watch(
       // pendingRestoreSelKey) and a reshuffled list kept the ring wherever it
       // was.
       state.jiraIssues.length,
+      // Snoozing/waking a row moves it in or out of the "Gesnoozed" block.
+      state.snoozedOpen,
+      Object.keys(state.snoozes).length,
+      state.snoozeTick,
     ]),
   () => scheduleRepaint(),
 )
@@ -4286,7 +4518,7 @@ async function reloadSnapshot() {
       state.generatedFor = body.generatedFor || state.generatedFor
       state.inboxRunId = body.runId || state.inboxRunId
       const sections = normalizeSections(body.sections)
-      await primeSectionNames(sections)
+      await Promise.all([primeSectionNames(sections), loadSnoozes()])
       if (gen !== loadGen) return
       state.sections = sections
       state.cached = false

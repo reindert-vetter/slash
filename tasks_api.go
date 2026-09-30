@@ -34,6 +34,7 @@ import (
 	"slash/modules/langpref"
 	"slash/modules/plan"
 	"slash/modules/prmeta"
+	"slash/modules/prsnooze"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
 	"slash/modules/testcovers"
@@ -347,6 +348,30 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ji.Close()
 		return nil, nil, err
 	}
+	psz, err := prsnooze.Open(dataDir + "/prsnooze.db")
+	if err != nil {
+		sq.Close()
+		cs.Close()
+		ib.Close()
+		rel.Close()
+		pm.Close()
+		cr.Close()
+		tc.Close()
+		ap.Close()
+		ex.Close()
+		ru.Close()
+		ci.Close()
+		ch.Close()
+		aw.Close()
+		wd.Close()
+		aip.Close()
+		lp.Close()
+		wr.Close()
+		jn.Close()
+		ji.Close()
+		pl.Close()
+		return nil, nil, err
+	}
 
 	// Under test (SLASH_GITHUB=off) use a no-network Fake so runs never touch a
 	// real repo; otherwise talk to GitHub via gh.
@@ -427,6 +452,9 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// AutoIngestPrefMode report "own" (the default) and
 	// saveAutoIngestPrefMode a no-op.
 	mgr.autoingestpref = aip
+	// Same pattern for the /pr-overview snoozes: a nil store makes the
+	// pr_snooze Activities no-ops and GET /api/prsnoozes empty.
+	mgr.prsnooze = psz
 	// Same pattern for the per-type language preference: a nil store makes
 	// LangFor report "nl" (the default) and saveLangPref a no-op, i.e. the
 	// pre-existing all-Dutch behaviour.
@@ -502,6 +530,11 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// only reacts to UI signals).
 		if _, err := mgr.EnsureAutoIngestPref(); err != nil {
 			mgr.logf("autoingestpref: ensure: %v", err)
+		}
+		// Own the pr_snooze tracker so the overview's "Snooze…" item has a Run
+		// ID to signal to (no poller — waking up is a read-side check).
+		if _, err := mgr.EnsurePrSnooze(); err != nil {
+			mgr.logf("prsnooze: ensure: %v", err)
 		}
 		// Own the per-repo language-preference tracker so the settings page's
 		// three language toggles have a Run ID to signal to (no poller — it
@@ -911,6 +944,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// ({"mode":"off"|"own"|"all"}), backing the toggle on /settings and next to
 	// the gear icon in /pr-overview's header.
 	mux.HandleFunc("/api/autoingestpref", s.handleAutoIngestPref)
+	// POST /api/workflows/pr_snooze → ensure the pr_snooze tracker; the
+	// overview then signals {repo, pr, option} via .../signals/pr_snooze.
+	mux.HandleFunc("/api/workflows/pr_snooze", s.handlePrSnoozeStart)
+	// GET /api/prsnoozes → read-only list of pending snoozes.
+	mux.HandleFunc("/api/prsnoozes", s.handlePrSnoozes)
 	// POST /api/workflows/lang_pref {repo?} → ensure the per-repo
 	// language-preference tracker; the settings page then signals one
 	// {kind, lang} pair to its Run ID via .../signals/lang_pref.
@@ -1627,6 +1665,20 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// The auto_ingest_pref signal carries the desired mode ("off"|"own"|"all")
 		// for automatic review-tree generation (from the toggle on /settings and
 		// in the /pr-overview header).
+		// The pr_snooze signal snoozes/un-snoozes one PR on /pr-overview.
+		if parts[2] == SignalPrSnooze {
+			body, err := decodePrSnoozeSignal(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalPrSnooze, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
 		if parts[2] == SignalAutoIngestPref {
 			var body AutoIngestPrefSignal
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

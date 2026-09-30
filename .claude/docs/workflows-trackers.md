@@ -721,6 +721,33 @@ trivially deterministic.
 - Tests: `remove_reviewer_test.go`,
   `tests/overview-remove-reviewer.spec.mjs`.
 
+## Snoozing a PR on the overview (`pr_snooze` + `modules/prsnooze`)
+
+Backs the overview popover's "Snooze…" item (see "Snooze…" in
+`.claude/docs/pr-overview.md`). One tracker per **process** (`PrSnoozeInput`
+is empty): the overview lists PRs from every configured repo, so the Signal
+carries its own `repo`.
+
+- **`modules/prsnooze`** (`data/prsnooze.db`, `pr_snoozes(repo, pr, until,
+  snoozed_at)`, primary key `(repo, pr)`): `Set` (upsert, plus deleting every
+  row already expired at that moment — housekeeping), `Clear`, and the read
+  `List(ctx, now)` (only `until > now`) behind `GET /api/prsnoozes`.
+- **Workflow (`pr_snooze.go`):** a loop on the `pr_snooze` Signal
+  (`PrSnoozeSignal{Repo, PR, Option}`, option `tomorrow_8`/`next_monday_8`/
+  `days_7`/`clear`). A snooze reads the clock once via `w.Now()` (recorded),
+  computes the wake-up moment with the pure `snoozeUntil(now.In(time.Local),
+  option)` — 08:00 wall-clock on the chosen day, DST-safe via `time.Date` —
+  and runs one `savePrSnooze` Activity; `clear` runs one `clearPrSnooze`.
+  Exactly one Activity per Signal, chosen from the Signal alone, so replay is
+  deterministic. No `w.Sleep`: waking up is a read-side check, see the
+  overview doc for why new activity lifting a snooze is not a write either.
+- **Validation** (`decodePrSnoozeSignal`, in the generic signal forwarder):
+  known option, `pr > 0`, a configured repo (`knownRepo`, then `canonRepo`).
+- `EnsurePrSnooze` starts/reuses the tracker at startup and from
+  `POST /api/workflows/pr_snooze`. No network, so no `SLASH_*=off` gating.
+- Tests: `pr_snooze_test.go` (`TestSnoozeUntil`, `TestPrSnoozeWorkflow`),
+  `modules/prsnooze/prsnooze_test.go`.
+
 ## Downloading the speech model (`whisper_model`)
 
 Fetches `ggml-large-v3-turbo.bin` into `<appDataDir>/models/` for F5 dictation
