@@ -872,6 +872,9 @@ func (e *Engine) ResumeFailed(runID string) error {
 	if cut <= 0 {
 		// cut == 0 would take EventWorkflowStarted (and thus the run's input)
 		// with it; cut < 0 means there is no failure tail at all.
+		if len(hist) == 0 || hist[0].Type != EventWorkflowStarted {
+			return fmt.Errorf("tembed: run %s has no start input, cannot resume; it is repaired when the workflow is next requested", runID)
+		}
 		return fmt.Errorf("tembed: run %s has no failure to resume from", runID)
 	}
 	if err := e.store.TruncateEvents(runID, hist[cut].Seq); err != nil {
@@ -925,6 +928,3 @@ func (e *Engine) Input(runID string) ([]byte, error) {
 	}
 	return nil, nil
 }
-		if len(hist) == 0 || hist[0].Type != EventWorkflowStarted {
-			return fmt.Errorf("tembed: run %s has no start input, cannot resume; it is repaired when the workflow is next requested", runID)
-		}
