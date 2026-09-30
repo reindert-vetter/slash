@@ -1726,3 +1726,57 @@ func TestCancelledTurnDoesNotAutoRetry(t *testing.T) {
 		t.Fatalf("manual retry after a cancel did not replace the cancelled turn: %+v", list[1])
 	}
 }
+
+// "Bewerk dit bericht" (chatActionEditMessage): the edited message and every
+// later one disappear, the rewritten message runs on a FRESH claude session,
+// and its prompt replays the kept transcript so Claude still knows what came
+// before.
+func TestClaudeChatEditMessageRewindsAndReplays(t *testing.T) {
+	m, engine, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970799, "comment-edit"
+
+	fake.SetChatTurns("Eerste antwoord.", "Tweede antwoord.")
+	runID, err := m.StartClaudeChat(ClaudeChatInput{PR: pr, CommentID: commentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, body := range []string{"Eerste vraag", "Tweede vraag"} {
+		if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+			ID: "msg-" + string(rune('1'+i)), Author: "reviewer", Body: body,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		want := 2 * (i + 1)
+		waitFor(t, func() bool { list, _ := cm.List(ctx, commentID); return len(list) == want })
+	}
+
+	// The Fake restarts its script for a fresh session, so reprogram it.
+	fake.SetChatTurns("Nieuw tweede antwoord.")
+	if err := engine.SignalWorkflow(runID, SignalMessage, ChatMessageSignal{
+		ID: "msg-3", Author: "reviewer", Body: "Tweede vraag, anders", Action: chatActionEditMessage, EditOf: "msg-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		list, _ := cm.List(ctx, commentID)
+		return len(list) == 4 && list[3].Body == "Nieuw tweede antwoord."
+	})
+	list, _ := cm.List(ctx, commentID)
+	if list[0].ID != "msg-1" || list[2].ID != "msg-3" || list[2].Body != "Tweede vraag, anders" {
+		t.Fatalf("transcript after edit = %+v", list)
+	}
+	for _, msg := range list {
+		if msg.ID == "msg-2" || msg.Body == "Tweede antwoord." {
+			t.Fatalf("edited message or its reply survived: %+v", msg)
+		}
+	}
+	last := fake.Calls[len(fake.Calls)-1]
+	if last.SessionID != "" {
+		t.Fatalf("edited turn must start a fresh session, got %q", last.SessionID)
+	}
+	if !strings.Contains(last.Prompt, "Reviewer: Eerste vraag") || !strings.Contains(last.Prompt, "Claude: Eerste antwoord.") ||
+		strings.Contains(last.Prompt, "Tweede antwoord.") || !strings.HasSuffix(last.Prompt, "Tweede vraag, anders") {
+		t.Fatalf("edited turn prompt = %q", last.Prompt)
+	}
+}

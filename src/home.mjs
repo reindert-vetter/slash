@@ -126,6 +126,9 @@ import RelatedPanel, {
   isClaudeChatFocused,
   isFooterTasksFocused,
   activeClaudeMessageBody,
+  activeClaudeMessage,
+  canEditClaudeMessage,
+  startEditClaudeMessage,
   clearClaudeChat,
   retryClaudeTurn,
   cancelClaudeTurn,
@@ -8895,6 +8898,18 @@ function claudeChatCommandsFor() {
         : { run: () => runClearClaudeChat() }),
     },
   ]
+  // "Bewerk dit bericht" — only on a keyboard-selected OWN bubble with no
+  // turn running (canEditClaudeMessage); same startEditClaudeMessage as the
+  // bubble's pencil and `e`. After "Wis" on purpose: see ORDER above.
+  const editable = activeClaudeMessage()
+  if (canEditClaudeMessage(editable)) {
+    items.push({
+      id: 'edit-claude-message',
+      label: t('Bewerk dit bericht'),
+      hint: 'e',
+      run: () => startEditClaudeMessage(editable.id),
+    })
+  }
   if (claudeAnchorIsPlaceholder()) {
     items.push({
       id: 'convert-claude-anchor',
@@ -15058,6 +15073,23 @@ function onKeydown(e) {
       navigator.clipboard.writeText(text).catch((err) => console.error('clipboard write failed:', err))
       return
     }
+  }
+
+  // `e` on a keyboard-selected OWN Claude bubble (cs.claudePos >= 1): "bewerk
+  // dit bericht" — the keyboard twin of the bubble's pencil and the Claude
+  // menu item (startEditClaudeMessage, RelatedPanel.mjs). Before
+  // relatedActive() for the same reason Cmd+C above is; a focused text field
+  // keeps its literal "e".
+  if (
+    e.key === 'e' &&
+    !isModifiedKey(e) &&
+    !isEditableFocused() &&
+    isClaudeChatFocused() &&
+    canEditClaudeMessage(activeClaudeMessage())
+  ) {
+    e.preventDefault()
+    startEditClaudeMessage()
+    return
   }
 
   // c/v resize the FOCUSED column (see startResizeKey's own doc comment) —

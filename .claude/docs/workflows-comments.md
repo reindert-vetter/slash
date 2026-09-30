@@ -2527,6 +2527,30 @@ JSON used to sit in the visible prose untouched.
   up the shadow worktree afterwards is likewise automatic now, not a second
   reviewer step — see "Automatic landing after a shell turn" above.
 
+### "Bewerk dit bericht" (`chatActionEditMessage`) — rewinding to an own message
+
+`ChatMessageSignal.Action = "edit_message"` plus `EditOf` (the id of the
+reviewer's own earlier message; validated in `tasks_api.go` by
+`validChatMessageRef`, and a Body or image is required like an ordinary turn).
+The workflow branch runs one `truncateChatFrom` Activity —
+`chat.Module.TruncateFrom` deletes that message and every row with
+`created_at >=` it, resets `session_id`, and the Activity returns
+`chatReplayContext(kept)`: the kept user/assistant turns as plain text
+(error/retrying/cancelled/cleanup rows skipped). Then `pendingQuestionID`/
+`lastFailedTurn` are reset and the rewritten Body runs as an ORDINARY turn
+(saved under its new id, `turn.Action = ""`) with `turn.Context = replay +
+sig.Context`, on a fresh claude session. Replay-deterministic: the branch is
+chosen by `sig.Action`, the replay text is the Activity's recorded result.
+
+Why a fresh session + replay text instead of forking the CLI session at that
+message (`--resume-session-at <uuid> --fork-session`): that flag is hidden and
+undocumented, and we would have to start storing the CLI's own message UUIDs
+per turn. Deliberately NOT undone: code edits a later (now deleted) turn
+already landed — the PR's checkout is shared with other conversations. Its
+attachment files stay on disk (the rewrite may reuse them). Test:
+`TestClaudeChatEditMessageRewindsAndReplays`, `TestTruncateFrom`. Frontend:
+"Bewerk dit bericht" in `.claude/docs/claude-chat-panel.md`.
+
 ### "Wis gesprek" (`chatActionClear`) — clearing a conversation
 
 A fourth `ChatMessageSignal.Action` value, `"clear"`, alongside `""`/`"edit"`/

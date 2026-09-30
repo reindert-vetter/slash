@@ -825,6 +825,8 @@ function claudeBubble(
   onCleanup,
   onRetryAll,
   retryAllBusy,
+  canEdit,
+  onEditMessage,
 ) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
@@ -878,6 +880,9 @@ function claudeBubble(
           ${mine ? t('Jij') : CLAUDE_NAME}
         </span>
         ${() => chatKindBadge(msg)} ${() => claudeModelPill(msg)} ${() => claudeNoShellPill(msg)}
+        <div class="contents">
+          ${() => (mine && !readOnly && onEditMessage && canEdit && canEdit(msg) ? claudeEditButton(msg, onEditMessage) : '')}
+        </div>
       </div>
       <div
         class="${() => {
@@ -966,6 +971,54 @@ function claudeBubble(
           : ''}
     </div>
   `
+}
+
+// claudeEditButton — the pencil on the reviewer's own bubble: "bewerk dit
+// bericht" (the mouse twin of the Claude menu item and `e`, see
+// startEditClaudeMessage in RelatedPanel.mjs). Only rendered while the
+// message can actually be edited (no turn running). Shape + title carry the
+// meaning, not colour.
+function claudeEditButton(msg, onEditMessage) {
+  return html`<button
+    type="button"
+    class="inline-flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+    data-testid="claude-message-edit"
+    title="${t('Bewerk dit bericht (e)')}"
+    aria-label="${t('Bewerk dit bericht (e)')}"
+    @click="${(e) => {
+      if (!e) return
+      e.stopPropagation()
+      onEditMessage(msg.id)
+    }}"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3">
+      <path d="M12 20h9"></path>
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>
+    </svg>
+  </button>`
+}
+
+// claudeEditingPill — sits above the composer while it rewrites an earlier own
+// message: the WORDS say what the next send does (colourblind rule), the ×
+// (or Escape) leaves edit mode without sending.
+function claudeEditingPill(onCancelEdit) {
+  return html`<div
+    class="flex items-center gap-2 rounded-lg border border-dashed border-indigo-300 px-2 py-1 text-[11px] text-indigo-800 dark:border-indigo-500/40 dark:text-indigo-200"
+    data-testid="claude-editing"
+  >
+    <span class="flex-1">${t('Bericht bewerken — versturen vervangt dit bericht en alles erna. Codewijzigingen van latere beurten blijven staan. Esc annuleert.')}</span>
+    <button
+      type="button"
+      class="rounded px-1 font-medium hover:bg-indigo-100 dark:hover:bg-indigo-500/20"
+      data-testid="claude-editing-cancel"
+      title="${t('Annuleer bewerken')}"
+      @click="${(e) => {
+        if (!e) return
+        e.stopPropagation()
+        onCancelEdit?.()
+      }}"
+    >×</button>
+  </div>`
 }
 
 // claudeSendError — the one line that says "your message never left the
@@ -1350,6 +1403,8 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
               callbacks.onCleanup,
               callbacks.onRetryAll,
               view.retryAllBusy,
+              view.canEdit,
+              callbacks.onEditMessage,
             ).key(
               'claude-msg:' + m.id + ':' + (readOnly ? 'ro' : 'rw'),
             ),
@@ -1372,6 +1427,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
           ? ''
           : html`<div class="contents">
               ${() => claudeSendError(view)}
+              <div class="contents">${() => (view.editing && view.editing() ? claudeEditingPill(callbacks.onCancelEdit) : '')}</div>
               ${() => dictationStatusPill()}
               <div class="contents">
                 ${() =>
@@ -1453,6 +1509,12 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
                 e.stopPropagation()
                 callbacks.onEmptyEnter?.()
               }
+            } else if (e.key === 'Escape' && view.editing && view.editing()) {
+              // Leave "bewerk dit bericht" without sending (stopPropagation
+              // first, see the nested-handler rule in arrowjs-pitfalls.md).
+              e.preventDefault()
+              e.stopPropagation()
+              callbacks.onCancelEdit?.()
             } else if (e.key === 'Escape' && view.active()) {
               // Reviewer request: cancel the running turn from right inside
               // the composer, without losing the field. stopPropagation()

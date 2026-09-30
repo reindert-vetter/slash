@@ -2103,6 +2103,13 @@ const cc = reactive({
   // convertClaudeAnchorToComment's "Comment hiervan maken" prefill.
   summary: '',
   summaryStatus: '',
+  // editing is "bewerk dit bericht" in progress: {id, commentId} of the
+  // reviewer's own earlier message the composer is rewriting, or null. The
+  // next send goes out as action 'edit_message' (chatActionEditMessage,
+  // chat_workflow.go), which drops that message and everything after it. See
+  // startEditClaudeMessage and "Bewerk dit bericht" in
+  // .claude/docs/claude-chat-panel.md. Only ever REASSIGNED.
+  editing: null,
 })
 
 // ccBusy/ccProgress/ccSendError are "is a turn running / what did the last
@@ -2773,7 +2780,7 @@ function removePendingOwnMessage(commentId, id) {
   cc.messages = cc.messages.filter((m) => m.id !== id)
 }
 
-async function sendClaudeMessage(text, action = '', context = '', target = null, bucket = '') {
+async function sendClaudeMessage(text, action = '', context = '', target = null, bucket = '', editOf = '') {
   const trimmed = (text || '').trim()
   // 'commit'/'clear'/'retry' need no typed text — commit pushes whatever
   // Claude already changed, clear wipes the conversation, retry re-runs the
@@ -2798,6 +2805,12 @@ async function sendClaudeMessage(text, action = '', context = '', target = null,
   // stores gets the same short placeholder body (chatAttachmentOnlyBody,
   // chat_attachment.go), so the optimistic one must read the same.
   const ownBody = trimmed || (attachments.length ? attachmentOnlyBody(attachments.length) : '')
+  // An edit ("bewerk dit bericht") drops the edited message and everything
+  // after it — hide those right away, the refetch below confirms it.
+  if (editOf && commentId === cc.commentId) {
+    const at = cc.messages.findIndex((m) => m.id === editOf)
+    if (at >= 0) cc.messages = cc.messages.slice(0, at)
+  }
   const pendingId = ownBody ? addPendingOwnMessage(commentId, ownBody, attachments) : null
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
@@ -2809,6 +2822,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null,
         action: action || undefined,
         context: context || undefined,
         attachments: attachments.length ? attachments : undefined,
+        editOf: editOf || undefined,
       }),
     })
     // A rejected Signal used to be swallowed whole: the response was never
@@ -2822,6 +2836,9 @@ async function sendClaudeMessage(text, action = '', context = '', target = null,
       // with the message.
       restorePendingAttachments(bucket || commentId, commentId, attachments)
       setTurnSendError(commentId, sendErrorText(res.status))
+      // The optimistically hidden later messages are still stored — fetch
+      // them back.
+      if (editOf && commentId === cc.commentId) loadChatMessages(commentId)
       return
     }
     if (commentId === cc.commentId) {
@@ -3489,8 +3506,10 @@ export function claudeChatShadowWarning() {
 // `!unit` fallback) still gets a context block of its own — see the second
 // branch below for why that emptiness was the most harmful case, not the
 // least.
-function claudeContextBlock(commentTarget) {
-  if (cc.messages.length > 0) return '' // not this conversation's first turn
+function claudeContextBlock(commentTarget, force = false) {
+  // force: an edit ("bewerk dit bericht") restarts the claude session, so it
+  // needs the context again even though earlier messages exist.
+  if (!force && cc.messages.length > 0) return '' // not this conversation's first turn
   const parts = []
   // A range-scoped chat (startRangeChat, see cs.rangeCompose) sends a
   // MANIFEST of the whole Shift-selection instead of the single-unit
@@ -4228,6 +4247,84 @@ export function activeClaudeMessageBody() {
   return (m && m.body) || null
 }
 
+// ---- "Bewerk dit bericht" -------------------------------------------------
+// The reviewer rewrites one of their OWN earlier messages: the composer is
+// filled with its text (and its images), and the next send drops that message
+// plus everything after it and continues from there on a fresh claude session
+// (chatActionEditMessage, chat_workflow.go). Not offered while a turn runs —
+// the Signal would only block on the run lock behind it. Code edits a later
+// (now dropped) turn already landed stay where they are. Entry points: the
+// pencil on an own bubble (ClaudeChat.mjs), the Claude menu item and `e` on a
+// selected own bubble (home.mjs) — all three call startEditClaudeMessage.
+
+// activeClaudeMessage is activeClaudeMessageBody's message itself (null at rest).
+export function activeClaudeMessage() {
+  if (cs.claudePos < 1) return null
+  return cc.messages[cc.messages.length - cs.claudePos] || null
+}
+
+// canEditClaudeMessage: an own, stored (not optimistic) message, in a
+// conversation with no turn running.
+export function canEditClaudeMessage(m) {
+  return !!(
+    m &&
+    m.role === 'user' &&
+    m.id &&
+    !String(m.id).startsWith('__pending__') &&
+    cc.commentId &&
+    cc.runId &&
+    !ccBusy() &&
+    !hasActiveClaudeTurn()
+  )
+}
+
+// claudeEditing is cc.editing narrowed to the conversation in view — and only
+// while the edited message is still in its transcript.
+function claudeEditing() {
+  const e = cc.editing
+  if (!e || e.commentId !== cc.commentId) return null
+  return cc.messages.some((m) => m.id === e.id) ? e : null
+}
+
+// startEditClaudeMessage opens the composer on message `id` (or, without one,
+// the keyboard-selected bubble). Returns false when that message can't be
+// edited right now.
+export function startEditClaudeMessage(id) {
+  const m = id ? cc.messages.find((x) => x.id === id) : activeClaudeMessage()
+  if (!canEditClaudeMessage(m)) return false
+  const atts = Array.isArray(m.attachments) ? m.attachments : []
+  const text = atts.length && m.body === attachmentOnlyBody(atts.length) ? '' : m.body || ''
+  cc.editing = { id: m.id, commentId: cc.commentId }
+  if (atts.length) restorePendingAttachments(cc.commentId, cc.commentId, atts)
+  setClaudeDraft(claudeChatDraftKey(), text)
+  if (cs.focus !== 'claude') enterClaudeChat(cs.pr)
+  cs.claudePos = 0
+  cs.claudeOptionSel = 0
+  focusClaudeComposer()
+  requestAnimationFrame(() => {
+    const el = document.querySelector('[data-testid=claude-chat-compose]')
+    if (!el) return
+    el.value = text
+    autoGrowTextarea(el)
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  })
+  return true
+}
+
+// cancelEditClaudeMessage leaves edit mode (Escape in the composer, or the ×
+// on the "bericht bewerken" pill) and empties the composer again.
+export function cancelEditClaudeMessage() {
+  if (!cc.editing) return
+  cc.editing = null
+  deleteClaudeDraft(claudeChatDraftKey())
+  const el = document.querySelector('[data-testid=claude-chat-compose]')
+  if (el) {
+    el.value = ''
+    resetTextareaHeight(el)
+  }
+}
+
 // scrollClaudeMessageWithinBubble scrolls the transcript scroller by
 // CLAUDE_BUBBLE_SCROLL_LINES lines of the ACTIVE bubble's own text, in `dir`
 // ('up' walks earlier text, 'down' walks later text) — called from
@@ -4405,6 +4502,10 @@ function claudeChatView() {
     // sendClaudeMessage/sendErrorText.
     sendError: () => ccSendError(),
     claudePos: () => cs.claudePos,
+    // "Bewerk dit bericht": whether the composer is rewriting an earlier own
+    // message, and whether message `m` may be edited right now (the pencil).
+    editing: () => !!claudeEditing(),
+    canEdit: (m) => canEditClaudeMessage(m),
     // Whether the reviewer's OWN mouse/wheel scroll still sits at the bottom
     // of claude-chat-thread — see updateClaudeThreadPinned's own doc comment.
     // ClaudeChat.mjs shows its "scroll to recent" button while this is false
@@ -4525,6 +4626,8 @@ function claudeChatCallbacks(state, commentTarget) {
     // own @keydown, gated on view.active()) — reuses the exact same
     // cancelClaudeTurn() the "Stop" button and the Enter-palette item call.
     onCancel: () => cancelClaudeTurn(),
+    onEditMessage: (id) => startEditClaudeMessage(id),
+    onCancelEdit: () => cancelEditClaudeMessage(),
     onFocus: () => onClaudeComposeFocus(),
     onEmptyEnter: () => openClaudeMenuFromComposer(),
     // The composer's own draft (claudeDrafts, see its doc comment) — kept in
@@ -7409,6 +7512,15 @@ async function sendClaudeMessageFromNew(state, commentTarget, text, action) {
   // the conversation's FIRST turn, which is the only one that carries one
   // (claudeContextBlock) — and it would go stale anyway by the time this is
   // actually sent.
+  // "Bewerk dit bericht": the rewrite replaces the edited message and every
+  // later one, on a fresh claude session — so the selection context goes along
+  // again (force), exactly like on a conversation's first turn.
+  const editing = claudeEditing()
+  if (editing && !action) {
+    cc.editing = null
+    const bucket = cc.commentId || claudeChatDraftKey()
+    return sendClaudeMessage(text, 'edit_message', claudeContextBlock(commentTarget, true), null, bucket, editing.id)
+  }
   if (ccBusy() && !action) return queueClaudeMessage(text)
   // Captured BEFORE the anchor step: creating the anchor sets cc.commentId,
   // which moves the composer's attachment bucket from the draft key to that

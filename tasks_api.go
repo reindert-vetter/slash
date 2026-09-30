@@ -1819,6 +1819,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				Action      string              `json:"action"`
 				Context     string              `json:"context"`
 				Attachments []ChatAttachmentRef `json:"attachments"`
+				EditOf      string              `json:"editOf"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid message", http.StatusBadRequest)
@@ -1836,7 +1837,25 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid attachment", http.StatusBadRequest)
 				return
 			}
+			if body.Action != chatActionEditMessage {
+				body.EditOf = ""
+			}
 			switch body.Action {
+			case chatActionEditMessage:
+				// "Bewerk dit bericht": the id of the reviewer's own earlier
+				// message this rewrite replaces, plus the rewritten text (or at
+				// least one image, like an ordinary turn).
+				if !validChatMessageRef(body.EditOf) {
+					http.Error(w, "invalid editOf", http.StatusBadRequest)
+					return
+				}
+				if strings.TrimSpace(body.Body) == "" && len(attachments) == 0 {
+					http.Error(w, "invalid message", http.StatusBadRequest)
+					return
+				}
+				if strings.TrimSpace(body.Body) == "" {
+					body.Body = chatAttachmentOnlyBody(len(attachments))
+				}
 			case "", chatActionEdit:
 				// A plain question or an edit instruction both need real text —
 				// only "commit"/"clear"/"retry" (below) need none, plus a turn
@@ -1874,7 +1893,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			}
 			sig := ChatMessageSignal{
 				ID: "msg-" + newUIReactionID(), Author: body.Author, Body: body.Body, Action: body.Action,
-				Context: body.Context, Attachments: attachments,
+				Context: body.Context, Attachments: attachments, EditOf: body.EditOf,
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalMessage, sig); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -3606,4 +3625,19 @@ func (s *server) handleCodeWarning(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// validChatMessageRef accepts a stored chat message id as the edit target of
+// chatActionEditMessage: non-empty, bounded, and only [A-Za-z0-9_-] — the
+// shapes the server itself generates ("msg-<hex>", "steer-<hex>…").
+func validChatMessageRef(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }

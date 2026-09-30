@@ -460,6 +460,34 @@ func (m *Module) ClearConversation(ctx context.Context, id string) error {
 	return err
 }
 
+// TruncateFrom rewinds one conversation to just before messageID ("bewerk dit
+// bericht"): it deletes that message and every message stored at or after it
+// (by created_at — the order List returns), resets the stored claude session
+// so the next turn starts a fresh one, and returns the messages that were
+// kept, oldest first. An unknown messageID deletes nothing but still resets
+// the session and returns the whole transcript. WRITE — driven only by the
+// claude_chat workflow's truncateChatFrom Activity (chat_workflow.go).
+func (m *Module) TruncateFrom(ctx context.Context, conversationID, messageID string) ([]Message, error) {
+	var from string
+	err := m.db.QueryRowContext(ctx,
+		`SELECT created_at FROM chat_messages WHERE id = ? AND conversation_id = ?`, messageID, conversationID).Scan(&from)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if from != "" {
+		if _, err := m.db.ExecContext(ctx,
+			`DELETE FROM chat_messages WHERE conversation_id = ? AND (id = ? OR created_at >= ?)`,
+			conversationID, messageID, from); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := m.db.ExecContext(ctx,
+		`UPDATE chat_conversations SET session_id = '', updated_at = ? WHERE id = ?`, now(), conversationID); err != nil {
+		return nil, err
+	}
+	return m.List(ctx, conversationID)
+}
+
 // Purge removes every conversation + message row of pr. WRITE — workflow-only,
 // the per-PR data-retention cleanup path (see the cleanup workflow). Returns
 // the number of messages removed, for logging.

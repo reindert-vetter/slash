@@ -745,6 +745,11 @@ export const EN = {
   "Geen PR's voor dit filter.": 'No PRs for this filter.',
   'Probeer de mislukte turn opnieuw': 'Retry the failed turn',
   'Wis Claude-gesprek': 'Clear Claude conversation',
+  'Bewerk dit bericht': 'Edit this message',
+  'Bewerk dit bericht (e)': 'Edit this message (e)',
+  'Annuleer bewerken': 'Cancel editing',
+  'Bericht bewerken — versturen vervangt dit bericht en alles erna. Codewijzigingen van latere beurten blijven staan. Esc annuleert.':
+    'Editing message — sending replaces this message and everything after it. Code changes from later turns stay. Esc cancels.',
   '{n} regels': '{n} lines',
 
   // ── src/authStatus.mjs + the settings page's auth row ──────────────────

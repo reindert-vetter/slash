@@ -78,6 +78,11 @@ type ChatMessageSignal struct {
 	// Unlike Context they ARE part of the visible chat: the reviewer's own
 	// bubble renders them back.
 	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
+	// EditOf is the id of the reviewer's OWN earlier message this turn
+	// replaces (chatActionEditMessage only): that message and everything after
+	// it is dropped, and Body is sent in its place. Validated by the HTTP
+	// handler (same "msg-…" shape it generates itself).
+	EditOf string `json:"editOf,omitempty"`
 }
 
 // The three non-default ChatMessageSignal.Action values. Validated by the HTTP
@@ -137,7 +142,57 @@ const (
 	// badges as "automatische controle" instead of an ordinary typed message
 	// (see claudeBubble/chatKindBadge, ClaudeChat.mjs).
 	chatActionAutoCheck = "auto_check"
+	// chatActionEditMessage is "bewerk dit bericht": the reviewer rewrote one
+	// of their own earlier messages (sig.EditOf). The truncateChatFrom
+	// Activity deletes that message and every later one and resets the claude
+	// session; the rewritten Body then runs as an ordinary turn on a FRESH
+	// session whose prompt carries a replay of the kept transcript (the
+	// Activity's recorded result, so replay-deterministic). Code edits a later,
+	// now-deleted turn already landed are deliberately left alone — the shared
+	// checkout may hold other conversations' work too.
+	chatActionEditMessage = "edit_message"
 )
+
+// chatTruncateInput is the truncateChatFrom Activity's input.
+type chatTruncateInput struct {
+	Repo           string `json:"repo,omitempty"`
+	PR             int    `json:"pr"`
+	ConversationID string `json:"conversationId"`
+	FromMessageID  string `json:"fromMessageId"`
+}
+
+// chatReplayContext renders the transcript kept by an edit (chatActionEditMessage)
+// as a plain-text block for the fresh session's first prompt, so Claude still
+// knows what was said before the rewritten message. System-ish turns (a
+// failure, a retry notice, a cancel) carry no conversation content and are
+// skipped. Empty when nothing was kept.
+func chatReplayContext(kept []chat.Message) string {
+	var b strings.Builder
+	for _, msg := range kept {
+		switch msg.Kind {
+		case chat.KindError, chat.KindRetrying, chat.KindCancelled, chat.KindCleanupChoice:
+			continue
+		}
+		body := strings.TrimSpace(msg.Body)
+		if body == "" {
+			continue
+		}
+		who := "Claude"
+		if msg.Role == "user" {
+			who = "Reviewer"
+		}
+		b.WriteString(who + ": " + body + "\n")
+		if msg.Answer != "" {
+			b.WriteString("Reviewer (antwoord): " + msg.Answer + "\n")
+		}
+		b.WriteString("\n")
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "Eerdere berichten in dit gesprek (de reviewer heeft daarna een eigen bericht aangepast; alles wat daarna kwam is vervallen):\n\n" +
+		strings.TrimRight(b.String(), "\n")
+}
 
 // chatRetryDelays is the automatic backoff ladder for a failed Claude call:
 // the wait AFTER attempt i, so len(chatRetryDelays)+1 attempts in total (~93s
@@ -359,6 +414,29 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		turn := chatTurnInput{
 			PR: in.PR, ConversationID: in.CommentID, Body: sig.Body, Action: sig.Action, TurnID: sig.ID,
 			Context: sig.Context, Attachments: sig.Attachments,
+		}
+		// "Bewerk dit bericht": rewind the transcript to just before the edited
+		// message (and reset the claude session), then fall through to the
+		// ordinary turn below with the kept transcript replayed into the
+		// prompt. Decided purely by sig.Action; the replay text is the
+		// Activity's recorded result — deterministic under replay.
+		if sig.Action == chatActionEditMessage {
+			var replay string
+			if err := w.ExecuteActivity("truncateChatFrom", chatTruncateInput{
+				Repo: in.Repo, PR: in.PR, ConversationID: in.CommentID, FromMessageID: sig.EditOf,
+			}, &replay); err != nil {
+				return nil, fmt.Errorf("truncate chat: %w", err)
+			}
+			pendingQuestionID = ""
+			lastFailedTurn = nil
+			turn.Action = ""
+			if replay != "" {
+				if turn.Context != "" {
+					turn.Context = replay + "\n\n" + turn.Context
+				} else {
+					turn.Context = replay
+				}
+			}
 		}
 		if sig.Action == chatActionRetry {
 			if lastFailedTurn == nil {

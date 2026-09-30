@@ -3346,6 +3346,27 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
 		return nil, nil
 	})
+	// Activity (chatActionEditMessage, "bewerk dit bericht"): drop the edited
+	// message and everything after it, reset the claude session, and return
+	// the kept transcript as replay text for the fresh session's prompt (see
+	// chatReplayContext). Attachment files are kept: the rewritten message
+	// may carry the same images again.
+	engine.RegisterActivity("truncateChatFrom", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg chatTruncateInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		replay := ""
+		if m.chat != nil {
+			kept, err := m.chat.TruncateFrom(ctx, arg.ConversationID, arg.FromMessageID)
+			if err != nil {
+				return nil, err
+			}
+			replay = chatReplayContext(kept)
+		}
+		publishChatChanged(arg.Repo, arg.PR, arg.ConversationID)
+		return json.Marshal(replay)
+	})
 	// Activity (chatActionSeen, "Openstaande chats" blue-eye indicator): stamp
 	// the conversation as read up to now (chat.Module.MarkSeen).
 	engine.RegisterActivity("markChatSeen", func(ctx context.Context, in []byte) ([]byte, error) {

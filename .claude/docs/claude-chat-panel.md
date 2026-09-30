@@ -1690,6 +1690,41 @@ list, `activeClaudeMessageBody()` returns `null` and the branch is a no-op —
 Cmd+C then does whatever it would have done anyway (typically nothing, same
 as before this change). Test: `tests/claude-chat-copy-bubble.spec.mjs`.
 
+### "Bewerk dit bericht": rewrite an own message and continue from there
+
+Reviewer request: *"in een chat wil ik een eigen message kunnen aanpassen,
+dan moet het verder gaan vanaf die message en message negeren/weghalen die
+daarna kwamen"*. Product answers: later messages are really **deleted**; code
+edits a later turn already landed **stay** (the pill says so); only the review
+tree's chats (per-line and the general chat), **not** `/plan`.
+
+- **Three entry points, one function** (`startEditClaudeMessage`,
+  `RelatedPanel.mjs`, per `mouse-navigation.md`): the pencil on an own bubble
+  (`claude-message-edit`, `ClaudeChat.mjs`), the Claude menu item "Bewerk dit
+  bericht" (`claudeChatCommandsFor`, `home.mjs`, only while the selected bubble
+  is editable, after "Wis" so the default Enter doesn't change), and `e` on a
+  keyboard-selected own bubble (`cs.claudePos >= 1`, before `relatedActive()`
+  like Cmd+C).
+- **`canEditClaudeMessage`**: an own, stored message (never an optimistic
+  `__pending__` one), with no turn running (`ccBusy()`/`hasActiveClaudeTurn()`).
+  Not offered during a turn at all: the Signal would only block on the run
+  lock behind it.
+- **Edit mode** is `cc.editing = {id, commentId}` (read via `claudeEditing()`,
+  which also drops it once that message is gone): the composer gets the text,
+  the images come back as ready chips (`restorePendingAttachments`), and a
+  dashed pill (`claude-editing`, words not colour) sits above the composer.
+  Escape in the composer or its × cancels (`cancelEditClaudeMessage`).
+- **Sending** (`sendClaudeMessageFromNew`) goes out as `action:
+  'edit_message', editOf`, with `claudeContextBlock(commentTarget, true)` —
+  forced, because the backend starts a fresh claude session. The edited
+  message and everything after it are hidden optimistically; a rejected send
+  refetches them. Backend: "Bewerk dit bericht" in
+  `.claude/docs/workflows-comments.md`.
+- The plan page reuses `claudeChatColumn` without `view.editing`/`canEdit`/
+  `onEditMessage`, so none of this renders there.
+
+Test: `tests/claude-chat-edit-message.spec.mjs`.
+
 ### ↑/↓ walk a tall bubble 4 rendered lines at a time, before stepping to the next one
 
 Reviewer request: the thread is deliberately not tall (`max-h-[38vh]`), which

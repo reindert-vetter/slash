@@ -329,3 +329,39 @@ func TestSaveMessageBackfillsRepoFromConversation(t *testing.T) {
 		t.Fatalf("ghost conversation message repo = %+v, want \"\"", list)
 	}
 }
+
+// TruncateFrom drops the edited message plus everything after it, keeps what
+// came before, and resets the claude session.
+func TestTruncateFrom(t *testing.T) {
+	m := testModule(t)
+	ctx := context.Background()
+	const convID = "comment-t"
+	if err := m.EnsureConversation(ctx, convID, "", 5); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"u1", "a1", "u2", "a2", "u3"} {
+		role := "user"
+		if id[0] == 'a' {
+			role = "assistant"
+		}
+		if err := m.SaveMessage(ctx, Message{
+			ID: id, ConversationID: convID, PR: 5, Role: role, Body: id,
+			CreatedAt: "2026-01-01T00:00:0" + string(rune('0'+i)) + "Z",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.SetSession(ctx, convID, "sess"); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := m.TruncateFrom(ctx, convID, "u2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 2 || kept[0].ID != "u1" || kept[1].ID != "a1" {
+		t.Fatalf("kept = %+v", kept)
+	}
+	if s, _ := m.GetSession(ctx, convID); s != "" {
+		t.Fatalf("session not reset: %q", s)
+	}
+}
