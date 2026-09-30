@@ -536,6 +536,33 @@ test.describe('Werkmap overlay', () => {
     await expect.poll(() => signals.length).toBe(1)
     expect(signals[0]).toEqual({ conversationId: 'conv-abc', turnId: 'turn-def' })
   })
+
+  // A landing the backstop (chat_land_backstop.go) enqueued carries no
+  // conversationId/turnId — its failure notice must still offer a retry, as
+  // the same bare "merge" Signal the backstop itself sent.
+  test('landingFailed without ids still offers "Opnieuw proberen", as a bare merge Signal', async ({ page }) => {
+    await mockCheckout(page, {
+      pr: 12903,
+      runId: 'chatmerge-12903',
+      dir: '/home/reindert/dev/pnp',
+      dirName: 'pnp',
+      branch: 'feature/x',
+      decision: {
+        stage: 'landingFailed',
+        dir: '/home/reindert/dev/pnp',
+        body: 'De wijziging kon niet op de PR-branch worden gezet (reden: ...).',
+      },
+    })
+    const signals = mockSignals(page)
+    await page.goto('/pr/12903' + SEL)
+    await appReady(page)
+    await expect(page.getByTestId('workdir-overlay-option')).toHaveCount(4)
+    const retryRow = page.getByTestId('workdir-overlay-option').first()
+    await expect(retryRow).toContainText('Opnieuw proberen')
+    await retryRow.click()
+    await expect.poll(() => signals.length).toBe(1)
+    expect(signals[0]).toEqual({})
+  })
 })
 
 // Reviewer-reported bug: making the werkmap choice resolved the PR-wide

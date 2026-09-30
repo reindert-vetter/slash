@@ -185,7 +185,12 @@ check specifically RAISED that decision, never a generic "start over":
   bypasses that ladder entirely, so `processChatMergeAt` (`chat_merge.go`)
   explicitly clears a leftover `landingFailed` `Pending` the moment ANY
   landing for this PR succeeds — without it the overlay would keep showing an
-  error the reviewer just fixed.
+  error the reviewer just fixed. A `landingFailed` raised by the **landing
+  backstop** (`chat_land_backstop.go`, which enqueues a bare
+  `ChatMergeRequest{}`) carries no `ConversationID`/`TurnID`; it still gets
+  the retry row, resending that same bare Signal — it used to get no row at
+  all, leaving only "Andere werkmap kiezen"/"Uit" (reviewer report,
+  `data/review-shots/task-werkmap-retry-button.png`).
 
 **The busy state names the running option and streams its real git
 commands, not a bare "Bezig…".** Reviewer request: "moet meer feedback geven

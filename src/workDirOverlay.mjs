@@ -174,18 +174,24 @@ export function isWorkDirOverlayOpen() {
 //     this decision has no Dir/git-candidate check to re-run, only the git
 //     landing (commit/fetch/push-target) itself.
 //
-// Returns null when a decision genuinely has nothing to retry against (only
-// possible for landingFailed without a ConversationID/TurnID — a decision
-// from before this field existed, already answered once, or from a future,
-// as-yet-unattached process).
+// A landingFailed WITHOUT a ConversationID/TurnID still gets the row: the
+// landing backstop (chat_land_backstop.go) enqueues its landing as a bare
+// ChatMergeRequest{} — so a failure it raised carries no ids — and that same
+// bare "merge" Signal is exactly how to retry it. Previously this returned
+// null there, leaving the reviewer with no retry at all (reviewer report,
+// screenshot data/review-shots/task-werkmap-retry-button.png).
+//
+// Returns null only for an unknown stage.
 function retryRowFor(d) {
   if (!d) return null
   if (d.stage === 'landingFailed') {
-    if (!d.conversationId && !d.turnId) return null
+    const extra = {}
+    if (d.conversationId) extra.conversationId = d.conversationId
+    if (d.turnId) extra.turnId = d.turnId
     return {
       key: 'retry',
       label: t('Opnieuw proberen'),
-      run: () => act('', undefined, 'retry', { conversationId: d.conversationId, turnId: d.turnId }),
+      run: () => act('', undefined, 'retry', extra),
     }
   }
   if (d.stage === 'dirtyTree' || d.stage === 'reuseMerged') {
