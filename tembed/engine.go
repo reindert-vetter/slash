@@ -224,20 +224,35 @@ func (e *Engine) startWorkflowID(id, name string, input any, deferLow bool, pare
 	l.Lock()
 
 	// Idempotent reuse: a run with this ID already exists → no-op.
-	if _, _, err := e.store.LoadRun(id); err == nil {
-		l.Unlock()
-		return id, nil
-	}
-
-	now := e.now()
-	rec := RunRecord{ID: id, Workflow: name, Status: StatusRunning, CreatedAt: now, UpdatedAt: now, ParentRunID: parentRunID}
-	if err := e.store.CreateRun(rec); err != nil {
-		l.Unlock()
-		return "", err
-	}
-	if err := e.store.AppendEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
-		l.Unlock()
-		return "", err
+	if _, hist, err := e.store.LoadRun(id); err == nil {
+		if len(hist) > 0 && hist[0].Type == EventWorkflowStarted {
+			l.Unlock()
+			return id, nil
+		}
+		// Orphan: CreateRun succeeded but the WorkflowStarted append did not
+		// (the two writes are not transactional), so the run has no input and
+		// can never be driven. Repair it in place instead of reusing it.
+		if err := e.store.TruncateEvents(id, 0); err != nil {
+			l.Unlock()
+			return "", err
+		}
+		now := e.now()
+		if err := e.store.AppendEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
+			l.Unlock()
+			return "", err
+		}
+		e.setStatus(id, StatusRunning)
+	} else {
+		now := e.now()
+		rec := RunRecord{ID: id, Workflow: name, Status: StatusRunning, CreatedAt: now, UpdatedAt: now, ParentRunID: parentRunID}
+		if err := e.store.CreateRun(rec); err != nil {
+			l.Unlock()
+			return "", err
+		}
+		if err := e.store.AppendEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
+			l.Unlock()
+			return "", err
+		}
 	}
 
 	deferred := e.advanceMode(id, deferLow)
@@ -341,6 +356,11 @@ func (e *Engine) advanceLoaded(runID string, rec RunRecord, hist []Event, deferL
 	var input []byte
 	if len(hist) > 0 && hist[0].Type == EventWorkflowStarted {
 		input = hist[0].Payload
+	} else {
+		// No start input (see startWorkflowID's orphan repair): fail clearly
+		// instead of running the workflow with nil input.
+		e.failNoStartInput(runID, rec, len(hist))
+		return
 	}
 
 	w := &Workflow{engine: e, runID: runID, history: hist, sigIdx: map[string]int{}, deferLowActivities: deferLow}
@@ -409,6 +429,20 @@ func (e *Engine) advanceLoaded(runID string, rec RunRecord, hist []Event, deferL
 		e.propagateToParent(rec.ParentRunID, runID, nil, result)
 	}
 	return deferred
+}
+
+// failNoStartInput terminally fails a run whose history lacks its
+// WorkflowStarted event, so it reads as a clear failure rather than a JSON
+// error from running the workflow with nil input.
+func (e *Engine) failNoStartInput(runID string, rec RunRecord, histLen int) {
+	err := fmt.Errorf("tembed: run %s has no start input (WorkflowStarted event missing)", runID)
+	ev := Event{Seq: histLen, Type: EventWorkflowFailed, Error: err.Error(), Time: e.now()}
+	if aerr := e.store.AppendEvent(runID, ev); aerr != nil {
+		e.logf("tembed: run %s: record missing-start failure: %v", runID, aerr)
+		return
+	}
+	e.setStatus(runID, StatusFailed)
+	e.propagateToParent(rec.ParentRunID, runID, err, nil)
 }
 
 // propagateToParent records a child workflow's outcome (childID, the child's
@@ -891,3 +925,6 @@ func (e *Engine) Input(runID string) ([]byte, error) {
 	}
 	return nil, nil
 }
+		if len(hist) == 0 || hist[0].Type != EventWorkflowStarted {
+			return fmt.Errorf("tembed: run %s has no start input, cannot resume; it is repaired when the workflow is next requested", runID)
+		}

@@ -72,6 +72,12 @@ workflows (`resolve_call` makes one `claude` call per unresolved call;
 calls, serially, on the startup goroutine *before* `ListenAndServe`. That once
 wedged the server entirely. Hence a **priority** mechanism (still abstract — it
 knows nothing about LLMs):
+- **Start is two writes, repaired on the next request:** `startWorkflowID` does
+  `CreateRun` then `AppendEvent(WorkflowStarted)`, not transactionally. If the
+  second fails the run has no input; a repeat `StartWorkflowID` with the same
+  (deterministic) ID now truncates that history and rewrites the start event
+  instead of reusing it. `advanceLoaded` fails such a run with "has no start
+  input" (never nil input -> JSON error), and retry reports the same reason.
 
 - **`Priority`** — Low/Normal/High. Affects **only** recovery; live
   `StartWorkflow`/`SignalWorkflow` are unaffected.
