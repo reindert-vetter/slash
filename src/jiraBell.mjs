@@ -34,6 +34,7 @@ import { t } from './i18n.mjs'
 import { avatarHTML } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
+import { initSelfUpdate, selfUpdateNeedsAttention, selfUpdateHasSomething, selfUpdateSection } from './selfUpdate.mjs'
 
 // bell — this module's own small reactive store, independent of whichever
 // page's `state`/`ui` mounts it.
@@ -104,10 +105,11 @@ function toggleJiraBell() {
 // same testids so a future shared test could target either.
 
 function jiraBellDot() {
-  if (!jiraUnreadCount()) return html`<span class="hidden"></span>`
+  // Also lit for a ready/being-applied slash update (selfUpdate.mjs).
+  if (!jiraUnreadCount() && !selfUpdateNeedsAttention()) return html`<span class="hidden"></span>`
   return html`<span
     data-testid="jira-bell-dot"
-    title="${() => jiraUnreadCount() + ' ' + t('ongelezen')}"
+    title="${() => (selfUpdateNeedsAttention() ? t('Nieuwe versie van slash') + ' · ' : '') + jiraUnreadCount() + ' ' + t('ongelezen')}"
     class="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-indigo-500 ring-2 ring-white dark:bg-indigo-400 dark:ring-zinc-950"
   ></span>`
 }
@@ -272,6 +274,7 @@ function jiraBellPanel() {
       data-testid="jira-bell-panel"
       class="absolute right-0 top-full z-20 mt-2 w-[45rem] max-w-[calc(100vw-6rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
     >
+      ${selfUpdateSection()}
       <div class="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-zinc-800">
         <h2 class="text-[13px] font-semibold text-slate-900 dark:text-zinc-100">Jira</h2>
         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
@@ -299,7 +302,7 @@ function jiraBellPanel() {
 export function jiraBellButton(cls = 'h-7 w-7') {
   return html`<div class="contents">
     ${() =>
-      bell.jira.length
+      bell.jira.length || selfUpdateHasSomething()
         ? html`<div class="relative" data-testid="jira-bell-wrapper">
             <button
               type="button"
@@ -362,6 +365,9 @@ let jiraBellPollTimer = null
 export function initJiraBell() {
   if (jiraBellPollTimer) return // already initialized (guards a hot-reload/double-import)
   loadJiraNotifications()
+  // The same bell carries the slash self-update row and every page's
+  // reload-after-restart check (selfUpdate.mjs).
+  initSelfUpdate()
   jiraBellPollTimer = setInterval(loadJiraNotifications, 60_000)
   document.addEventListener('mousedown', handleJiraBellOutsideClick)
 }

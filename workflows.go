@@ -1103,6 +1103,8 @@ type TaskManager struct {
 	interval   time.Duration // fast cadence (reviewer active)
 	idle       time.Duration // slow cadence + PR-state check (reviewer idle)
 	logf       func(string, ...any)
+	// su is the self-update controller (self_update.go), created lazily.
+	su *selfUpdateCtl
 
 	// baseCtx is the server-lifetime context background pollers spawned outside
 	// a request (e.g. ensurePRStatus's fresh-poller spawn) run under — a
@@ -3752,6 +3754,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 
 	// The Jira-notification tracker's two Activities (see jira_notifications.go).
 	m.registerJiraNotifyActivities(engine)
+	// slash updating itself from GitHub's main (see self_update.go).
+	m.registerSelfUpdate(engine)
 	// The Jira-issues tracker's one Activity (see jira_issues.go).
 	m.registerJiraIssuesActivities(engine)
 	m.registerPlanActivities(engine)

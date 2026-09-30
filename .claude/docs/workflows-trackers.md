@@ -777,6 +777,96 @@ branch on — replay is trivially deterministic, and the Activity is idempotent
   through the in-memory `GET /api/whisper/progress`.
 - Tests: `whisper_test.go`, `tests/dictation.spec.mjs`.
 
+## Self-update (`self_update`)
+
+Reviewer request: "als slash een update heeft, dat het auto update … met een
+knop in meldingen onder belletje", sharpened to "check elke 6 uur op github
+repository / rebase / erop wachten totdat alles klaar is / frontend moet de
+melding laten zien, dan een knop om verder te gaan met de oude versie". So it
+is **automatic unless stopped**: the update proceeds on its own ≥2 minutes
+after the notice appears, once nothing is busy; "Nu bijwerken" skips the grace
+period (still waits for idle), "Doorgaan met de oude versie" skips **this**
+commit only. Backend `self_update.go`, frontend `src/selfUpdate.mjs`.
+
+- **Only for the real `./slash`.** `classifySelfUpdateEnv`: the binary must be
+  named `slash`, carry a `vcs.revision` stamp (`debug.ReadBuildInfo`, so `go
+  build`, never `go run`) and sit in the root of its own git checkout.
+  `tests/.tmp/slash` (toplevel = the repo root, not its dir) and every test
+  binary are disabled automatically; `SLASH_SELF_UPDATE=off` disables it
+  explicitly. Disabled means: no supervisor, no git call anywhere, and
+  `GET /api/update/status` answers `{enabled:false, running}`.
+- **What counts as an update:** `origin/main` **or** the local `main` being
+  ahead of the running commit. Local commits that are not on GitHub while
+  GitHub also moved on are **rebased** onto `origin/main`.
+- **Trigger:** `StartSelfUpdateSupervisor` (a plain goroutine, same shape as
+  `StartCleanupScheduler`, started after the ready gate) starts one
+  `self_update` run 2 minutes after startup and then every 6 hours; "Nu
+  controleren"/"Opnieuw controleren" start one on demand
+  (`POST /api/workflows/self_update {action:"check"}`). Never two at once: an
+  active (running/waiting) run makes a new check a no-op.
+- **The workflow**, one-shot, `PriorityLow` on recovery (a run killed
+  mid-build must not rebuild on the startup path):
+  1. `selfUpdatePrepare` — `git fetch origin main` (a ref write, hence an
+     Activity), refuses when not on `main`, decides fast-forward / local-only /
+     rebase, and reports up-to-date or skipped (the skip file,
+     `<appDataDir>/self-update-skip.json`, remembers `"<origin>:<head>"`)
+     **before** the dirty-tree check — so uncommitted changes only fail a run
+     when there really is an update they block. Uncommitted tracked changes →
+     refused with a message; **never stash**.
+  2. `selfUpdateBuild` — in a throwaway `git worktree add --detach` (under the
+     OS temp dir): the rebase if needed (conflict → `rebase --abort`, run fails
+     with the conflict text, nothing changed), then `go build -o
+     <repo>/slash.new .`. A failed build fails the run with ~40 lines of
+     compiler output; the running binary, the working copy and `main` are
+     untouched. Building next to the working copy is deliberate: the frontend
+     is served straight from disk, so the checkout must only change once the
+     new Go side exists. The build commit (`target`) plus the new commit
+     subjects are the recorded result — that record IS the notice.
+  3. `WaitSignal("decision")` — `now` (button), `auto` (supervisor: ≥
+     `selfUpdateGrace` after the build and `selfUpdateBusyCount()==0`), `skip`
+     (button → `selfUpdateSkip` writes the skip file) or `stale` (supervisor:
+     the running binary already is `target`, e.g. after a manual restart).
+  4. Idle loop — `selfUpdateBusy` + `w.Sleep(10s)`, at most 180 times, then it
+     fails "bleef bezig". Busy is wider than `RunningCounts`: every
+     `StatusRunning` run except `self_update`, **every** running chat turn
+     (incl. plan-page turns, pr 0) and every held write-turn slot.
+  5. `selfUpdateApply` — refuses if `HEAD` moved or the tree got dirty since
+     the check, then `git reset --keep <target>` (a fast-forward, or onto the
+     rebased commits; `--keep` itself refuses to drop local changes) and
+     renames `slash.new` over `slash`.
+- **The restart happens after the run completed**, never inside an Activity
+  (an exec there would replay into another exec on recovery). The supervisor
+  sees a completed `applied` run whose `target` differs from the running
+  commit and calls `syscall.Exec` on `<repo>/slash` with the same argv/env:
+  same PID (the parent shell notices nothing), Go's CLOEXEC listener is
+  closed by the exec and the new process binds 8765 again. The small window
+  between the idle check and the exec is accepted — a run that starts in it is
+  replayed by tembed after the restart like after any crash.
+- **Status is derived, not stored:** `GET /api/update/status`
+  (`deriveSelfUpdateStatus`) reads the latest `self_update` run's status and
+  history — `checking`/`building`/`notice`/`waiting`/`restarting`/`failed`/
+  `idle`, plus `target`, `commits`, `noticeAt`/`autoAt`, `busy`, `error`. No
+  git call, no carve-out needed.
+- **Every tab reloads itself** (`src/selfUpdate.mjs`, initialised on
+  `/pr-overview`, `/pr/<id>` via `initJiraBell`, `/plan/<KEY>` and
+  `/settings`): the first status read pins `running`; a later, different
+  `running` → `location.reload()`. Polls every 60s, every 3s while something is
+  underway or the server is down. **Not while typing:** a focused, non-empty
+  textarea/text input/contenteditable defers the reload and shows a "herlaad"
+  row instead — RelatedPanel's comment/reply/chat composers and inline edit
+  survive a reload through `draftStorage.mjs`, but the plan-page chat and the
+  general chat overlay do not, and an unfocused half-typed field there is still
+  lost on reload (accepted, known risk).
+- **UI:** the row sits at the top of both bells' dropdowns
+  (`selfUpdateSection`); the bell dot also lights for `notice`/`waiting`/
+  `restarting`, and `/pr/<id>`'s bell (hidden without Jira notifications)
+  also shows for those phases and for `failed`. Words carry the state, never
+  colour alone.
+- Tests: `self_update_test.go` (fakes, no network: the prepare cases, build
+  failure, rebase conflict, apply guard, the workflow end to end incl. skip),
+  `tests/self-update-bell.spec.mjs` (stubbed status: the notice + skip, the
+  reload on a new `running`).
+
 ## Surfacing failures (`run_errors.go` + `GET /api/problems`)
 
 Background work here fails quietly by design: nearly every Activity talking to

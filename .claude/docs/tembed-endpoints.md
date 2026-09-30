@@ -28,6 +28,7 @@ which the UI then signals. A **one-shot** type runs synchronously to completion
 | `/api/workflows/resolve_test_covers` | `{pr, testId, testFile, testClass, testName, classes}` | one-shot | |
 | `/api/workflows/explain_code` | `{pr, blockId, file, label, gran, unitKey, codeHash, code, context}` | one-shot | Idempotent Run ID (`explainRunID`). |
 | `/api/workflows/comment_titles` | `{pr, items:[{id, bodyLen}]}` | one-shot | Gives a BATCH of long comments a 6-word Dutch heading. Idempotent Run ID over the whole set (`commentTitlesRunID`), so the frontend fires it on every comment poll; the batch is capped at 25 server-side. 400 on a non-positive pr, an empty `items`, or an item without an id. Read side is the ordinary `GET /api/comments` (the title lands on the comment row) — see "Short titles for review comments" in `.claude/docs/workflows-analysis.md`. |
+| `/api/workflows/self_update` | `{action}` | one-shot (background) + its decision Signal | `"check"` (or empty) starts a run in a goroutine, a no-op while one is active; `"now"`/`"skip"` send the `decision` Signal to the run waiting in `notice` (409 otherwise). Anything else is a 400. See "Self-update" in `.claude/docs/workflows-trackers.md`. |
 | `/api/workflows/code_warning` | `{pr}` | one-shot | Manual "Diepgravend onderzoek"; re-running supersedes. |
 | `/api/workflows/submit_review` | `{pr, event, body}` | one-shot | 400 on invalid input *before* any `gh` call (`validateSubmitReview`; a `REQUEST_CHANGES` needs a body), 502 if the submit itself fails. |
 | `/api/workflows/ready_for_review` | `{pr, reviewers?}` | one-shot | 400 on a non-positive pr or invalid login (`validateReadyForReview`, which also trims+dedups). |
@@ -106,6 +107,7 @@ Both are carve-outs from the write boundary because they touch nothing durable
 | Endpoint | Reads |
 |---|---|
 | `GET /api/workflows/{runID}` | Run status. |
+| `GET /api/update/status` | The self-update state derived from the latest `self_update` run's history (`deriveSelfUpdateStatus`) plus the running commit every tab uses to reload itself after a restart. No git call. |
 | `GET /api/workflows?pr=N` | **All** runs of that PR (no trailing slash, so a different pattern than `/api/workflows/`): `RunsForPR` filters `engine.Runs()` on the `pr` field of each run's stored input — a per-repo tracker has no such field and therefore never appears. Newest-updated first. A `task_code_comment` run also carries a `comment` ref (`{file,label,gran,line,rowStart,rowEnd,snippet}`, parsed back out of its own immutable input) and a `code_warning` run a `warningsFound` count (from its stored result). Feeds the "Taken" card. |
 | `GET /api/comments?pr=N` \| `?path=<prefix>` | Comments + reactions; the `path` form is the hierarchical prefix search (see `.claude/docs/tembed-workflows.md`). |
 | `GET /api/approvals?pr=N` | Approved rows/call segments per block. |

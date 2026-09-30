@@ -337,6 +337,18 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   `.claude/docs/workflows-trackers.md`. The page itself only reads
   `GET /api/jira/notifications`, exactly like every other list here.
 
+### The slash self-update row, at the top of both bells
+
+Both bells (this page's own and `src/jiraBell.mjs`) mount
+`selfUpdateSection()` (`src/selfUpdate.mjs`) as the first thing in their
+dropdown: "Nieuwe versie van slash klaar" with the commit subjects, a countdown
+("Wordt automatisch bijgewerkt over 1:42, zodra niets meer bezig is") and the
+two buttons "Nu bijwerken" / "Doorgaan met de oude versie"; otherwise the
+build/wait/restart/failed state or "slash is up-to-date · Nu controleren". The
+bell dot also lights for a ready or running update, and the small bell's
+"only when there is something to click" gate widens to include it. Mechanism:
+"Self-update (`self_update`)" in `.claude/docs/workflows-trackers.md`.
+
 ### The same bell, smaller and independent, on `/pr/<id>` and `/plan/<KEY>`
 
 Reviewer request: "ik wil de notificatie belletje wat in pr overzicht zit, ook

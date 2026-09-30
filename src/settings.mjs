@@ -17,6 +17,8 @@ import { ensureMe, meLogin } from './avatar.mjs'
 import { initDebugLog, debugModeToggleButton, toggleDebugMode, clearDebugLog, debugLogCount } from './debugLog.mjs'
 import { ensureLangPref, langToggleButton, toggleLang } from './langpref.mjs'
 import { t, syncUiLang } from './i18n.mjs'
+// Reload this tab once slash restarted into a new version (selfUpdate.mjs).
+import { initSelfUpdate } from './selfUpdate.mjs'
 import { originFrom, originPr } from './settingsLink.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 // The auth row's data comes from the same shared store the global dialog uses
@@ -32,6 +34,7 @@ import {
 
 initTheme()
 initDebugLog()
+initSelfUpdate()
 
 function goBack() {
   location.href = originFrom

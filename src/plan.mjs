@@ -25,6 +25,8 @@ import { t } from './i18n.mjs'
 import { renderMarkdown } from './markdown.mjs'
 import { initTheme, themeToggleButton } from './theme.mjs'
 import { initDebugLog, logAction } from './debugLog.mjs'
+// Reload this tab once slash restarted into a new version (selfUpdate.mjs).
+import { initSelfUpdate } from './selfUpdate.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import CommandMenu, { filterCommands } from './CommandMenu.mjs'
@@ -4666,6 +4668,7 @@ if (!planKey) {
   // sendAnswer).
   initDebugLog()
   initImageLightbox()
+  initSelfUpdate()
   document.addEventListener('keydown', onKeydown)
   // clampCursor is called from loadPlan (the one place the document is
   // replaced), deliberately NOT from a watch on state.doc/state.cur: the

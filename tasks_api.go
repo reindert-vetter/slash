@@ -552,6 +552,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// cleanupMergedAge ago. See StartCleanupScheduler for why this is a
 		// plain background ticker rather than a durable in-workflow loop.
 		mgr.StartCleanupScheduler(ctx)
+		// Self-update: a check every 6 hours plus the supervisor that
+		// auto-proceeds / restarts (self_update.go). No-op unless this is the
+		// ./slash binary in the root of its own checkout.
+		mgr.StartSelfUpdateSupervisor(ctx)
 	}
 
 	closeFn := func() error {
@@ -974,6 +978,11 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// WorkflowWhisperModel. Progress is read separately from the cosmetic
 	// GET /api/whisper/progress.
 	mux.HandleFunc("/api/workflows/whisper_model", s.handleWhisperModelStart)
+	// POST /api/workflows/self_update {action} → "check" starts a self_update
+	// run, "now"/"skip" signal the waiting one. GET /api/update/status is the
+	// read side (derived from that run's history). See self_update.go.
+	mux.HandleFunc("/api/workflows/self_update", s.handleSelfUpdateStart)
+	mux.HandleFunc("/api/update/status", s.handleSelfUpdateStatus)
 	// POST /api/workflows/claude_chat {pr, commentId} → ensure the claude_chat
 	// Execution for an existing comment thread (idempotent, Run ID derived from
 	// commentId); the UI then signals reviewer turns to its Run ID via

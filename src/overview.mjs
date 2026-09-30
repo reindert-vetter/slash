@@ -20,6 +20,7 @@ import { relativeTime } from './relativeTime.mjs'
 import { SNOOZE_OPTIONS, snoozePreviewUntil, formatSnoozeMoment, isSnoozeActive, snoozeMarkText } from './snooze.mjs'
 import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
+import { initSelfUpdate, selfUpdateNeedsAttention, selfUpdateSection } from './selfUpdate.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 import AuthStatusHost, { initAuthStatusPopup, isAuthProblemOpen, handleAuthProblemKeydown } from './authStatus.mjs'
 
@@ -2632,10 +2633,11 @@ function toggleJiraBell() {
 // shape as jiraUnreadMark (a filled dot, never colour alone; the bell shape
 // plus this dot together are unambiguous regardless of colour vision).
 function jiraBellDot() {
-  if (!jiraUnreadCount()) return html`<span class="hidden"></span>`
+  // Also lit for a ready/being-applied slash update (selfUpdate.mjs).
+  if (!jiraUnreadCount() && !selfUpdateNeedsAttention()) return html`<span class="hidden"></span>`
   return html`<span
     data-testid="jira-bell-dot"
-    title="${() => jiraUnreadCount() + ' ' + t('ongelezen')}"
+    title="${() => (selfUpdateNeedsAttention() ? t('Nieuwe versie van slash') + ' · ' : '') + jiraUnreadCount() + ' ' + t('ongelezen')}"
     class="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-indigo-500 ring-2 ring-white dark:bg-indigo-400 dark:ring-zinc-950"
   ></span>`
 }
@@ -2675,6 +2677,7 @@ function jiraBellPanel() {
       data-testid="jira-bell-panel"
       class="absolute right-0 top-full z-20 mt-2 w-[45rem] max-w-[calc(100vw-6rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
     >
+      ${selfUpdateSection()}
       <div class="flex items-center gap-2 border-b border-slate-100 px-3 py-2.5 dark:border-zinc-800">
         <h2 class="text-[13px] font-semibold text-slate-900 dark:text-zinc-100">Jira</h2>
         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
@@ -4681,6 +4684,7 @@ loadInbox()
 loadProblems()
 loadRunningCount()
 loadJiraNotifications()
+initSelfUpdate()
 loadJiraIssues()
 ensureAutoIngestPref()
 ensureAutoWarn()
