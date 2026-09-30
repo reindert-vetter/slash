@@ -38,9 +38,9 @@ export function analogClock(cls = 'h-8 w-8 shadow-sm') {
   const d = () => new Date(clock.now)
   const hourHand = () => {
     const t = d()
-    return hand(6.5, ((t.getHours() % 12) + t.getMinutes() / 60) * 30)
+    return hand(5.5, ((t.getHours() % 12) + t.getMinutes() / 60) * 30)
   }
-  const minHand = () => hand(10, d().getMinutes() * 6)
+  const minHand = () => hand(9, d().getMinutes() * 6)
   return html`<div
     data-testid="tree-clock"
     data-state="${() => clockState(d())}"
@@ -51,7 +51,7 @@ export function analogClock(cls = 'h-8 w-8 shadow-sm') {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      stroke-width="1.5"
+      stroke-width="1"
       stroke-linecap="round"
       class="h-full w-full"
       aria-hidden="true"
