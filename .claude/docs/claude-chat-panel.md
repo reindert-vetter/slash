@@ -1165,6 +1165,27 @@ to the URL (see its own doc comment: other people's live, constantly
 changing turns aren't worth restoring), so which row was highlighted is not
 preserved either, same as the `'claude'`-nested version of this rung.
 
+### A fourth dead end: the jump opens a DIFFERENT conversation
+
+Every earlier fix was about NAVIGATING to the chat's code. The last step,
+`enterClaudeChat(state.pr)`, then worked out which chat to open from whatever
+the selection had become (`chatAnchorComment()`). When the navigation could
+not land on the chat's own comment, that gave the wrong conversation. Two
+real cases from PR 13933: the comment's block was no longer in the PR (a
+migration dropped after the chat started, while `anchor_state` still read as
+anchored, so it was not treated as an orphan either), so `openTask` changed
+nothing and the chat already in view opened again. Or the comment was
+`unpinned`, so it was outside the landing unit's `cs.view` and `selectComment`
+missed; `chatAnchorComment()` then fell back to another conversation on the
+same file+label. Reviewer report: "als ik druk op `is dit`… onder andere
+chats, dan zie ik die niet verschijnen".
+
+Fix: `enterClaudeChat(pr, target)` takes an optional explicit comment, and
+`jumpToClaudeConversation` passes the clicked one. So the Claude column
+always shows the conversation that was clicked, even when the code next to it
+could not follow (best effort, as before). Test:
+`tests/claude-other-tasks-jump-target.spec.mjs`.
+
 ### A finished task lingers for 2 minutes, clearly marked done
 
 Reviewer request: a task should not vanish from "Andere chats in deze PR" the

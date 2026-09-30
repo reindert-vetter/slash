@@ -3738,8 +3738,16 @@ function syncChatTicker() {
 // create a comment to hang a conversation on (that placeholder comment is gone
 // for good — see claude-chat-panel.md). Focus is therefore only taken once an
 // anchor is known.
-export async function enterClaudeChat(pr) {
-  const c = chatAnchorComment()
+// `target` (optional) names the exact conversation to open instead of
+// whatever chatAnchorComment() resolves from the current selection — passed
+// by home.mjs's jumpToClaudeConversation ("Andere chats in deze PR"). Without
+// it, a jump to a chat whose own comment is not in the unit the cursor lands
+// on (an unpinned anchor, rowStart -1, or a second chat on the same block)
+// opened a DIFFERENT conversation on that block instead — reviewer report:
+// "als ik druk op `is dit`… onder andere chats, dan zie ik die niet
+// verschijnen".
+export async function enterClaudeChat(pr, target = null) {
+  const c = (target && cs.list.find((x) => String(x.id) === String(target.id))) || target || chatAnchorComment()
   if (!c) return
   releaseFocus()
   const token = focusToken

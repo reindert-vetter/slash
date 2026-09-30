@@ -8391,7 +8391,9 @@ async function jumpToClaudeConversation(c) {
   } else {
     await openTask({ comment: c, runId: c.id })
   }
-  await enterClaudeChat(state.pr)
+  // Pass `c` itself: the landing unit's own anchored chat can be a different
+  // conversation on the same block (see enterClaudeChat's `target`).
+  await enterClaudeChat(state.pr, c)
 }
 setClaudeTaskJump(jumpToClaudeConversation)
 // So a chat that dead-ends on the open-werkmap-choice sentence re-reads the
