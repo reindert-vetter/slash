@@ -56,6 +56,7 @@ type Fake struct {
 	currentUser      Collaborator // returned by CurrentUser (SetCurrentUser seeds it)
 	currentUserCalls int
 	readyPRs         []int             // PRs flipped to ready-for-review, in order
+	editedPRs        []EditedPR        // EditPullRequest calls, in order
 	requestedRevs    [][]string        // reviewer login sets requested, in order
 	removedRevs      []removedReviewer // reviewers dropped from a PR, in order
 
@@ -599,6 +600,37 @@ func (f *Fake) SetCollaborators(cs []Collaborator) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.collaborators = cs
+}
+
+// EditPullRequest records the edit and makes every later PRMeta(pr) return
+// the new title/body, like GitHub itself would.
+func (f *Fake) EditPullRequest(_ context.Context, pr int, title, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.editedPRs = append(f.editedPRs, EditedPR{PR: pr, Title: title, Body: body})
+	if f.prMetas == nil {
+		f.prMetas = map[int]Meta{}
+	}
+	m, ok := f.prMetas[pr]
+	if !ok {
+		m = f.prMeta
+	}
+	m.Title, m.Body = title, body
+	f.prMetas[pr] = m
+	return nil
+}
+
+// EditedPR is one EditPullRequest call the Fake recorded.
+type EditedPR struct {
+	PR          int
+	Title, Body string
+}
+
+// EditedPRs returns every EditPullRequest call, in order.
+func (f *Fake) EditedPRs() []EditedPR {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]EditedPR(nil), f.editedPRs...)
 }
 
 func (f *Fake) MarkReadyForReview(_ context.Context, pr int) error {

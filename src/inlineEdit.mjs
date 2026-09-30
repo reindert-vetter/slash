@@ -37,7 +37,10 @@ import { loadDraft, saveDraft, clearDraft } from './draftStorage.mjs'
 // of that range once the editor mounts (reviewer request: "moet gelijk de
 // cursor zetten in het midden van wat is geselecteerd") — see
 // computeInlineEditCaretOffset/scheduleInlineEditCaret.
-export const inlineEditState = reactive({ id: null, selRowStart: -1, selRowEnd: -1 })
+// `error` is a save failure shown in the editor's own footer (only the PR
+// description's direct GitHub write can fail synchronously, see
+// saveInlineEdit in home.mjs); closeInlineEdit clears it.
+export const inlineEditState = reactive({ id: null, selRowStart: -1, selRowEnd: -1, error: '' })
 
 // openInlineEdit — the ONE entry point that turns inline editing on for a
 // block, used by both Block.mjs's header toggle button (activeGroup()'s own
@@ -58,6 +61,7 @@ export function openInlineEdit(b, unit) {
 // guard resets every time, not just once per block id.
 export function closeInlineEdit() {
   inlineEditState.id = null
+  inlineEditState.error = ''
   caretScheduledFor = null
   growScheduledFor = null
 }

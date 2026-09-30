@@ -3764,6 +3764,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	m.registerPlanExecuteActivities(engine)
 	// The two snooze Activities (see pr_snooze.go).
 	m.registerPrSnoozeActivities(engine)
+	// Editing the PR's own title/description (see pr_description_edit.go).
+	m.registerPrDescriptionEdit(engine)
 
 	engine.RegisterWorkflow(WorkflowTaskCodeComment, taskCodeCommentWorkflow)
 	engine.RegisterWorkflow(WorkflowPRStatus, prStatusWorkflow)

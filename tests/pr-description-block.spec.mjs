@@ -77,3 +77,67 @@ test('the PR description renders markdown tokens and always wraps, even outside 
   // every other stand used to leave it in.
   await expect(longRow).toHaveClass(/whitespace-pre-wrap/)
 })
+
+// Inline edit of the description: "Opslaan" writes the new title/body straight
+// to GitHub through POST /api/workflows/pr_description_edit (no Claude chat).
+test('editing the PR description inline posts the new title and body', async ({ page }) => {
+  const longLine =
+    'A long description line that is far wider than the editor pane, so the transparent textarea and the highlighted pre behind it must both wrap it the same way.'
+  let meta = 'First line.\r\n' + longLine
+  await page.route('**/api/pr?*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, pr: 12903, title: 'Rework checkout flow', url: '', body: meta, reviewers: [] }),
+    }),
+  )
+  const posted = []
+  await page.route('**/api/workflows/pr_description_edit', (route) => {
+    const req = JSON.parse(route.request().postData() || '{}')
+    posted.push(req)
+    meta = req.body
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '{"runId":"r1"}' })
+  })
+  await page.goto('/pr/12903?sel=PR-description:1')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('e')
+  const ta = page.getByTestId('inline-edit-textarea')
+  await expect(ta).toBeVisible()
+  await expect(ta).toHaveValue('Rework checkout flow\n\nFirst line.\n' + longLine)
+
+  // The overlay and the textarea wrap the long line identically: same height.
+  const heights = await page.evaluate(() => {
+    const t = document.querySelector('[data-testid=inline-edit-textarea]')
+    const p = document.querySelector('[data-testid=inline-edit-highlight]')
+    return { ta: t.scrollHeight, pre: p.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(t).lineHeight) }
+  })
+  expect(Math.abs(heights.ta - heights.pre)).toBeLessThan(heights.lh / 2)
+  expect(heights.pre).toBeGreaterThan(heights.lh * 5.5) // 4 lines + padding: the long line really wraps
+
+  await ta.fill('Rework checkout flow, v2\n\nFirst line, edited.\n' + longLine)
+  await page.keyboard.press('Meta+Enter')
+  await expect.poll(() => posted.length).toBe(1)
+  expect(posted[0]).toMatchObject({
+    pr: 12903,
+    title: 'Rework checkout flow, v2',
+    body: 'First line, edited.\n' + longLine,
+    baseTitle: 'Rework checkout flow',
+    baseBody: 'First line.\r\n' + longLine,
+  })
+  await expect(ta).toHaveCount(0)
+})
+
+test('a PR description edit refused by the backend keeps the draft and shows why', async ({ page }) => {
+  await mockMeta(page, 'First line.')
+  await page.route('**/api/workflows/pr_description_edit', (route) =>
+    route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'intussen gewijzigd' }) }),
+  )
+  await page.goto('/pr/12903?sel=PR-description:1')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('e')
+  const ta = page.getByTestId('inline-edit-textarea')
+  await ta.fill('Rework checkout flow\n\nMy edit.')
+  await page.getByTestId('inline-edit-save').click()
+  await expect(page.getByTestId('inline-edit-error')).toContainText('intussen gewijzigd')
+  await expect(page.getByTestId('inline-edit-textarea')).toHaveValue('Rework checkout flow\n\nMy edit.')
+})

@@ -411,8 +411,10 @@ export function isInlineEditable(b, rows) {
   if (!b) return false
   if (b.status !== 'modified' && b.status !== 'added') return false
   if (b.category === 'TRANSLATION') return false
-  // No file to write the edit into — the description lives on GitHub.
-  if (isPrDescriptionBlock(b)) return false
+  // The PR-titel & omschrijving block IS editable: its save writes the new
+  // title/body straight to GitHub instead of starting a Claude chat (see
+  // saveInlineEdit in home.mjs, "The PR description is saved straight to
+  // GitHub" in .claude/docs/inline-edit.md).
   if (isSvgFile(b) || isImageFile(b)) return false
   if (!rows || rows.length > VIRTUALIZE_MIN_ROWS) return false
   return true
@@ -1329,6 +1331,10 @@ function inlineEditorSlot(b, onSave) {
       <div
         class="flex items-center justify-end gap-2 border-t border-slate-100 px-3 py-2 dark:border-zinc-800"
       >
+        <div class="contents">${() =>
+          inlineEditState.error
+            ? html`<p class="mr-auto text-xs text-rose-700 dark:text-rose-300" data-testid="inline-edit-error">${() => '⚠ ' + inlineEditState.error}</p>`
+            : ''}</div>
         <button
           type="button"
           data-testid="inline-edit-cancel"

@@ -854,6 +854,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// POST /api/workflows/submit_review {pr,event,body?} → submit a real GitHub
 	// PR-level review (approve or request changes). One Execution per submit.
 	mux.HandleFunc("/api/workflows/submit_review", s.handleSubmitReview)
+	// POST /api/workflows/pr_description_edit {repo?,pr,title,body,baseTitle,baseBody}
+	// → overwrite the PR's title/description on GitHub (pr_description_edit.go).
+	mux.HandleFunc("/api/workflows/pr_description_edit", s.handlePrDescriptionEdit)
 	// POST /api/workflows/ready_for_review {pr,reviewers?} → flip a draft PR to
 	// ready + request reviewers. GET /api/reviewers → candidate reviewers
 	// (repo collaborators), most-used-first (read-only).
@@ -1373,7 +1376,7 @@ func (s *server) handleIgnoreRuns(w http.ResponseWriter, r *http.Request) {
 // /api/workflows/{runID}/signals/{signalName} (POST signal).
 func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/workflows/")
-	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "chat_attachment" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "plan_restart_branch" || rest == "jira_comment" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
+	if rest == "" || rest == "task_code_comment" || rest == "pr_status" || rest == "resolve_call" || rest == "resolve_test_covers" || rest == "explain_code" || rest == "approve" || rest == "submit_review" || rest == "pr_description_edit" || rest == "ready_for_review" || rest == "remove_reviewer" || rest == "code_warning" || rest == "ignore_comment" || rest == "cleanup" || rest == "claude_chat" || rest == "chat_attachment" || rest == "auto_warn" || rest == "lang_pref" || rest == "app_settings" || rest == "comment_batch" || rest == "test_run" || rest == "comment_titles" || rest == "plan" || rest == "plan_restart_branch" || rest == "jira_comment" || rest == "retry" || rest == "retry-all" || rest == "ignore-runs" {
 		http.NotFound(w, r)
 		return
 	}

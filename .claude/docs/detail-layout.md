@@ -642,9 +642,12 @@ above Mentioned).
   the tracker stores any block id), "Comment op deze regel", "Chat over deze
   regel", "Kopieer deze regel", and `?sel=PR-description:1` restore (the
   generic `file:line` ref). It counts in the PR-wide total and the Space walk.
-- **What cannot work, and is switched off:** inline edit (`isInlineEditable` —
-  there is no file to write; Claude chat can still run `gh pr edit` if asked),
-  "Regel in Files changed" (not in Files changed), GitHub's Viewed mark
+- **Inline edit works, but writes to GitHub directly** (`e`/header toggle/
+  "Bewerk omschrijving"): no file to commit, so "Opslaan" PATCHes the PR's
+  title + body through the `pr_description_edit` workflow instead of starting
+  a Claude chat — see "The PR description is saved straight to GitHub" in
+  `.claude/docs/inline-edit.md`.
+- **What cannot work, and is switched off:** "Regel in Files changed" (not in Files changed), GitHub's Viewed mark
   (`syncViewedFiles`), the footer's automatic AI description (`explain_code`
   explains code, not prose). No relations/Underlying code exist for it. It
   renders as plain text (`langForFile` → an unvendored grammar) with the

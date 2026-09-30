@@ -151,6 +151,9 @@ type Client interface {
 	// PR-wide thread's root, or one of its replies — both mirror as plain issue
 	// comments on the PR's flat conversation, see PostIssueComment).
 	EditIssueComment(ctx context.Context, commentID int64, body string) error
+	// EditPullRequest overwrites the PR's own title and description (body).
+	// Both are always sent, so the PR ends up with exactly this pair.
+	EditPullRequest(ctx context.Context, pr int, title, body string) error
 	// ResolveReviewThread resolves ("Resolve conversation") the review-diff
 	// thread whose root comment has REST id commentID. It is a no-op if no such
 	// thread is found. GitHub only supports resolving review-diff threads, not
@@ -655,6 +658,24 @@ func (m *Module) EditReviewComment(ctx context.Context, commentID int64, body st
 func (m *Module) EditIssueComment(ctx context.Context, commentID int64, body string) error {
 	_, err := m.api(ctx, "PATCH",
 		fmt.Sprintf("repos/%s/issues/comments/%d", m.repo, commentID),
+		"-f", "body="+body,
+	)
+	return err
+}
+
+// EditPullRequest overwrites pr's title and body. See the Client interface
+// doc. An empty title is refused here too (defence in depth behind the HTTP
+// validation) — GitHub would reject it anyway, with a less readable error.
+func (m *Module) EditPullRequest(ctx context.Context, pr int, title, body string) error {
+	if pr <= 0 {
+		return fmt.Errorf("edit pull request: invalid pr %d", pr)
+	}
+	if strings.TrimSpace(title) == "" || strings.ContainsAny(title, "\r\n") {
+		return fmt.Errorf("edit pull request: invalid title")
+	}
+	_, err := m.api(ctx, "PATCH",
+		fmt.Sprintf("repos/%s/pulls/%d", m.repo, pr),
+		"-f", "title="+title,
 		"-f", "body="+body,
 	)
 	return err

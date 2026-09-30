@@ -437,6 +437,46 @@ this first turn can genuinely apply the change, not just discuss it — no new
 write path, still the same `claude_chat`/`chat_checkout`/`chat_merge`
 pipeline.
 
+## The PR description is saved straight to GitHub (no Claude chat)
+
+Reviewer request: "ik wil ook pr description kunnen aanpassen net als dat ik
+code kan aanpassen". The synthetic PR-titel & omschrijving block
+(`isPrDescriptionBlock`, see `.claude/docs/detail-layout.md`) uses the same
+editor, entry points, drafts and per-unit scope as a code block — only the
+save differs, because there is nothing to commit:
+
+- `saveInlineEdit` (`home.mjs`) branches to `savePrDescriptionEdit`: the
+  edited unit is merged into the CURRENT block text
+  (`mergeInlineEditRangeIntoSource`), split back into title (line 1, must be
+  non-empty) + body (everything after the blank separator,
+  `splitPrDescriptionText`), and POSTed to
+  `/api/workflows/pr_description_edit` with `baseTitle`/`baseBody` = the
+  current `state.prMeta`.
+- Backend (`pr_description_edit.go`): `validatePrDescriptionEdit` (known repo,
+  pr > 0, single-line non-empty title ≤ 256, body ≤ 65536), then a plain
+  pre-read refuses a stale base with 409 without starting a run; the one-shot
+  workflow runs `editPrDescription` (re-checks the base against GitHub, then
+  `github.EditPullRequest` = `PATCH repos/{repo}/pulls/{n}` with
+  `-f title= -f body=`) and then reuses the pr_status tracker's
+  `fetchPRBasics` so `GET /api/pr` serves the new text immediately. Bodies
+  are compared normalised (CRLF → LF, trailing whitespace dropped), matching
+  `prDescriptionText`.
+- **Never overwrite someone else's edit.** Refused when the edited range
+  itself changed since the draft started (checked client-side) or GitHub no
+  longer holds the base (409). A refusal reopens the editor with the draft and
+  the reason in its footer (`inlineEditState.error`, `inline-edit-error`), and
+  re-bases the draft on the current text — so saving it again, after looking
+  at the new version, is a conscious overwrite rather than the same refusal
+  forever.
+- Approvals: nothing new. The refetched text rebuilds the block and
+  `remapPrDescApproval` sends every changed line back to unapproved, exactly
+  like an author's edit on GitHub.
+
+Test: `tests/pr-description-block.spec.mjs` (the POST body, the 409 path, and
+that the textarea and the highlighted `<pre>` wrap a long line identically —
+both use `pre-wrap`/`break-words`, so the wrapped block needed no editor
+change); backend `pr_description_edit_test.go`.
+
 ## Files
 
 - `src/inlineEdit.mjs` — the shared `inlineEditState` flag (one block at a

@@ -40,6 +40,7 @@ import {
   blockNewSourceRangeText,
   mergeInlineEditRangeIntoSource,
   clearInlineEditDraft,
+  saveInlineEditDraft,
   openInlineEdit,
 } from './inlineEdit.mjs'
 import RelatedPanel, {
@@ -3570,9 +3571,9 @@ function prDescriptionText() {
 // menu. The OLD side is empty (GitHub keeps no usable description history),
 // so every line is an "added" row with something to approve. It is not a repo
 // file: ensureCode never fetches it, and the few mechanisms that need a real
-// file (inline edit, "Regel in Files changed", GitHub's Viewed mark, the
-// footer's automatic AI description) skip it via isPrDescriptionBlock /
-// PR_DESC_FILE. A comment on it is posted as a quoted issue comment by the
+// file ("Regel in Files changed", GitHub's Viewed mark, the footer's
+// automatic AI description) skip it via isPrDescriptionBlock / PR_DESC_FILE;
+// inline edit works and saves straight to GitHub (savePrDescriptionEdit). A comment on it is posted as a quoted issue comment by the
 // backend (postsAsIssueComment, comment_import.go). See "The PR-titel &
 // omschrijving block" in .claude/docs/detail-layout.md.
 //
@@ -11988,6 +11989,10 @@ function commentTarget() {
 // code, not just the edited fragment in isolation. See "Only the selected
 // unit is editable" in .claude/docs/inline-edit.md.
 function saveInlineEdit(b, text, originalSource, rowStart, rowEnd) {
+  if (isPrDescriptionBlock(b)) {
+    savePrDescriptionEdit(text, originalSource, rowStart, rowEnd)
+    return
+  }
   const rows = blockRows(b)
   const currentRangeSource = blockNewSourceRangeText(rows, rowStart, rowEnd)
   // Precise, not guessed: only note staleness when the edited RANGE's own
@@ -12013,6 +12018,78 @@ function saveInlineEdit(b, text, originalSource, rowStart, rowEnd) {
   requestAnimationFrame(() => {
     sendClaudeChatText(state, target, t('Voer de hierboven voorgestelde aanpassing door.'))
   })
+}
+
+// splitPrDescriptionText is prDescriptionText's inverse: line 1 is the
+// title, everything after the blank separator line is the body.
+function splitPrDescriptionText(full) {
+  const lines = String(full || '').replace(/\r\n?/g, '\n').split('\n')
+  return {
+    title: (lines[0] || '').trim(),
+    body: lines.slice(1).join('\n').replace(/^\n+/, '').replace(/\s+$/, ''),
+  }
+}
+
+// savePrDescriptionEdit — "Opslaan" on the PR-titel & omschrijving block.
+// Unlike a code block (saveInlineEdit above: hand the edit to a Claude chat)
+// there is nothing to commit, so this writes the new title/body straight to
+// GitHub through the pr_description_edit workflow (pr_description_edit.go).
+// The edited unit is merged into the CURRENT block text (a line changed
+// elsewhere meanwhile is kept), then split back into title + body.
+// Refused — draft kept, editor reopened with the reason in its footer — when
+// the edited range itself changed since the draft started (checked here) or
+// the description changed on GitHub since the last poll (checked by the
+// backend, 409). A refused draft is re-based on the current text, so saving
+// it again (after looking at the new version) is a conscious overwrite
+// instead of the same refusal forever. On success the draft is dropped and
+// /api/pr is refetched: the block rebuilds, and every changed line goes back
+// to unapproved (remapPrDescApproval, unchanged). See "The PR description is
+// saved straight to GitHub" in .claude/docs/inline-edit.md.
+async function savePrDescriptionEdit(text, originalSource, rowStart, rowEnd) {
+  const cur = state.allBlocks.find(isPrDescriptionBlock)
+  if (!cur) return
+  const rows = blockRows(cur)
+  const currentRangeSource = blockNewSourceRangeText(rows, rowStart, rowEnd)
+  const refuse = (msg) => {
+    saveInlineEditDraft(cur, text, blockNewSourceRangeText(blockRows(state.allBlocks.find(isPrDescriptionBlock) || cur), rowStart, rowEnd), rowStart, rowEnd)
+    openInlineEdit(state.allBlocks.find(isPrDescriptionBlock) || cur, rowStart >= 0 ? { start: rowStart, end: rowEnd } : null)
+    inlineEditState.error = msg
+  }
+  if (currentRangeSource !== originalSource) {
+    refuse(t('Deze regels zijn intussen gewijzigd — bekijk de nieuwe versie; opnieuw opslaan overschrijft ze.'))
+    return
+  }
+  const { title, body } = splitPrDescriptionText(mergeInlineEditRangeIntoSource(rows, rowStart, rowEnd, text))
+  if (!title) {
+    refuse(t('De titel (eerste regel) mag niet leeg zijn.'))
+    return
+  }
+  try {
+    const res = await fetch('/api/workflows/pr_description_edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pr: state.pr,
+        repo: state.repo || undefined,
+        title,
+        body,
+        baseTitle: state.prMeta.title || state.title || '',
+        baseBody: state.prMeta.body || '',
+      }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 409) await fetchPRMetaOnce().catch(() => {})
+      refuse((data && data.error) || t('Opslaan mislukt') + ' (' + res.status + ')')
+      return
+    }
+    clearInlineEditDraft(cur, rowStart, rowEnd)
+    await fetchPRMetaOnce()
+    pollWorkflows()
+  } catch (err) {
+    console.error('pr_description_edit network error:', err)
+    refuse(t('Opslaan mislukt'))
+  }
 }
 
 // unitLineRange maps a navigation unit (an aligned-row range, see unitsFor) to
@@ -13886,7 +13963,7 @@ const COMMANDS = withClose([
     // .claude/docs/inline-edit.md) so this item silently disappears wherever
     // that card's own toggle button would too, instead of appearing and
     // doing nothing.
-    label: t('Bewerk deze code'),
+    label: () => (isPrDescriptionBlock(focusedBlock()) ? t('Bewerk omschrijving') : t('Bewerk deze code')),
     hint: 'edit bewerk',
     run: () => {
       const b = focusedBlock()
