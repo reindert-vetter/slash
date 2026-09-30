@@ -229,6 +229,7 @@ import {
   resetSplitDivider,
 } from './columnWidth.mjs'
 import { initDictation, handleDictationKeydown } from './dictation.mjs'
+import { analogClock } from './AnalogClock.mjs'
 import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } from './jiraBell.mjs'
 
 initTheme()
@@ -16856,7 +16857,9 @@ function MenuHost() {
 // so this fixed corner is invisible — and un-clickable — until a
 // notification actually exists.
 function JiraBellHost() {
-  return html`<div class="fixed right-4 top-4 z-30">${jiraBellButton('h-8 w-8 shadow-sm')}</div>`
+  return html`<div class="fixed right-4 top-4 z-30 flex items-center gap-2">
+    ${analogClock('h-8 w-8 shadow-sm')}${jiraBellButton('h-8 w-8 shadow-sm')}
+  </div>`
 }
 
 // ── PR-info column ──────────────────────────────────────────────────────────

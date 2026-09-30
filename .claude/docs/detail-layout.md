@@ -1265,3 +1265,11 @@ Bulk twin: **"Alles opnieuw proberen"** in the global failed-tasks dialog
 Test: `tests/pr-page-problems.spec.mjs` (a failure scoped to the open PR shows
 in the Taken list, one for a different PR is filtered out, no PR chip; the
 row menu's retry/hide items; the "nog N meer" footer).
+
+## The corner clock (`src/AnalogClock.mjs`)
+
+`JiraBellHost` (`home.mjs`, top-right of `/pr/<id>` only) also mounts an
+always-visible analog clock left of the Jira bell, same size/style. Colour by
+local time: normal, orange 14:30-15:00, red 15:00-17:00, normal again from
+17:00 (`clockState`). Colour is the only signal by request; `data-state`
+and `title` are for tests/screen readers. Test: `tests/tree-clock.spec.mjs`.
