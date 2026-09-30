@@ -705,6 +705,17 @@ means "this is the next stop", never "the next diff" — the alternative
 the two disagree again, deliberately this time. Test:
 `tests/preview-next-visible-row.spec.mjs`.
 
+**A comment preview gives up height, the diff above it does not.** A block's
+own look-ahead preview collapses to its header (`diff-card.md`), but a comment
+item's `commentDetailCard` preview renders its whole thread. It used to be
+`shrink-0`, so a long thread kept its full height and squeezed the selected
+diff card down to its `min-h` floor, or to nothing at all on a short viewport.
+Reviewer report: "laat het dan niet beperkt worden door de blok eronder". As a
+non-merged preview it is now `min-h-0 shrink-[9999] overflow-hidden`: it
+absorbs the whole shortfall of `block-column` (clipped at its bottom edge)
+before the diff card gives up a single row. Test:
+`tests/comment-preview-yields-height.spec.mjs`.
+
 **Directly next to it** (not at the right screen edge) sits the **Underlying
 code** card (`RelatedPanel.mjs`'s default export, `data-testid=related-code`,
 `shrink-0`), stop 5/6 of the nav chain, inline in the same column flow. Its

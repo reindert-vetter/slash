@@ -11899,8 +11899,21 @@ export function commentDetailCard(c, opts) {
         // carries the file path that used to sit in its own header pill.
         // Not applied when merged (see above) — the parent already sets the
         // width there.
+        //
+        // As a non-merged look-ahead PREVIEW (the next ↓ stop, stacked under
+        // the selected diff card in block-column) it is the one that yields
+        // height, not the diff: min-h-0 + overflow-hidden + an overwhelming
+        // flex-shrink factor make it absorb the column's whole shortfall
+        // (clipped at the bottom) before the diff card above gives up a single
+        // row. With the old shrink-0 a long thread kept its full height and
+        // squeezed the diff down to its own min-h floor instead — reviewer
+        // report: "laat het dan niet beperkt worden door de blok eronder".
         'flex flex-col gap-3 rounded-2xl border p-4 shadow-sm ' +
-        (merged ? 'w-full ' : 'w-[calc(42rem+50px)] shrink-0 ') +
+        (merged
+          ? 'w-full '
+          : preview
+            ? 'w-[calc(42rem+50px)] min-h-0 shrink-[9999] overflow-hidden '
+            : 'w-[calc(42rem+50px)] shrink-0 ') +
         (preview
           ? 'border-slate-300 dark:border-zinc-700 opacity-60 '
           : merged && !isCommentDetailEntered(c)
