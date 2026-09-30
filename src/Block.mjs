@@ -837,7 +837,15 @@ const CODE_CHAR_PX = 11 * 0.6023
 // the same designed-for overlay lineSummaryBadge's own translucent pill
 // background has always handled (every row outside the measured window can
 // already be longer than the card).
-const CARD_CHROME_PX = 78
+//
+// Widened again 78 -> 104 (reviewer report, "0/17 icoon gaat over code heen":
+// a two-digit fraction pill sat on top of the tail of the measured longest
+// line). 104 = 26 chrome + 78 chip reserve: the widest common pill (avatar +
+// fraction, ~62px) + its `right-3` offset (12px) + ~4px of slack for real
+// font metrics drifting from CODE_CHAR_PX. Reviewer decision: the CARD grows,
+// the code is never cut or covered. The `max-w-full` on the card (column
+// width) is the only ceiling left.
+const CARD_CHROME_PX = 104
 
 // contentWidthPx — the one chars → px conversion, shared by every
 // content-driven width below so they can never drift apart. Exported (with

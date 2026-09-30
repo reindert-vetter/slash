@@ -481,7 +481,7 @@ conversion every content-driven width goes through:
   the longest line behind an invisible horizontal scroll — exactly what the
   "floor but no ceiling" rule exists to prevent. Still a pure arithmetic
   constant, never a live DOM measurement.
-- **`CARD_CHROME_PX`** = 78 (was 64 = 4rem, replacing the old `+2rem`): 26px
+- **`CARD_CHROME_PX`** = 104 (was 78, before that 64 = 4rem, replacing the old `+2rem`; see the widening note below): 26px
   of real chrome (the rows' own `px-3` padding, 2 × 12px, plus the card's
   2 × 1px border) plus ~52px reserved for the absolutely-positioned per-row
   chip at the right edge of a diff row (`lineSummaryBadge`, the
@@ -501,6 +501,15 @@ conversion every content-driven width goes through:
   rows + call sites), and reading that from the card's own `class` binding
   would both couple the width to comment/approval state (the card jumping 2rem
   when a relation lands) and re-run that pass on every navigation step.
+  **Widened 78 -> 104 (reviewer report "0/17 icoon gaat over code heen"):** a
+  two-digit fraction pill covered the tail of the longest line. Reviewer
+  decision: the card grows, code is never cut or covered, so the chip reserve
+  is now ~78px (widest common pill ~62px + `right-3` 12px + ~4px slack for
+  font-metric drift). The only ceiling left is the card's `max-w-full`
+  (column width). This supersedes the "designed-for overlay" wording above
+  for lines inside the measured window; rows outside it can still be longer
+  than the card. The measured 52px / `unitSlack >= 51` numbers below predate
+  this and are now ~78px.
 
 Measured result on the reported card: **2108px → 1429px (−32%)**, with the
 last character 52px from the card's right edge — i.e. exactly the reserved
