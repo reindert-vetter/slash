@@ -16,7 +16,7 @@ import { highlight, blockLabel, codeGrowthChars, scrollHint } from './Block.mjs'
 import { translationValueView } from './translationDiff.mjs'
 import { statusInfo, categoryClass, isLocalAiWarning } from './BlockList.mjs'
 import { bindUrlState, num } from './urlState.mjs'
-import { renderMarkdown, countCodeFences, annotateFenceNumbers } from './markdown.mjs'
+import { renderMarkdown, countCodeFences, annotateFenceNumbers, closeOpenFence } from './markdown.mjs'
 import { avatarHTML, displayNameOf, ensureMe, ensureNames, identityOf, meLogin } from './avatar.mjs'
 import { commentMentionsMe, ensureSettings } from './mentions.mjs'
 import { labelForWorkflow } from './workflowLabels.mjs'
@@ -5620,7 +5620,34 @@ export function ClaudeChatPanel(state, commentTarget) {
 // set) — the template itself lives in the sibling pure-template file
 // CodePreview.mjs, fed this array through a getter (mirrors ClaudeChat.mjs's
 // `view` getters).
-const cp = reactive({ items: [], expandedOverride: {} })
+const cp = reactive({ items: [], expandedOverride: {}, answerChats: {} })
+
+// Live answer card (see liveAnswerCard below). `cp.answerChats` is
+// `conversationId -> true`: a chat that has EVER put a fence into the preview
+// column this session. From then on every answer of that chat (streaming and
+// the last landed one) is shown in full below the chat too. In-memory only,
+// replaced wholesale like cp.items.
+function lastPlainAnswer() {
+  for (let i = cc.messages.length - 1; i >= 0; i--) {
+    const m = cc.messages[i]
+    if (m.role === 'assistant' && !m.kind && (m.body || '').trim()) return m
+  }
+  return null
+}
+// The text the live card shows: the streaming partial while a turn runs (or
+// its kept-for-a-moment tail), else the last stored plain answer. null = no card.
+function liveAnswerText() {
+  const id = cc.commentId
+  if (!id || !cp.answerChats[id]) return null
+  const p = ccProgress()
+  if (p) {
+    const partial = (p.partial || '').trim()
+    if (partial.startsWith('{"')) return '' // internal directive still forming
+    return p.partial || ''
+  }
+  const m = lastPlainAnswer()
+  return m ? m.body : null
+}
 
 // codePreviewCount — how many code-preview cards the reviewer can currently
 // walk with ↓/↑ from the bottom of the Claude chat (cs.previewPos, see its own
@@ -5914,6 +5941,15 @@ function recomputeCodePreviews() {
   next.forEach((it) => {
     delete it._groupRank
   })
+  // A chat whose ANSWER put a fence in the column keeps its later answers
+  // there as well — see liveAnswerCard.
+  if (
+    cc.commentId &&
+    !cp.answerChats[cc.commentId] &&
+    containers.some((c) => c && c.matches('[data-testid="claude-message"]'))
+  ) {
+    cp.answerChats = { ...cp.answerChats, [cc.commentId]: true }
+  }
   const unchanged =
     next.length === cp.items.length &&
     next.every(
@@ -5978,6 +6014,31 @@ function ensureCodePreviewObserver() {
   scheduleRecomputeCodePreviews()
 }
 
+// liveAnswerCard — the WHOLE answer (text + code) of a chat that already has
+// code cards below it, live per character while it streams. Sits above the
+// fence cards. Only the visibility toggle is in the outer closure (inside a
+// stable `contents` root, per arrowjs-pitfalls.md); the body is its own
+// `.innerHTML` function binding, so a per-character update re-runs only that
+// binding and never remounts the card (no key churn, no flicker). It lives
+// outside `comment-claude-columns`, so its fences never feed
+// recomputeCodePreviews. A half-written fence is closed visually.
+function liveAnswerCard(state) {
+  return html`<div
+    class="${() => 'mb-3 flex shrink-0 flex-col gap-1 rounded-xl border border-dashed border-slate-300 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900 ' + commentClaudeRowWidthCls(state)}"
+    data-testid="live-answer-card"
+  >
+    <span class="text-[11px] font-medium text-slate-500 dark:text-zinc-500">${() => t('Antwoord')}</span>
+    <div
+      class="markdown-body text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:text-zinc-300"
+      data-testid="live-answer-body"
+      .innerHTML="${() => {
+        const txt = liveAnswerText()
+        return txt ? renderMarkdown(closeOpenFence(txt)) : `<span>${t('Bezig met genereren…')}</span>`
+      }}"
+    ></div>
+  </div>`
+}
+
 // CodePreviewPanel(state, commentTarget) — mounted by home.mjs directly BELOW
 // comment-claude-row, inside the same comments-and-related stack (see "A
 // full-size code-preview column" in claude-chat-panel.md for exactly where in
@@ -6012,6 +6073,7 @@ export function CodePreviewPanel(state, commentTarget, opts = {}) {
   // others: a focus/narrow-breakpoint change must re-apply just this class
   // slot, not rebuild the whole card list.
   return html`<div class="contents">
+    <div class="contents">${() => (!hidden() && claudeColumnVisible() && liveAnswerText() !== null ? liveAnswerCard(state) : '')}</div>
     ${() =>
       cp.items.length && !hidden()
         ? codePreviewColumn(

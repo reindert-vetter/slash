@@ -4704,6 +4704,23 @@ pane) are unchanged.
   preview — it disappears on its own once the fence holding it is no longer
   rendered (comment/thread collapsed, different block selected).
 
+- **Live answer card (`liveAnswerCard`, `RelatedPanel.mjs`).** Once a chat's
+  ANSWER has put a fence into this column (`cp.answerChats[convId]`, set in
+  `recomputeCodePreviews` when a fence's container is a `claude-message`;
+  in-memory, wholesale-replaced), the WHOLE text of every later answer of that
+  chat (text + code) is shown in a `live-answer-card` above the fence cards,
+  per character while streaming (`ccProgress().partial`), and afterwards the
+  last plain stored answer stays (`lastPlainAnswer`). It appears immediately,
+  even before any code; an internal directive partial (`{"`) shows
+  "Bezig met genereren…". A half-written fence is closed visually
+  (`closeOpenFence`, `markdown.mjs`). Deliberately duplicates the bubble's text
+  (accepted). arrow.js shape: only the visibility toggle is in the outer
+  closure inside a stable `contents` root; the body is its own `.innerHTML`
+  function binding, so a character never remounts the card. The card sits
+  OUTSIDE `comment-claude-columns`, so its fences never enter `cp.items`
+  (the `claude-partial` exclusion above is unchanged). Test:
+  `tests/code-fence-preview.spec.mjs` (last test).
+
 **Files:** `markdown.mjs` (the button + its data attributes, now read-only —
 see its own doc comment on `extractCodeFences`), `src/CodePreview.mjs`
 (`codePreviewColumn`/`previewCard`, pure templates — same

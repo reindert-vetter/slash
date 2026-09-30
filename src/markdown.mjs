@@ -716,6 +716,24 @@ function enhanceImages(html) {
   return out
 }
 
+// closeOpenFence(text) — appends a closing fence when `text` ends inside an
+// unclosed one. Used for a still-STREAMING answer (RelatedPanel.mjs's live
+// answer card): `extractCodeFences` needs the closing run, so without this a
+// half-written code block would render as loose text until it closes. Purely
+// visual, never stored. Tracks the opening run's length like CODE_FENCE_SOURCE.
+export function closeOpenFence(text) {
+  let open = 0
+  for (const line of String(text || '').split('\n')) {
+    const m = /^\s*(`{3,})/.exec(line)
+    if (!m) continue
+    if (!open) open = m[1].length
+    else if (m[1].length >= open && /^\s*`+\s*$/.test(line)) open = 0
+  }
+  // Two newlines: the fence regex needs "\n<code>\n<close>", which an
+  // empty (just-opened) block only satisfies with a blank line in between.
+  return open ? text + '\n\n' + '`'.repeat(open) : text
+}
+
 // hardBreaks(text) -> the same text with every SINGLE newline turned into a
 // Markdown hard break (two trailing spaces), so a line the author typed on its
 // own stays on its own line. Markdown collapses a single newline into a space,

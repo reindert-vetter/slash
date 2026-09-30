@@ -899,3 +899,74 @@ test('a truncated streaming partial answer never leaves a stale, cut-off code-pr
   await expect(cards).toHaveCount(2)
   await expect(cards.nth(1).getByTestId('code-preview-trailing')).toContainText(FULL_TRAILING)
 })
+
+// Once a chat's answer has put a code block in the preview column, the WHOLE
+// text of later answers (streaming, including a half-written fence) is shown
+// there too — RelatedPanel.mjs's liveAnswerCard.
+test('a chat that already has a code card also shows its streaming answer in full below the chat', async ({
+  page,
+}, testInfo) => {
+  const pr = seededPr(testInfo)
+  const start = await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'kan dit sneller?',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  const conversationId = (await start.json()).runId
+  expect(conversationId).toBeTruthy()
+
+  await page.route('**/api/chat?commentId=*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        messages: [
+          { id: 'm1', conversationId, pr, role: 'assistant', body: 'Eerste:\n```php\n$first = 1;\n```\nklaar' },
+        ],
+        summary: '',
+        summaryStatus: '',
+        seenAt: '',
+      }),
+    }),
+  )
+  // A turn is running with a plain-text start and a still-OPEN fence.
+  await page.route('**/api/chat/progress?commentId=*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        running: true,
+        progress: {
+          running: true,
+          phase: 'writing',
+          startedAt: Date.now() - 1000,
+          updatedAt: Date.now(),
+          partial: 'Tweede antwoord met uitleg\n```php\n$second = 2;',
+        },
+      }),
+    }),
+  )
+
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  await page.keyboard.press('ArrowRight')
+
+  const live = page.getByTestId('live-answer-card')
+  await expect(live).toBeVisible()
+  await expect(live.getByTestId('live-answer-body')).toContainText('Tweede antwoord met uitleg')
+  // The half-written fence is closed visually, so it renders as code.
+  await expect(live.getByTestId('code-fence')).toHaveCount(1)
+  await expect(live.getByTestId('live-answer-body')).toContainText('$second = 2;')
+})
