@@ -586,7 +586,7 @@ separate top-level item in `state.drill.map(...)`'s array. Doubly load-bearing:
 Test: `tests/drill-preview.spec.mjs`. The preview's own width/collapse rules live
 in `.claude/docs/diff-card.md`.
 
-## Unfocused columns collapse into a narrow rail
+## Unfocused columns collapse into a single shared rail
 
 As soon as `state.focusLevel` is on a drilled column (i.e.
 `state.drill.length > 0`), every column without that focus (the top-level card
@@ -595,23 +595,49 @@ after, since `focusLevel` is always `state.drill.length`, so the focused column 
 always rightmost) no longer makes sense at full diff width: there's nothing to
 review in a column that doesn't own the arrow keys.
 
-`collapsedColumnHTML(b, level, testid, drillIdx)` (`home.mjs`) renders it as a
-narrow button (`w-14`, full height via `<main>`'s flex-stretch) with an arrow icon
-+ a vertically truncated label — the full `class::method` via the shared
-`blockLabel` helper (`Block.mjs`); style borrowed from `RelatedPanel.mjs`'s
-`sidebarHintRail`. Testids: `data-testid=block-collapsed` (top-level) resp.
-`data-testid=drill-collapsed` + `data-drill-idx` (drilled).
+**All of them collapse into exactly ONE shared rail**, not one per level.
+Reviewer report + screenshot (`data/review-shots/task-combine-collapsed-rails.png`):
+with 2+ ancestor columns collapsed, an earlier version rendered one loose
+`w-14` rail button per level, side by side — "meerdere verticale balken
+combineren, maximaal dus 1". A single new, dedicated reactive slot in
+`DetailPanel` (`home.mjs`, right before `block-column`) builds the ordered list
+of collapsed levels — the top-level block (level 0, unless
+`commentAnchorColumnHidden()`/`isPrWideComposing()`/`unanchoredCommentSelected()`
+hides it, the same three conditions the old top-level rail branch checked) plus
+every `state.drill` entry before the focused one, oldest ancestor first — and
+renders it as **one** `railGroupHTML(entries)` (`collapsedRail.mjs`,
+`data-testid=collapsed-rail`): a single bordered `w-14` strip with one row per
+collapsed level (`divide-y`), each row still the same arrow icon + vertically
+written `class::method` label (`blockLabel`, `Block.mjs`) as before. Top row =
+oldest ancestor, bottom row = the ancestor closest to the focused column —
+mirrors the previous left-to-right physical order. `block-column`'s own
+`!focusedHere` branch and the drilled-columns list's own `!focusedHere` branch
+(`state.drill.flatMap`) now contribute nothing (`[]`) while unfocused — this
+shared slot is the only place a collapsed ancestor still renders anything.
 
-Clicking calls **`expandColumn(level)`**: functionally identical to pressing `←`
-repeatedly until you're at that level — `state.drill`/`state.drillCursor` are
-truncated to `level` and `state.focusLevel = level`, so anything deeper is
-discarded. Deliberately the same semantics as the `←` pop, not a "keep the child
-open but hidden" variant, which would break the single-focus-owner model.
+Each row is built by `collapsedRailEntry(b, level, testid, drillIdx)`
+(`home.mjs`) into a plain descriptor object (`{key, label, title, testid,
+dataDrillIdx, onClick}`) — `key`/`testid`/`data-drill-idx` are unchanged from
+the pre-merge standalone buttons (`block-collapsed` resp. `drill-collapsed` +
+`data-drill-idx`), so `tests/drill-collapse.spec.mjs`'s existing selectors
+still resolve unchanged, just nested one level deeper inside
+`collapsed-rail`.
 
-Both render spots branch with **ordinary JS ifs inside their existing,
-already-`focusLevel`-subscribed bindings** (the top-level `${() => {...}}` slot in
-`block-column`, and the per-item `.map()` callback), so no new nested reactive slot
-and no new keyed-node pitfall: the top-level slot still returns an array
-(`[collapsedColumnHTML(...).key(...)]`, never a bare element), and the
-drilled-columns list rebuilds on every `focusLevel` switch anyway via the
-`foc`/`unfoc` key. See `tests/drill-collapse.spec.mjs` (one and two levels deep).
+Clicking a row still calls **`expandColumn(level)`**, completely unchanged:
+functionally identical to pressing `←` repeatedly until you're at that level —
+`state.drill`/`state.drillCursor` are truncated to `level` and
+`state.focusLevel = level`, so anything deeper is discarded. Deliberately the
+same semantics as the `←` pop, not a "keep the child open but hidden" variant,
+which would break the single-focus-owner model. Every level therefore stays
+individually reachable — a reviewer can still jump straight to one specific
+intermediate ancestor, not just back to the top-level block.
+
+**The inner row list is its own `${() => ...}` binding**
+(`railGroupHTML`, `collapsedRail.mjs`), not a value baked statically into the
+group's template — the same fix as `CommentClaudeFooter`'s task list (see "A
+keyed list embedded as a STATIC slot inside a template..." in
+`.claude/rules/arrowjs-pitfalls.md`): the group itself keeps one stable
+`.key('collapsed-rail')` across renders, so arrow.js patches the existing
+chunk instead of remounting it, and only a function-bound inner slot gets
+re-diffed on a patch. See `tests/drill-collapse.spec.mjs` (one and two levels
+deep).

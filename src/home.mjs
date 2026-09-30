@@ -158,7 +158,7 @@ import RelatedPanel, {
   primeAnchorThreadScroll,
 } from './RelatedPanel.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
-import { railButtonHTML } from './collapsedRail.mjs'
+import { railGroupHTML } from './collapsedRail.mjs'
 
 // COMMENT_CLAUDE_WIDE_BREAKPOINT_PX — the width at/above which
 // comment-claude-row's two halves both render at full (doubled) width
@@ -11414,7 +11414,7 @@ function setupMainOverflowObserver() {
 }
 
 // expandColumn refocuses the keyboard on an earlier column that's currently
-// collapsed to a rail (see collapsedColumnHTML) — the top-level block (level 0)
+// collapsed to a rail (see collapsedRailEntry) — the top-level block (level 0)
 // or a previously drilled-into column (level 1..drill.length). It's a direct
 // jump to the same end state as pressing ← repeatedly from the current focus
 // down to `level`: any columns drilled further right than `level` are
@@ -11520,21 +11520,26 @@ function canStepMainLeft() {
   return state.mode === 'list'
 }
 
-// collapsedColumnHTML renders the narrow rail a non-focused column shrinks to
-// once drilling has opened a column further right (see DetailPanel) — it
-// reclaims horizontal room for the focused column. `level` is the column's own
-// index in the virtual [top-level block, ...state.drill] list; clicking it
-// calls expandColumn(level) to bring the keyboard focus back onto it.
-// `drillIdx` (drilled columns only, null for the top-level rail) is exposed as
+// collapsedRailEntry builds one row descriptor for the single shared
+// collapsed-ancestor rail (see collapsedRailSlot in DetailPanel, and
+// "Unfocused columns collapse into a single shared rail" in
+// .claude/docs/drilling.md) — the entry's own `key` mirrors exactly what the
+// old, one-rail-per-level markup used to key its (now removed) standalone
+// button with, so existing DOM order/identity across a re-render is
+// unaffected. `level` is the column's own index in the virtual [top-level
+// block, ...state.drill] list; clicking the row calls expandColumn(level) to
+// bring the keyboard focus back onto it — unchanged from before. `drillIdx`
+// (drilled columns only, null for the top-level entry) is exposed as
 // data-drill-idx so it lines up with the open drill-column's own attribute.
-function collapsedColumnHTML(b, level, testid, drillIdx = null) {
-  return railButtonHTML({
+function collapsedRailEntry(b, level, testid, drillIdx = null) {
+  return {
+    key: drillIdx === null ? 'block-collapsed' : 'drill-collapsed:' + drillIdx + ':' + b.file + ':' + b.label + ':' + b.id,
     label: blockLabel(b),
     title: b.label || '',
     testid,
     dataDrillIdx: drillIdx,
     onClick: () => expandColumn(level),
-  })
+  }
 }
 
 // resolveChildBlock turns an Onderliggende-code child descriptor into the
@@ -17735,6 +17740,42 @@ function DetailPanel(state) {
         if (!row || state.focusLevel !== 0 || state.mode === 'diff' || isPrWideComposing()) return []
         return [TestMethodsColumn(state, row, toggleTestClassApproval).key('testmethods:' + row.id)]
       }}
+      ${() => {
+        // The single, shared "collapsed ancestor" rail — see "Unfocused
+        // columns collapse into a single shared rail" in
+        // .claude/docs/drilling.md. Every column to the left of whichever
+        // one currently owns the keyboard (the top-level block at level 0,
+        // plus any intermediate drilled column) used to shrink into its OWN
+        // narrow rail; with 2+ such columns that meant 2+ loose w-14 boxes
+        // side by side (reviewer report + screenshot:
+        // data/review-shots/task-combine-collapsed-rails.png). They're
+        // merged here into exactly one railGroupHTML strip, rendered once,
+        // in front of block-column — both block-column's own (now removed)
+        // rail branch and the drill-columns list's own (now removed) rail
+        // branch below contribute nothing while unfocused; this is the only
+        // place a collapsed ancestor still renders anything.
+        void state.codeVersion
+        void state.focusLevel
+        if (state.focusLevel === 0) return []
+        const entries = []
+        // The top-level block's own entry — gated on exactly the same three
+        // conditions block-column's own (now-removed) rail branch used to
+        // check: an anchored comment-index item hides it outright (its own
+        // drilled column takes this column's place, see
+        // commentAnchorColumnHidden), and a PR-wide compose/an unanchored
+        // comment-index item never has a top-level block selected at all.
+        if (!commentAnchorColumnHidden() && !isPrWideComposing() && !unanchoredCommentSelected()) {
+          const selectedBlock = state.blocks[state.selected] || {}
+          entries.push(collapsedRailEntry(selectedBlock, 0, 'block-collapsed'))
+        }
+        // Every drilled column before the focused one, in the same
+        // left-to-right (oldest-to-newest ancestor) order the separate
+        // rails used to appear in.
+        for (let i = 0; i < state.focusLevel - 1; i++) {
+          entries.push(collapsedRailEntry(state.drill[i], i + 1, 'drill-collapsed', i))
+        }
+        return entries.length ? [railGroupHTML(entries).key('collapsed-rail')] : []
+      }}
       <div
         class="${() =>
           // `hidden` (display:none), not an empty column: an empty flex child
@@ -17792,20 +17833,14 @@ function DetailPanel(state) {
         const focusedHere = state.focusLevel === 0
         // Once a drilled column owns the keyboard (focusLevel > 0, which only
         // ever happens with at least one open drill column — see
-        // expandColumn), this column no longer needs its own diff visible:
-        // collapse it to a narrow rail so the focused column gets the freed
-        // width. Stays a keyed array of one (not a bare element) so this slot
-        // never flips between a scalar and an array shape — see the
-        // single↔array arrow.js pitfall in conventions.md.
-        if (!focusedHere) {
-          // An anchored comment-index item gets no rail at all — its own
-          // drilled column takes this column's place entirely, see
-          // commentAnchorColumnHidden (which also hides the wrapper, so this
-          // empty array costs no gap).
-          if (commentAnchorColumnHidden()) return []
-          const selectedBlock = state.blocks[sel] || {}
-          return [collapsedColumnHTML(selectedBlock, 0, 'block-collapsed').key('block-collapsed')]
-        }
+        // expandColumn), this column no longer needs its own diff visible.
+        // It used to collapse to its own narrow rail here; that rail now
+        // lives merged with every other collapsed ancestor into ONE shared
+        // rail (collapsedRailSlot below, rendered once as the very first
+        // child of <main>) — see "Unfocused columns collapse into a single
+        // shared rail" in .claude/docs/drilling.md. So this slot simply has
+        // nothing of its own to render while unfocused.
+        if (!focusedHere) return []
         // The look-ahead preview is the next VISIBLE row, not the raw next
         // index — the same scan ↓ uses (previewIndexAfter/stepVisibleFrom
         // above), so the card stacked under the diff is always exactly the
@@ -18266,23 +18301,24 @@ function DetailPanel(state) {
         // card, exactly like state.change/state.gran for the top-level card.
         void state.codeVersion
         void state.focusLevel
-        return state.drill.map((b, i) => {
+        // flatMap, not map: a drilled column that no longer owns the
+        // keyboard (a deeper column has been drilled into since) used to
+        // collapse to its own rail item here — that rail now lives merged
+        // with every other collapsed ancestor into ONE shared rail
+        // (collapsedRailSlot below), so this per-item template simply
+        // contributes nothing ([]) while unfocused. This branch is plain JS
+        // inside the .flatMap() callback (not a nested reactive slot), and
+        // the whole per-item template is already rebuilt fresh whenever this
+        // outer binding re-runs (it's subscribed to focusLevel), so no new
+        // keyed-node pitfall is introduced by a varying result length either
+        // — arrow.js's keyed-list diff already tolerates items appearing/
+        // disappearing, which is exactly what this is.
+        return state.drill.flatMap((b, i) => {
           ensureCode(b)
           const level = i + 1
           const focusedHere = state.focusLevel === level
           const codeState = b.code && !b.code.error ? 'code' : b.code && b.code.error ? 'err' : 'load'
-          // A drilled column that no longer owns the keyboard (a deeper column
-          // has been drilled into since) collapses to a rail too — same
-          // reasoning as the top-level block-column above. This branch is
-          // plain JS inside the .map() callback (not a nested reactive slot),
-          // and the whole per-item template is already rebuilt fresh whenever
-          // this outer binding re-runs (it's subscribed to focusLevel), so no
-          // new keyed-node pitfall is introduced.
-          if (!focusedHere) {
-            return collapsedColumnHTML(b, level, 'drill-collapsed', i).key(
-              'drill-collapsed:' + i + ':' + b.file + ':' + b.label + ':' + b.id,
-            )
-          }
+          if (!focusedHere) return []
           // A one-shot entrance animation for a genuine "open" of this column
           // (see drillOpenMarker's own comment) — a plain, non-reactive string
           // baked once per this map() iteration, not a `${() => ...}` binding,
