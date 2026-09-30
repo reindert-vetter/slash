@@ -604,3 +604,47 @@ func TestResumeFailedContinuesFromLastGoodStep(t *testing.T) {
 }
 
 var errUnavailable = errors.New("temporarily unavailable")
+
+// TestResumeFailedInBackgroundReturnsBeforeTheStep covers the retry button's
+// path: the resumed step blocks (an LLM call queued behind a busy slot pool),
+// yet the call returns straight away with the run already back to `running`,
+// and the step still completes the run once it unblocks. A run that is not
+// failed is reported per ID, not silently dropped.
+func TestResumeFailedInBackgroundReturnsBeforeTheStep(t *testing.T) {
+	e := New(NewMemoryStore())
+	release := make(chan struct{})
+	var calls int32
+	e.RegisterActivity("slow", func(_ context.Context, in []byte) ([]byte, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return nil, errUnavailable
+		}
+		<-release
+		return nil, nil
+	})
+	e.RegisterWorkflow("one_step", func(w *Workflow, input []byte) ([]byte, error) {
+		return nil, w.ExecuteActivity("slow", nil, nil)
+	})
+	runID, err := e.StartWorkflow("one_step", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := e.Status(runID); st != StatusFailed {
+		t.Fatalf("status = %q, want failed", st)
+	}
+
+	resumed, errs := e.ResumeFailedInBackground([]string{runID, "nope"})
+	if len(resumed) != 1 || resumed[0] != runID {
+		t.Fatalf("resumed = %v, want [%s]", resumed, runID)
+	}
+	if errs["nope"] == nil || errs[runID] != nil {
+		t.Fatalf("errs = %v, want only the unknown run refused", errs)
+	}
+	if st, _ := e.Status(runID); st != StatusRunning {
+		t.Fatalf("status while the step blocks = %q, want running", st)
+	}
+	close(release)
+	e.Wait()
+	if st, _ := e.Status(runID); st != StatusCompleted {
+		t.Fatalf("status after the step = %q, want completed", st)
+	}
+}

@@ -54,12 +54,30 @@ about PRs, blocks, or gh; keep it that way.
   (implemented in all four stores; the JSONL one rewrites its events file via
   temp+rename, the single place that store is not append-only). Test:
   `TestResumeFailedContinuesFromLastGoodStep`.
+- **`Engine.ResumeFailedInBackground(runIDs)`** is the same resume split in
+  two: the validate/cut/`running` half runs synchronously per run (a refused
+  one comes back in the per-ID error map), the drive happens afterwards in ONE
+  `e.wg`-tracked goroutine, **serially**. This is what slash's retry endpoints
+  actually call. Why: the plain `ResumeFailed` drove the failed step inline,
+  and for a `resolve_call` that step is an LLM call behind the process-wide
+  four-slot `resolveCallSemaphore`. Right after a restart `Recover` has
+  hundreds of those runs queued on the same pool, so "Alles opnieuw proberen"
+  sat on "Bezig met opnieuw proberen…" for as long as that whole backlog took.
+  Serial rather than all at once, because a burst is the SQLITE_BUSY storm that
+  caused most of these failures in the first place. Test:
+  `TestResumeFailedInBackgroundReturnsBeforeTheStep`.
 - **Storage** via `Store`: `MemoryStore`, `JSONLStore` (one readable file per
   run), `SQLiteStore` (pure-Go `modernc.org/sqlite`), and `MultiStore` to
   combine them. slash runs `MultiStore(SQLite data/workflows.db, JSONL
   data/workflows/)`, so a comment lives both in history and as jsonl.
 - **Recovery:** `engine.Recover()` at startup re-drives every
   `running`/`waiting` run — **prioritised**, see below.
+- **Start is two writes, repaired on the next request:** `startWorkflowID` does
+  `CreateRun` then `AppendEvent(WorkflowStarted)`, not transactionally. If the
+  second fails the run has no input; a repeat `StartWorkflowID` with the same
+  (deterministic) ID now truncates that history and rewrites the start event
+  instead of reusing it. `advanceLoaded` fails such a run with "has no start
+  input" (never nil input -> JSON error), and retry reports the same reason.
 - Tests: `tembed/*_test.go`.
 
 ## Recovery priority (don't let slow LLM work block startup)

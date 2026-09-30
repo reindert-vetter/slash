@@ -1172,10 +1172,12 @@ item, so one click can't queue two Executions.
 
 **"Opnieuw proberen" = RESUME the failed run from its last successful step.**
 `POST /api/workflows/retry {runId}` → `handleRetryRun` (`tasks_api.go`) →
-`TaskManager.RetryRun` (`run_errors.go`) → `Engine.ResumeFailed`
+`TaskManager.RetryRun` (`run_errors.go`) → `Engine.ResumeFailedInBackground`
 (`tembed/engine.go`): the run's **failure tail** (the terminal
 `WorkflowFailed` plus the contiguous failure events before it) is cut off its
-history, the run goes back to `running` and is advanced. Every surviving event
+history, the run goes back to `running`, the request returns, and the run is
+advanced in the background (never inline — see that method in
+`.claude/docs/tembed-workflows.md`). Every surviving event
 keeps its seq, so replay reuses every recorded activity result — no side effect
 is repeated — and only the step that failed is reached live again (which is why
 an Activity has to be idempotent, the standing assumption anyway). The

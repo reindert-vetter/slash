@@ -121,8 +121,8 @@ func retryableWorkflow(workflow string) bool {
 //     that returned the very same failed run, so those rows could not be
 //     retried at all.
 //
-// Engine.ResumeFailed cuts the failure tail off the run's history, puts it back
-// to `running` and advances it, so replay reuses every recorded activity result
+// Engine.ResumeFailedInBackground cuts the failure tail off the run's history,
+// puts it back to `running` and advances it in the background, so replay reuses every recorded activity result
 // and only the step that failed runs live again. That step must be idempotent,
 // which is the standing assumption for every Activity anyway.
 //
@@ -150,8 +150,8 @@ func (m *TaskManager) RetryRun(runID string) (string, error) {
 	if !retryableWorkflow(rec.Workflow) {
 		return "", fmt.Errorf("retry: workflow %q cannot be retried", rec.Workflow)
 	}
-	if err := m.engine.ResumeFailed(runID); err != nil {
-		return "", fmt.Errorf("retry: %w", err)
+	if _, errs := m.engine.ResumeFailedInBackground([]string{runID}); errs[runID] != nil {
+		return "", fmt.Errorf("retry: %w", errs[runID])
 	}
 	return runID, nil
 }
@@ -159,27 +159,31 @@ func (m *TaskManager) RetryRun(runID string) (string, error) {
 // RetryAllFailed retries every failure currently on the list — i.e. exactly
 // the rows GET /api/problems shows, so within problemWindow — and reports how
 // many were resumed and how many could not be (a retired Workflow Type, or a
-// run that failed again straight away). Behind the "Alles opnieuw proberen"
+// run the engine refused to resume). Behind the "Alles opnieuw proberen"
 // button of the global failed-tasks popup.
 //
-// Serially, deliberately: each RetryRun drives its run inline (through the
-// engine's own per-run lock), and firing dozens of side-effecting Activities at
-// once is exactly the SQLITE_BUSY storm that produced most of these failures in
-// the first place.
+// Both RetryRun and this return as soon as the runs are PREPARED (failure tail
+// cut, status back to `running`); the engine drives them on in the background,
+// one after another — see Engine.ResumeFailedInBackground for why neither
+// inline (the button spun for as long as the post-restart LLM backlog took)
+// nor all at once (the SQLITE_BUSY storm that produced most of these failures
+// in the first place).
 func (m *TaskManager) RetryAllFailed() (retried int, skipped int) {
+	var ids []string
 	for _, f := range m.FailedRuns(0) {
 		if !f.Retryable {
 			skipped++
 			continue
 		}
-		if _, err := m.RetryRun(f.RunID); err != nil {
-			m.logf("retry all: run %s: %v", f.RunID, err)
-			skipped++
-			continue
-		}
-		retried++
+		ids = append(ids, f.RunID)
 	}
-	return retried, skipped
+	resumed, errs := m.engine.ResumeFailedInBackground(ids)
+	for _, id := range ids {
+		if err := errs[id]; err != nil {
+			m.logf("retry all: run %s: %v", id, err)
+		}
+	}
+	return len(resumed), skipped + len(errs)
 }
 
 // perItemRunID lists the Workflow Types started through StartWorkflowID with a

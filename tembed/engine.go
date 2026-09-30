@@ -855,6 +855,65 @@ func (e *Engine) ResumeFailed(runID string) error {
 	l.Lock()
 	defer l.Unlock()
 
+	if err := e.prepareResumeLocked(runID); err != nil {
+		return err
+	}
+	e.advance(runID)
+	return nil
+}
+
+// ResumeFailedInBackground is ResumeFailed for a caller that must not block on
+// the resumed step itself — an HTTP handler behind a "retry" button. It does
+// the cheap, validating half (the checks, the failure-tail cut, the status
+// flip to `running`) synchronously for every run, so a refused run is reported
+// right away and a refetch of the failed list no longer shows an accepted one;
+// the accepted runs are then driven forward one after another in a single
+// background goroutine (tracked by e.wg).
+//
+// Why not inline: the failed step is often an LLM call behind a process-wide
+// slot pool (resolve_call's four-slot semaphore), and right after a restart
+// Recover has hundreds of runs queued on that same pool — driving the retry
+// inline kept the reviewer's "Bezig met opnieuw proberen…" spinning for as
+// long as that whole backlog took. Serial, deliberately: firing every resumed
+// run at once is the SQLITE_BUSY storm that produced most of these failures.
+//
+// A run whose preparation succeeded but whose drive has not started yet is
+// just an ordinary `running` run: a restart in between hands it to Recover.
+func (e *Engine) ResumeFailedInBackground(runIDs []string) (resumed []string, errs map[string]error) {
+	errs = map[string]error{}
+	for _, id := range runIDs {
+		l := e.runLock(id)
+		l.Lock()
+		err := e.prepareResumeLocked(id)
+		l.Unlock()
+		if err != nil {
+			errs[id] = err
+			continue
+		}
+		resumed = append(resumed, id)
+	}
+	if len(resumed) == 0 {
+		return resumed, errs
+	}
+	ids := append([]string(nil), resumed...)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		for _, id := range ids {
+			l := e.runLock(id)
+			l.Lock()
+			e.advance(id)
+			l.Unlock()
+		}
+	}()
+	return resumed, errs
+}
+
+// prepareResumeLocked is the synchronous half of ResumeFailed: validate, cut
+// the failure tail, flip the run back to `running` and relaunch any async
+// activity whose result was cut away. The caller holds the run lock and
+// advances the run afterwards.
+func (e *Engine) prepareResumeLocked(runID string) error {
 	rec, hist, err := e.store.LoadRun(runID)
 	if err != nil {
 		return err
@@ -884,7 +943,6 @@ func (e *Engine) ResumeFailed(runID string) error {
 	if _, fresh, err := e.store.LoadRun(runID); err == nil {
 		e.resumePendingAsync(runID, fresh)
 	}
-	e.advance(runID)
 	return nil
 }
 

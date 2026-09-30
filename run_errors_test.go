@@ -312,6 +312,7 @@ func TestRetryRunResumesFromLastGoodStep(t *testing.T) {
 	if sameID != failedID {
 		t.Fatalf("RetryRun returned %q, want the same run %q — it resumes, it does not start a new run", sameID, failedID)
 	}
+	engine.Wait() // RetryRun drives the resumed run in the background
 	if status, _ := engine.Status(failedID); status != tembed.StatusCompleted {
 		t.Fatalf("run status after the retry = %q, want completed", status)
 	}
@@ -346,6 +347,7 @@ func TestRetryRunResumesFromLastGoodStep(t *testing.T) {
 	if _, err := m.RetryRun(perItemID); err != nil {
 		t.Fatalf("RetryRun on a per-item Run ID: %v", err)
 	}
+	engine.Wait()
 	if status, _ := engine.Status(perItemID); status != tembed.StatusCompleted {
 		t.Fatalf("per-item run status after the retry = %q, want completed", status)
 	}
@@ -392,6 +394,7 @@ func TestRetryAllFailedResumesEveryRow(t *testing.T) {
 	if retried != 3 || skipped != 0 {
 		t.Fatalf("RetryAllFailed = %d retried / %d skipped, want 3/0", retried, skipped)
 	}
+	engine.Wait()
 	if got := m.FailedRuns(0); len(got) != 0 {
 		t.Fatalf("FailedRuns after retrying everything = %+v, want none", got)
 	}
