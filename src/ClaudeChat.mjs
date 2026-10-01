@@ -19,7 +19,7 @@
 // single nested template instead of a keyed list item).
 import { html, reactive } from './vendor/arrow.js'
 import { avatarHTML } from './avatar.mjs'
-import { renderMarkdown, hardBreaks } from './markdown.mjs'
+import { renderMarkdown, hardBreaks, closeOpenFence } from './markdown.mjs'
 import { autoGrowTextarea, resetTextareaHeight } from './textareaAutoGrow.mjs'
 // The "Opnemen…"/"Uitschrijven…" pill for F5 push-to-talk dictation. It lives
 // in the composer row because that is where the transcript lands — one import
@@ -456,6 +456,12 @@ function claudeGeneratingPill() {
 function claudePartialBubble(view) {
   const p = view.progress()
   if (!p || !p.partial) return ''
+  // The real message has landed (turn over, newer assistant message stored):
+  // never show the same answer twice during the keep-visible overlap window.
+  if (!p.running) {
+    const last = view.messages().slice(-1)[0]
+    if (last && last.role === 'assistant' && Date.parse(last.createdAt) >= (p.startedAt || 0)) return ''
+  }
   const trimmed = p.partial.trim()
   const needWrite = trimmed.startsWith(NEED_WRITE_PARTIAL_PREFIX)
   const generating = !needWrite && trimmed.startsWith(GENERIC_DIRECTIVE_PARTIAL_PREFIX)
@@ -473,9 +479,9 @@ function claudePartialBubble(view) {
           : generating
             ? claudeGeneratingPill()
             : html`<div
-                class="markdown-body max-w-[92%] rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/40 dark:text-zinc-300"
+                class="markdown-body max-w-[92%] rounded-xl border border-slate-300 bg-slate-100 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300"
                 data-testid="claude-partial-body"
-                .innerHTML="${() => renderMarkdown(p.partial, 0, true)}"
+                .innerHTML="${() => renderMarkdown(closeOpenFence(p.partial), 0, true)}"
               ></div>`}
     </div>
   `
