@@ -390,7 +390,7 @@ function previewCard(it, active, expanded, onToggle) {
           it.context
             ? html`<span
                 class="${() =>
-                  'markdown-body [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' +
+                  'markdown-body [overflow-wrap:anywhere] [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300 ' +
                   (expanded() ? '' : 'truncate')}"
                 data-testid="code-preview-context"
                 .innerHTML="${() => renderMarkdown(it.context)}"
@@ -428,7 +428,7 @@ function previewCard(it, active, expanded, onToggle) {
                 // tekst ook zien", so nothing typed after the code is lost.
                 it.trailing
                   ? html`<span
-                      class="markdown-body [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300"
+                      class="markdown-body [overflow-wrap:anywhere] [&_p]:inline text-xs leading-relaxed text-slate-700 dark:text-zinc-300"
                       data-testid="code-preview-trailing"
                       .innerHTML="${() => renderMarkdown(it.trailing)}"
                     ></span>`.key('trailing')

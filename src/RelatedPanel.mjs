@@ -6109,7 +6109,9 @@ export function CodePreviewPanel(state, commentTarget, opts = {}) {
             // throws in one real session, .claude/rules/arrowjs-pitfalls.md).
             (it) => isPreviewExpanded(it),
             toggleCodePreviewExpanded,
-            () => commentClaudeRowWidthCls(state),
+            // The overlay has no comment-claude-row to bound against (its own
+            // width fallback was a narrow tree column) - give previews ~3x.
+            opts.inOverlay ? () => 'w-full max-w-[760px]' : () => commentClaudeRowWidthCls(state),
           )
         : ''}
   </div>`

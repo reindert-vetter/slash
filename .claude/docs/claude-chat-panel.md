@@ -5663,3 +5663,7 @@ in `general-chat-card`, so it used to scan nothing and the overlay's right-hand
 previews column stayed empty. In overlay mode it now scans `general-chat-card`
 instead, and `ensureOverlayPreviewObserver` gives that card its own MutationObserver
 (re-attached per open, the card is a fresh element each time).
+
+The overlay's preview column is a fixed `w-full max-w-[760px]` (the tree's
+`commentClaudeRowWidthCls` fell back to a narrow ~250px tree column there), and
+the card prose carries `[overflow-wrap:anywhere]` so long identifiers wrap.
