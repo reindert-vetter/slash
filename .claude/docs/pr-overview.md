@@ -952,7 +952,13 @@ inline reviewer checklist (`data-testid=ready-picker`, repo collaborators sorted
 usage count) and on success closes the popover and calls `reloadSnapshot()` so
 the row leaves "Your drafts" without waiting for the 60s poll. The flow state
 lives on `ui` (`readyFor`/`reviewers`/`selectedReviewers`/…, ephemeral) and
-resets on every `togglePopover`/`closePopover`. See `ready_for_review` +
+resets on every `togglePopover`/`closePopover`.
+The picker opens with focus in a search input (`data-testid=ready-search`,
+`ui.reviewerQuery`) that filters on real name **or** login; Enter toggles the
+top match, ↓ jumps into the list, Esc closes (the input `stopPropagation`s
+first, see the nested-`@keydown` rule). Rows show `fullNameOf(login)` plus the
+login; `ensureNames` is awaited in `openReadyPicker` before the rows render.
+See `ready_for_review` +
 `modules/reviewerusage` in `.claude/docs/workflows-trackers.md`.
 
 ### The remaining items

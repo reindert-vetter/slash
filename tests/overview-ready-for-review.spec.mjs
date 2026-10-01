@@ -92,4 +92,53 @@ test.describe('PR Review Tree — ready for review', () => {
     resolveReady()
     await expect.poll(() => readyCalls).toBe(1)
   })
+
+  test('picker focuses a search box that filters on real name and login, Enter toggles the top match', async ({ page }) => {
+    await page.route('**/api/inbox', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true, live: true, repo: 'blog-org/blog-platform', generatedFor: 'reindert-vetter', runId: '',
+          sections: [{ title: 'Your drafts', prs: [{
+            number: 90211, title: 'Draft: search', author: 'reindert-vetter', updatedAt: '2026-07-11T08:00:00Z',
+            url: 'https://github.com/blog-org/blog-platform/pull/90211', isDraft: true, baseRefName: 'develop',
+            headRefName: 'feature/s', additions: 1, deletions: 1, changedFiles: 1, comments: 0, hasGraph: false,
+          }] }],
+        }),
+      })
+    })
+    await page.route('**/api/reviewers', (route) =>
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ ok: true, reviewers: [
+          { login: 'alice-gh', avatarUrl: '', count: 2 },
+          { login: 'bob-gh', avatarUrl: '', count: 1 },
+        ] }),
+      }))
+    await page.route('**/api/names**', (route) =>
+      route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ ok: true, names: { 'alice-gh': { name: 'Alice Wonder' }, 'bob-gh': { name: 'Bob Builder' } } }),
+      }))
+    await page.goto('/pr-overview')
+    await appReady(page)
+    await page.locator('[data-testid="pr-row"][data-pr="90211"]').click()
+    await page.locator('[data-testid="pr-popover"] [data-testid="ready-for-review"]').click()
+
+    const search = page.locator('[data-testid="ready-search"]')
+    await expect(search).toBeFocused()
+    await expect(page.locator('[data-testid="reviewer-alice-gh"]')).toContainText('Alice Wonder')
+    await expect(page.locator('[data-testid="reviewer-alice-gh"]')).toContainText('alice-gh')
+
+    await page.keyboard.type('builder')
+    await expect(page.locator('[data-testid="reviewer-alice-gh"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="reviewer-bob-gh"]')).toBeVisible()
+    await search.fill('ALICE-g')
+    await expect(page.locator('[data-testid="reviewer-bob-gh"]')).toHaveCount(0)
+    await page.keyboard.press('Enter')
+    await expect(page.locator('[data-testid="reviewer-alice-gh"] svg')).toHaveCount(1)
+    await page.keyboard.press('Enter')
+    await expect(page.locator('[data-testid="reviewer-alice-gh"] svg')).toHaveCount(0)
+  })
 })

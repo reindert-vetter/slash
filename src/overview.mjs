@@ -158,7 +158,7 @@ const state = reactive({
 // a popover that's clipped off-screen.
 const ui = reactive({
   openPopover: null, ingestingByPr: {}, ingestStageByPr: {}, ingestError: null, ingestErrorFor: null, copiedFor: null,
-  readyFor: null, reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
+  readyFor: null, reviewerQuery: '', reviewers: [], reviewersLoading: false, reviewersError: null, selectedReviewers: {}, readySubmitting: false,
   removingReviewer: null, removeReviewerError: null,
   // snoozeFor: the prUid whose snooze options are expanded in the popover;
   // snoozeBusy: a pr_snooze Signal in flight; snoozeError: its last failure.
@@ -1712,17 +1712,59 @@ function clearPresetView() {
 async function openReadyPicker(pr) {
   ui.readyFor = prUid(pr)
   ui.selectedReviewers = {}
+  ui.reviewerQuery = ''
   ui.reviewersError = null
   ui.reviewersLoading = true
+  // The picker mounts synchronously with readyFor; focus its search box once
+  // the DOM is there so the reviewer can type right away.
+  setTimeout(() => {
+    const el = document.querySelector('[data-testid="ready-search"]')
+    if (el) el.focus()
+  }, 0)
   try {
     const res = await fetch('/api/reviewers')
     const body = await res.json()
-    ui.reviewers = (body && body.reviewers) || []
+    const list = (body && body.reviewers) || []
+    // Real names must be known BEFORE the rows render (plain non-reactive
+    // Map, a late arrival would never repaint a keyed row).
+    await ensureNames(list.map((r) => r.login))
+    ui.reviewers = list
   } catch (e) {
     ui.reviewersError = t('Kon reviewers niet laden')
     ui.reviewers = []
   } finally {
     ui.reviewersLoading = false
+  }
+}
+
+// visibleReviewers filters the candidates by the search box, matching both
+// the real name and the login (case-insensitive substring).
+function visibleReviewers() {
+  const q = ui.reviewerQuery.trim().toLowerCase()
+  if (!q) return ui.reviewers
+  return ui.reviewers.filter(
+    (rv) => rv.login.toLowerCase().includes(q) || (fullNameOf(rv.login) || '').toLowerCase().includes(q),
+  )
+}
+
+// onReviewerSearchKey: the input owns its keys. stopPropagation FIRST so the
+// document-level popover handler never reinterprets the event.
+function onReviewerSearchKey(e) {
+  e.stopPropagation()
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    const first = visibleReviewers()[0]
+    if (first) toggleReviewer(first.login)
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    closePopover()
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    const pick = document.querySelector('[data-testid="ready-picker"] [data-reviewer-row]')
+    ;(pick || document.querySelector('[data-testid="ready-confirm"]'))?.focus()
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    document.querySelector('[data-testid="ready-confirm"]')?.focus()
   }
 }
 
@@ -1783,14 +1825,23 @@ function readyForReviewSection(pr) {
       return [
         html`<div data-testid="ready-picker">
           <p class="px-2.5 py-1 text-[10.5px] font-medium uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Kies reviewers')}</p>
+          <input
+            type="text"
+            data-testid="ready-search"
+            placeholder="${t('Zoek reviewer…')}"
+            class="mx-1 mb-1 w-[calc(100%-0.5rem)] rounded-md border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-[12px] text-slate-800 dark:text-zinc-100 outline-none focus:ring-2 focus:ring-indigo-500/50"
+            @input="${(e) => (ui.reviewerQuery = e.target.value)}"
+            @keydown="${onReviewerSearchKey}"
+          />
           ${() => (ui.reviewersLoading ? html`<p class="px-2.5 py-1 text-[11px] text-slate-500 dark:text-zinc-400">${t('Laden…')}</p>` : '')}
           ${() => (ui.reviewersError ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="ready-error">${ui.reviewersError}</p>` : '')}
           <div class="max-h-48 overflow-auto">
             ${() =>
-              ui.reviewers.map(
+              visibleReviewers().map(
                 (rv) =>
                   html`<button
                     type="button"
+                    data-reviewer-row="1"
                     data-testid="${'reviewer-' + rv.login}"
                     class="${() =>
                       POPOVER_ROW_SHAPE +
@@ -1801,11 +1852,12 @@ function readyForReviewSection(pr) {
                     @click="${() => toggleReviewer(rv.login)}"
                   >
                     <span class="inline-flex h-3.5 w-3.5 items-center justify-center">${() => (ui.selectedReviewers[rv.login] ? icon('check', 'h-3.5 w-3.5') : '')}</span>
-                    <span class="flex-1 truncate">${rv.login}</span>
+                    <span class="flex-1 truncate">${fullNameOf(rv.login) || rv.login}${() => (fullNameOf(rv.login) ? html`<span class="ml-1.5 text-[10.5px] text-slate-400 dark:text-zinc-500">${rv.login}</span>` : '')}</span>
                     ${rv.count > 0 ? html`<span class="text-[10px] text-slate-400 dark:text-zinc-500">${rv.count}×</span>` : ''}
                   </button>`.key('rv:' + rv.login),
               )}
           </div>
+          ${() => (!ui.reviewersLoading && ui.reviewers.length && !visibleReviewers().length ? html`<p class="px-2.5 py-1 text-[11px] text-slate-500 dark:text-zinc-400" data-testid="ready-none">${t('Geen reviewers gevonden')}</p>` : '')}
           <button
             type="button"
             data-testid="ready-confirm"

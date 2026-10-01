@@ -392,6 +392,8 @@ export const EN = {
   'Verwijderen mislukt': 'Removing failed',
   'Verwijder mij als reviewer': 'Remove myself as reviewer',
   'Kon reviewers niet laden': 'Could not load reviewers',
+  'Zoek reviewer…': 'Search reviewer…',
+  'Geen reviewers gevonden': 'No reviewers found',
   'Omzetten mislukt': 'Converting failed',
   'Kies reviewers': 'Choose reviewers',
   'Zet om naar review': 'Convert to review',
