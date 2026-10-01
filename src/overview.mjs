@@ -241,6 +241,12 @@ const ICON_PATHS = {
   // 'refresh-cw' — the manual per-category "Refresh" button above a PR
   // section and above the Planning section (refreshButton). Lucide's own
   // refresh-cw, same 24x24/stroke-2 set.
+  // 'database' / 'plug' — the "DB" (migrations changed) and "API"
+  // (route/controller/request/resource changed) title badges (touchBadges).
+  // Lucide's own database and plug, same 24x24/stroke-2 set.
+  database:
+    '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+  plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
   'refresh-cw':
     '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
 }
@@ -954,6 +960,35 @@ function connectorMark() {
 // 2.5rem, which is also what pulled the comments/approval numbers so far
 // left of the AI button: that empty 6.5rem was reserved for a label that
 // was never actually rendered there.
+// touchBadges — the "DB" / "API" badges next to a row's title: the PR changes
+// a migration resp. a route/controller/request/resource file
+// (migrationFiles/apiFiles from the inbox status backfill, classified by
+// classifyTouched in inbox.go). Icon AND word carry the meaning, never the
+// colour (user_colorblind.md); the tooltip names the files. Search rows and
+// the recent drawer carry no such fields, so they show nothing. Always a
+// keyed array (0–2 items) so the slot never flips single↔array.
+function touchBadges(pr) {
+  const st = statusFor(pr)
+  if (!st) return []
+  const out = []
+  const badge = (files, word, iconName, label, testid) => {
+    if (!files || !files.length) return
+    const title = label + ': ' + files.join(', ')
+    out.push(
+      html`<span
+        class="inline-flex shrink-0 items-center gap-1 rounded-md bg-slate-100 dark:bg-zinc-800 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-600 dark:text-zinc-300 ring-1 ring-inset ring-slate-300 dark:ring-zinc-700"
+        data-testid="${testid}"
+        title="${title}"
+        aria-label="${title}"
+        >${icon(iconName, 'h-3 w-3')}<span>${word}</span></span
+      >`.key(testid + ':' + files.join(',')),
+    )
+  }
+  badge(st.migrationFiles, 'DB', 'database', t('Migraties aangepast'), 'touch-migrations')
+  badge(st.apiFiles, 'API', 'plug', t('Route/controller/request/resource aangepast'), 'touch-api')
+  return out
+}
+
 function rowInner(pr, opts) {
   return [
     opts.depth ? connectorMark() : null,
@@ -962,6 +997,7 @@ function rowInner(pr, opts) {
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${pr.title}</h3>
+          <div class="contents">${() => touchBadges(pr)}</div>
         </div>
         ${rowMeta(pr, opts)}
       </div>
@@ -3040,7 +3076,10 @@ function mainContent() {
           const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)) && !activeSnooze(pr))
           const block = sectionBlock(sec, filtered)
           if (block) out.push(block)
-          if (block && sec.title === 'Needs your review') issuesAt = out.length
+          // "Migrations & API changes" sits directly under "Needs your
+          // review" (it follows it in the inbox order), so Planning goes
+          // after it rather than between the two.
+          if (block && (sec.title === 'Needs your review' || (sec.title === 'Migrations & API changes' && issuesAt >= 0))) issuesAt = out.length
         })
         const issueBlocks = jiraIssueBlocks()
         if (issueBlocks.length) {

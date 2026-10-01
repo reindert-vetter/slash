@@ -430,6 +430,8 @@ export const EN = {
   "PR's ouder dan 3 dagen (per auteur)": 'PRs older than 3 days (per author)',
   'Terug naar inbox': 'Back to inbox',
   'Even geen open pull requests.': 'No open pull requests right now.',
+  'Migraties aangepast': 'Migrations changed',
+  'Route/controller/request/resource aangepast': 'Route/controller/request/resource changed',
   '{n} blok': '{n} block',
   '{n} blokken': '{n} blocks',
   '{n} bestand': '{n} file',

@@ -66,6 +66,13 @@ type prStatus struct {
 	// NewSinceAt: the review tree renders that exact line and has no other
 	// source for it (prmeta's own updated_at is the local write time).
 	UpdatedAt string `json:"updatedAt,omitempty"`
+	// MigrationFiles / APIFiles are the PR's changed paths that classifyTouched
+	// marks as a migration resp. a route/controller/request/resource file —
+	// behind the overview's "DB"/"API" title badges and the
+	// "Migrations & API changes" section. Only the first 100 changed files are
+	// inspected (statusesFor's files(first: 100)), so a huge PR can miss one.
+	MigrationFiles []string `json:"migrationFiles,omitempty"`
+	APIFiles       []string `json:"apiFiles,omitempty"`
 }
 
 // inboxRow is one PR in the inbox. The status fields carry the heavy data and
@@ -131,6 +138,8 @@ type queryDef struct {
 	q     string
 	light bool
 	keep  func(r inboxRow, login string) bool
+	// limit overrides inboxLimit for this one query (0 = inboxLimit).
+	limit int
 }
 
 // sectionDef defines a section and the queries that fill it. A PR lands in the
@@ -178,7 +187,24 @@ var inboxSections = []sectionDef{
 			return false
 		}},
 	}},
+	// Every open PR (drafts included) that sits in none of the sections above
+	// but touches a migration or the API surface. The query is only the
+	// CANDIDATE set — the ~100 most recently updated open PRs; the cross-section
+	// de-dupe drops the ones already listed, and filterTouchedSection (after
+	// statusesFor has fetched each PR's changed files) drops every candidate
+	// that touches neither.
+	{title: touchedSectionTitle, queries: []queryDef{
+		{q: "is:pr state:open archived:false", light: true, limit: touchedCandidateLimit},
+	}},
 }
+
+// touchedSectionTitle is the section of PRs that only qualify because they
+// change a migration or a route/controller/request/resource file.
+const touchedSectionTitle = "Migrations & API changes"
+
+// touchedCandidateLimit is how many recently updated open PRs the
+// touchedSectionTitle query considers (GitHub search caps `first` at 100).
+const touchedCandidateLimit = 100
 
 const inboxLimit = 40
 
@@ -219,7 +245,14 @@ type ghPRNode struct {
 	Additions    int    `json:"additions"`
 	Deletions    int    `json:"deletions"`
 	ChangedFiles int    `json:"changedFiles"`
-	Author       struct {
+	// Files is only requested by statusesFor (first 100 changed paths), for
+	// classifyTouched.
+	Files struct {
+		Nodes []struct {
+			Path string `json:"path"`
+		} `json:"nodes"`
+	} `json:"files"`
+	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	// Repository names the repo a search hit came from — the search spans every
@@ -364,7 +397,7 @@ func ghGraphQL(ctx context.Context, query string, vars ...string) (json.RawMessa
 
 // searchPRs runs one GitHub search and maps the nodes to rows.
 func searchPRs(ctx context.Context, expr string, light bool) ([]inboxRow, error) {
-	return runPRSearch(ctx, expr+" sort:updated-desc", light)
+	return runPRSearchN(ctx, expr+" sort:updated-desc", light, inboxLimit)
 }
 
 // searchPRsExpr runs a search whose expr already carries its own sort: (and any
@@ -381,6 +414,11 @@ func searchPRsExpr(ctx context.Context, expr string, light bool) ([]inboxRow, er
 // nodes to rows. The caller owns everything after the repo scope (including
 // sort:).
 func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, error) {
+	return runPRSearchN(ctx, expr, light, inboxLimit)
+}
+
+// runPRSearchN is runPRSearch with an explicit result cap.
+func runPRSearchN(ctx context.Context, expr string, light bool, limit int) ([]inboxRow, error) {
 	fields := lightFields
 	if !light {
 		fields = lightFields + heavyFields
@@ -391,7 +429,7 @@ func runPRSearch(ctx context.Context, expr string, light bool) ([]inboxRow, erro
 		}
 	}`, fields)
 	full := repoSearchScope() + " " + expr
-	data, err := ghGraphQL(ctx, query, "-f", "q="+full, "-F", "n="+strconv.Itoa(inboxLimit))
+	data, err := ghGraphQL(ctx, query, "-f", "q="+full, "-F", "n="+strconv.Itoa(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -565,6 +603,11 @@ func statusFromNode(n ghPRNode, login string, fullyApprovedAt string) prStatus {
 		}
 	}
 	st.UpdatedAt = n.UpdatedAt
+	paths := make([]string, 0, len(n.Files.Nodes))
+	for _, f := range n.Files.Nodes {
+		paths = append(paths, f.Path)
+	}
+	st.MigrationFiles, st.APIFiles = classifyTouched(paths)
 	at, kind := myLastActivity(n, login)
 	at, kind = combineSinceMoment(at, kind, fullyApprovedAt)
 	if at != "" && afterRFC3339(n.UpdatedAt, at) {
@@ -831,7 +874,11 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 		go func(i int, ref qref) {
 			defer wg.Done()
 			qd := inboxSections[ref.sec].queries[ref.q]
-			rows, err := searchPRs(ctx, qd.q, qd.light)
+			limit := qd.limit
+			if limit == 0 {
+				limit = inboxLimit
+			}
+			rows, err := runPRSearchN(ctx, qd.q+" sort:updated-desc", qd.light, limit)
 			if err != nil {
 				errs[i] = err
 				return
@@ -900,6 +947,27 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 // combineSinceMoment) — nil is fine (offline/test callers), it then simply
 // never folds a local approval moment in.
 func statusesFor(ctx context.Context, keys []prKey, pm *prmeta.Module) (map[string]prStatus, error) {
+	// Chunked: with the "Migrations & API changes" candidates the inbox can
+	// hold well over 100 PRs, each carrying files(first: 100) + reviews — one
+	// query for all of them risks GitHub's GraphQL resource limits.
+	out := map[string]prStatus{}
+	for start := 0; start < len(keys); start += statusChunk {
+		end := min(start+statusChunk, len(keys))
+		part, err := statusesForChunk(ctx, keys[start:end], pm)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range part {
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
+// statusChunk is how many PRs statusesFor puts in one aliased query.
+const statusChunk = 50
+
+func statusesForChunk(ctx context.Context, keys []prKey, pm *prmeta.Module) (map[string]prStatus, error) {
 	if len(keys) == 0 {
 		return map[string]prStatus{}, nil
 	}
@@ -927,7 +995,7 @@ func statusesFor(ctx context.Context, keys []prKey, pm *prmeta.Module) (map[stri
 			// this query otherwise skips) — myLastActivity/afterRFC3339 need it
 			// to decide whether anything happened since the reviewer's own last
 			// comment/review.
-			b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state updatedAt %s }\n", num, num, heavyFields))
+			b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state updatedAt files(first: 100) { nodes { path } } %s }\n", num, num, heavyFields))
 		}
 		b.WriteString(" }\n")
 	}
@@ -1080,6 +1148,7 @@ func buildInboxSnapshot(ctx context.Context, db *sql.DB, pm *prmeta.Module) (*sn
 		// A status failure is non-fatal — serve the rows, skip the pills.
 		statuses = map[string]prStatus{}
 	}
+	sections = filterTouchedSection(sections, statuses)
 	return &snapshotResult{
 		GeneratedFor: ghLogin(ctx),
 		Sections:     sections,
@@ -1139,4 +1208,74 @@ func eligibleAutoIngestPRs(mode string, myLogin string, sections []inboxSection)
 		}
 	}
 	return out
+}
+
+// classifyTouched splits a PR's changed paths into migration files and API
+// files (route/controller/request/resource), matched on directory segments,
+// case-insensitively, so both the Laravel app layout and the nwidart modules
+// count:
+//
+//   - migration: any `migrations` segment (database/migrations/,
+//     modules/X/Database/Migrations/).
+//   - route: `routes/` as the first segment, or any `Routes` segment
+//     (modules/X/Routes/, modules/X/Http/Routes/).
+//   - controller/request/resource: an `Http/Controllers`, `Http/Requests` or
+//     `Http/Resources` segment pair. A bare modules/X/Resources/ is NOT an API
+//     resource (nwidart puts views/lang there), hence the `Http/` requirement.
+//
+// Anything with a `tests` segment is ignored.
+func classifyTouched(paths []string) (migrations, api []string) {
+	for _, p := range paths {
+		segs := strings.Split(strings.ToLower(p), "/")
+		dirs := segs[:len(segs)-1]
+		isTest, isMig, isAPI := false, false, false
+		for i, d := range dirs {
+			switch d {
+			case "tests":
+				isTest = true
+			case "migrations":
+				isMig = true
+			case "routes":
+				isAPI = true
+			case "controllers", "requests", "resources":
+				if i > 0 && dirs[i-1] == "http" {
+					isAPI = true
+				}
+			}
+		}
+		if isTest {
+			continue
+		}
+		if isMig {
+			migrations = append(migrations, p)
+		}
+		if isAPI {
+			api = append(api, p)
+		}
+	}
+	return migrations, api
+}
+
+// filterTouchedSection keeps only the touchedSectionTitle rows whose status
+// lists a migration or API file, and drops the statuses of the candidates it
+// removes (they belong to no section any more). An empty statuses map (the
+// status fetch failed) empties the section rather than listing every
+// candidate unfiltered.
+func filterTouchedSection(sections []inboxSection, statuses map[string]prStatus) []inboxSection {
+	for i, s := range sections {
+		if s.Title != touchedSectionTitle {
+			continue
+		}
+		kept := make([]inboxRow, 0, len(s.PRs))
+		for _, r := range s.PRs {
+			st := statuses[rowKey(r)]
+			if len(st.MigrationFiles) > 0 || len(st.APIFiles) > 0 {
+				kept = append(kept, r)
+			} else {
+				delete(statuses, rowKey(r))
+			}
+		}
+		sections[i].PRs = kept
+	}
+	return sections
 }

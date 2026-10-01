@@ -793,6 +793,40 @@ marge"): two things the first pass got wrong.
   Shrunk to 2.5rem — icon-only content, no risk of a busy label clipping,
   since no state of this chip ever prints one.
 
+## "DB"/"API" title badges and the "Migrations & API changes" section
+
+Reviewer request: an icon when a PR changes migrations, an icon when it
+changes a route/controller/request/resource file, plus a list of open PRs
+that fit no other section but do change one of those.
+
+- **Where the paths come from:** `statusesFor` (`inbox.go`) asks each PR's
+  `files(first: 100) { nodes { path } }` in the same aliased status query (no
+  extra gh call); `classifyTouched` turns them into `prStatus.migrationFiles`/
+  `apiFiles` (`omitempty`, so old fixtures/snapshots stay valid). Matching is on
+  directory segments, case-insensitive: a `migrations` segment; `routes/` as
+  first segment or a `Routes` segment; an `Http/Controllers`, `Http/Requests`
+  or `Http/Resources` pair. A bare nwidart `modules/X/Resources/` (views/lang)
+  is deliberately NOT an API resource, and anything under a `tests` segment is
+  ignored. Middleware, docs and sdks are out of scope (confirmed). A PR with
+  more than 100 changed files can miss a badge — accepted. `statusesFor`
+  batches per 50 PRs (`statusChunk`) because the section below roughly triples
+  the PR count. Test: `inbox_touched_test.go`.
+- **Badges** (`touchBadges`, `src/overview.mjs`): an icon plus the word
+  **"DB"** (database glyph) / **"API"** (plug glyph) right next to the title,
+  tooltip naming the files. They read the status backfill
+  (`statusFor`), so only inbox-section rows get them: search hits and the
+  recent drawer carry no file lists (confirmed, avoids a per-PR fetch).
+- **The section** is a regular `inboxSections` entry, last in the list:
+  candidates are the 100 most recently updated open PRs, drafts included
+  (`queryDef.limit`); the existing cross-section de-dupe drops the ones already
+  listed, and `filterTouchedSection` (in `buildInboxSnapshot`, after the status
+  fetch) keeps only candidates with a migration/API file and drops the other
+  candidates' statuses. Being an ordinary section, it gets the same popover
+  ("Generate review tree"), stacks and keyboard nav for free; auto-ingest just
+  follows the existing `auto_ingest_pref` ("all" includes it, "own" does not —
+  it is not in `autoIngestOwnSections`). The client renders it directly under
+  "Needs your review" and puts the Planning blocks after it, not between the two.
+
 ## The per-row popover
 
 **Every row** — ingested or not — opens the same popover menu on click
