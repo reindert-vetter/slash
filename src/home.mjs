@@ -16810,9 +16810,9 @@ function positionNativeMenu() {
 // hidden until positioned to avoid a top-left flash on the first frame.
 function menuOverlay() {
   return html`
-    <div class="fixed inset-0 z-40" data-testid="command-overlay" @click="${() => closeMenu()}">
+    <div class="fixed inset-0 z-[60]" data-testid="command-overlay" @click="${() => closeMenu()}">
       <div
-        class="fixed z-50 max-w-[calc(100vw-1rem)]"
+        class="fixed z-[70] max-w-[calc(100vw-1rem)]"
         style="top:0;left:0;visibility:hidden"
         data-testid="command-anchor"
         @click="${(e) => e.stopPropagation()}"
@@ -16830,7 +16830,9 @@ function menuOverlay() {
 // z-40/z-50) only stacks *within* <main>'s own subtree — externally the whole
 // thing is capped at <main>'s z-10. Mounting the overlay as a separate
 // top-level element lets its own z-40/z-50 compete directly at the root
-// stacking context instead.
+// stacking context instead. The overlay is z-[60]/z-[70], deliberately above the
+// other top-level overlays (general chat z-40, werkmap/lightbox z-50): equal
+// z-index would let the later-mounted overlay hide the menu.
 function MenuHost() {
   return html` <div>${() => (menu.open ? menuOverlay().key('command-overlay') : '')}</div> `
 }

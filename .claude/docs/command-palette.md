@@ -1848,3 +1848,10 @@ ticket key derived from the title) from the `prmeta` read model via
 `.claude/docs/workflows-trackers.md`). `home.mjs` (`loadPRMeta`) ensures the
 tracker on load; missing metadata falls back to the bare PR URL resp. the Jira
 base.
+
+## Stacking: the menu sits above every other top-level overlay
+
+`menuOverlay()` is `z-[60]` (catch layer) / `z-[70]` (anchor), above the
+general-chat overlay (`z-40`) and the werkmap overlay/lightbox (`z-50`). With
+equal z-index the later-mounted overlay wins, which hid the menu behind the
+general chat when Enter on its empty composer opened it.
