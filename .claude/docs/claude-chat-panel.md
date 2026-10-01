@@ -5653,3 +5653,13 @@ appears) keep that on/off state fresh. **Don't reintroduce:** a hint pair as a
 sibling of header + scroller, or any measured/inline hint position. Block.mjs's
 diff `updateHints` is a separate mechanism (changed-row based) and still
 measures. Test: `tests/code-preview-scroll-hint.spec.mjs`.
+
+## Code previews inside the general-chat overlay
+
+`recomputeCodePreviews` (`RelatedPanel.mjs`) normally scans `comment-claude-columns`,
+and bails when `claudeColumnVisible()` is false. While the general-chat overlay is
+open (`cs.generalOverlay`) the tree's column is hidden on purpose and the chat lives
+in `general-chat-card`, so it used to scan nothing and the overlay's right-hand
+previews column stayed empty. In overlay mode it now scans `general-chat-card`
+instead, and `ensureOverlayPreviewObserver` gives that card its own MutationObserver
+(re-attached per open, the card is a fresh element each time).

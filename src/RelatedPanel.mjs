@@ -5785,11 +5785,16 @@ export function activeCodePreviewKey() {
 // (and re-highlight) the whole preview column on every one of those, not
 // just when a fence actually changed.
 function recomputeCodePreviews() {
-  if (!claudeColumnVisible()) {
+  // While the general-chat overlay is up the conversation lives in its own
+  // card, outside comment-claude-columns, and claudeColumnVisible() is false
+  // by design (the tree's column is hidden) — scan the overlay card instead.
+  if (!cs.generalOverlay && !claudeColumnVisible()) {
     if (cp.items.length) cp.items = []
     return
   }
-  const root = document.querySelector('[data-testid="comment-claude-columns"]')
+  const root = document.querySelector(
+    cs.generalOverlay ? '[data-testid="general-chat-card"]' : '[data-testid="comment-claude-columns"]',
+  )
   // A comment card that isn't currently focused renders `compactConversation`
   // (see its own doc comment), which still runs the body through
   // `commentBody`/`renderMarkdown` — so a fence inside it is present in the
@@ -6014,6 +6019,22 @@ function ensureCodePreviewObserver() {
   scheduleRecomputeCodePreviews()
 }
 
+// The overlay card is a separate subtree the observer above never sees, so it
+// gets its own observer, (re)attached each time the overlay's preview panel is
+// built (the card is a fresh element per open).
+let overlayObserver = null
+function ensureOverlayPreviewObserver(retry = 20) {
+  const root = document.querySelector('[data-testid="general-chat-card"]')
+  if (!root) {
+    if (retry > 0) requestAnimationFrame(() => ensureOverlayPreviewObserver(retry - 1))
+    return
+  }
+  if (overlayObserver) overlayObserver.disconnect()
+  overlayObserver = new MutationObserver(scheduleRecomputeCodePreviews)
+  overlayObserver.observe(root, { childList: true, subtree: true, characterData: true })
+  scheduleRecomputeCodePreviews()
+}
+
 // liveAnswerCard — the WHOLE answer (text + code) of a chat that already has
 // code cards below it, live per character while it streams. Sits above the
 // fence cards. Only the visibility toggle is in the outer closure (inside a
@@ -6062,6 +6083,7 @@ function liveAnswerCard(state) {
 export function CodePreviewPanel(state, commentTarget, opts = {}) {
   getCommentTarget = commentTarget
   ensureCodePreviewObserver()
+  if (opts.inOverlay) ensureOverlayPreviewObserver()
   const hidden = () => cs.generalOverlay && !opts.inOverlay
   // The second argument is the keyboard cursor (cs.previewPos, only ever
   // non-zero while the chat itself owns the keyboard) — a getter per card, so
