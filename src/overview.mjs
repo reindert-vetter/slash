@@ -688,7 +688,7 @@ function approvalPill(pr) {
   const pct = full ? 100 : done <= 0 ? 0 : Math.min(99, Math.max(1, Math.round((done / a.total) * 100)))
   // grey = 0, amber = in progress, green = done. Colour is decoration only: the
   // SHAPE carries the state — empty ring (0), partial arc (1-99), solid disc
-  // with a check (100). The ring itself is the label (no text, no pill).
+  // (100). The ring itself is the label (no text, no pill).
   const tone = pct === 100 ? 'emerald' : pct > 0 ? 'amber' : 'slate'
   const cls = {
     emerald: 'text-emerald-600 dark:text-emerald-400',
