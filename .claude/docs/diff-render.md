@@ -856,6 +856,10 @@ image needs three separate pieces, because its bytes are not source at all:
   redirects the old side to a renamed file's pre-rename path, like
   `/api/code`'s own. `.svg` is deliberately NOT in that allowlist — it stays on
   the text path with its own data-URI preview.
+  Not to be confused with `GET /api/attachment?url=…` (`attachment_image.go`):
+  that one serves a GitHub-hosted screenshot embedded in Markdown (PR body,
+  comments) via the `gh` token — see "A raw `<img>` HTML tag" in
+  `.claude/rules/conventions.md`.
 
 `imageSlot` reads no `b.code` at all (`imageUri` builds the URL from `b.pr`/
 `b.repo`/`b.oldFile`, which every block already carries), so there is no

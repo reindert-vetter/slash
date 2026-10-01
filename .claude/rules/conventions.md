@@ -466,6 +466,19 @@ groups side by side exactly like a Markdown-syntax image run. Test:
 `tests/markdown.spec.mjs` ("renders a raw GitHub-style `<img>` tag…", "drops
 an unsafe raw `<img>` tag…").
 
+**Such a GitHub-hosted screenshot is loaded through `/api/attachment`.** Its
+URL (`https://github.com/user-attachments/assets/<uuid>`, or the older
+`https://github.com/<owner>/<repo>/assets/<n>/<uuid>`) answers 404 without a
+GitHub login for a private repo, and the browser never sends github.com's
+SameSite cookies with a cross-site `<img>` from 127.0.0.1 — so it rendered as
+a broken-image icon (PR 13936). `proxyGithubAttachments` (`markdown.mjs`, right
+after `sanitizeUrls`) rewrites only such a `src` (never an `href`) to
+`/api/attachment?url=…`; `attachment_image.go` re-validates the exact same two
+URL shapes (strict regex, no query/fragment/userinfo — not an open proxy),
+fetches with the cached `gh auth token`, and only passes through an `image/*`
+response (404 under `SLASH_GITHUB=off`). Read-only, no state. Test:
+`attachment_image_test.go`.
+
 ## Shared avatar helper (`src/avatar.mjs`)
 
 `avatarHTML(name, avatarUrl, sizeCls, extraCls)` — extracted from

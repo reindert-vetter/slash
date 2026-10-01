@@ -455,6 +455,22 @@ function sanitizeUrls(html) {
   })
 }
 
+// proxyGithubAttachments — a screenshot pasted on GitHub lives at
+// https://github.com/user-attachments/assets/<uuid> (or the older
+// https://github.com/<owner>/<repo>/assets/<n>/<uuid>). For a private repo
+// that URL only works with a GitHub login, and the browser never sends
+// github.com's cookies along with a cross-site <img> from 127.0.0.1 — so it
+// rendered as a broken-image icon. Rewrite such a src to the server's
+// /api/attachment proxy (attachment_image.go), which fetches it with the
+// local gh token. Only `src`, never `href`: a link still opens GitHub itself.
+// The server re-validates the URL with the same strict shape.
+const GH_ATTACHMENT_SRC_RE =
+  /src="(https:\/\/github\.com\/(?:user-attachments\/assets\/[0-9a-fA-F-]{36}|[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/assets\/[0-9]+\/[0-9a-fA-F-]{36}))"/g
+
+function proxyGithubAttachments(html) {
+  return html.replace(GH_ATTACHMENT_SRC_RE, (m, url) => `src="/api/attachment?url=${encodeURIComponent(url)}"`)
+}
+
 // extractRawImages — a deliberate, narrow exception to "every raw HTML tag in
 // the source is escaped to inert text" (see the XSS header comment at the top
 // of this file), for one reviewer-reported case: GitHub's drag-and-drop
@@ -800,6 +816,7 @@ export function renderMarkdown(text, startIndex = 0, truncate = false) {
   out = restoreProtectedChars(out)
   out = applyPlaceholders(out, store)
   out = sanitizeUrls(out)
+  out = proxyGithubAttachments(out)
   out = enhanceImages(out)
   // Last: highlight an @mention of the local reviewer (see mentions.mjs). Runs
   // on the finished, already-escaped HTML and only ADDS a <mark> around inert

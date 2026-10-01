@@ -31,6 +31,9 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// The raw bytes of a changed raster image, so the card can render it as an
 	// <img> instead of a text diff — see image_asset.go.
 	mux.HandleFunc("/api/image", s.handleImage)
+	// A GitHub-hosted screenshot from a PR body/comment, fetched with the gh
+	// token (private repo) — see attachment_image.go.
+	mux.HandleFunc("/api/attachment", s.handleAttachment)
 	mux.HandleFunc("/api/langsiblings", s.handleLangSiblings)
 	mux.HandleFunc("/api/ingest", s.handleIngest)
 	mux.HandleFunc("/api/ingest/progress", s.handleIngestProgress)
