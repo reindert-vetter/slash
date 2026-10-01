@@ -35,10 +35,11 @@ test.describe('PR Review Tree — PR-overview approval badge', () => {
 
     const badge = page.locator('[data-testid="pr-row"][data-pr="12903"] [data-testid="approval-badge"]')
     await expect(badge).toBeVisible()
-    await expect(badge).toContainText('10/10')
+    await expect(badge).toContainText('100%')
     // Green (emerald) + a check svg icon.
     await expect(badge).toHaveClass(/emerald/)
     await expect(badge.locator('svg')).toHaveCount(1)
+    await expect(badge).toHaveAttribute('title', '10/10')
   })
 
   // In progress → neutral grey pill, no check icon. Also proves a non-ingested
@@ -52,9 +53,11 @@ test.describe('PR Review Tree — PR-overview approval badge', () => {
 
     const badge = page.locator('[data-testid="pr-row"][data-pr="12903"] [data-testid="approval-badge"]')
     await expect(badge).toBeVisible()
-    await expect(badge).toContainText('4/10')
+    await expect(badge).toContainText('40%')
     await expect(badge).not.toHaveClass(/emerald/)
-    await expect(badge.locator('svg')).toHaveCount(0)
+    await expect(badge).toHaveClass(/amber/)
+    await expect(badge).toHaveAttribute('data-pct', '40')
+    await expect(badge.locator('svg circle')).toHaveCount(2)
 
     // 12801 is not ingested (no seeded blocks), so its row shows no badge even
     // though the mocked summary supplied one.
