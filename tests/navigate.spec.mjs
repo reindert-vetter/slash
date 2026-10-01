@@ -416,6 +416,9 @@ test.describe('PR Review Tree — change navigation', () => {
   test('a blank added/removed row is diff noise: not counted, not its own line/call unit', async ({
     page,
   }) => {
+    await page.route('**/api/blankrows', (r) =>
+      r.fulfill({ json: { ok: true, show: false } }),
+    )
     await page.goto('/pr/12903')
     await appReady(page)
     const out = await evaluateSettled(page, async () => {
@@ -447,12 +450,38 @@ test.describe('PR Review Tree — change navigation', () => {
     expect(out.changed).toEqual([0, 2])
   })
 
+  // Default setting (whitespace lines shown): a blank changed row is a real,
+  // selectable, counted row at every granularity.
+  test('whitespace lines shown (default): a blank added row is counted and landable', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+    const out = await evaluateSettled(page, async () => {
+      const { changeLines, changeCalls, changedRows } = await import('/src/Block.mjs')
+      const rows = [
+        { left: null, right: '$a = 1;', leftMark: null, rightMark: 'ins' },
+        { left: null, right: '', leftMark: null, rightMark: 'ins' },
+        { left: null, right: 'return $a;', leftMark: null, rightMark: 'ins' },
+      ]
+      return {
+        lines: changeLines(rows).map((u) => u.start),
+        calls: changeCalls(rows).map((u) => u.start),
+        changed: changedRows(rows),
+      }
+    })
+    expect(out.lines).toEqual([0, 1, 2])
+    expect(out.calls).toContain(1)
+    expect(out.changed).toEqual([0, 1, 2])
+  })
+
   // Same blank-row exclusion for a pure deletion (old side blank, no
   // replacement) — the display side there is the old (left) text. The two
   // content pure-deletions (rows 0, 2) ARE landable line units now (a removed
   // line is a real change and must be individually approvable at line
   // granularity); only the blank row 1 stays excluded as diff noise.
   test('a blank pure-deletion row is diff noise, but content deletions are landable lines', async ({ page }) => {
+    await page.route('**/api/blankrows', (r) =>
+      r.fulfill({ json: { ok: true, show: false } }),
+    )
     await page.goto('/pr/12903')
     await appReady(page)
     const out = await evaluateSettled(page, async () => {

@@ -745,6 +745,9 @@ type AppSettingsSignal struct {
 	// /pr-overview hides. An EMPTY list is a real value here ("show me
 	// everything again"), unlike PraiseWords; see notifyfilters.go.
 	NotifyFilters []string `json:"notifyFilters,omitempty"`
+	// ShowBlankRows carries the "show whitespace lines" display setting (Kind
+	// "blankRows"); nil means the default (shown). See blankrows.go.
+	ShowBlankRows *bool `json:"showBlankRows,omitempty"`
 	// JiraCreds carries the Atlassian notification-feed credentials of the
 	// settings page's auth row (Kind "jiraCreds"). They land in the gitignored
 	// .env, NOT in settings.json — that file is served verbatim to the browser
@@ -2627,6 +2630,17 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, err
 	})
 
+	// Activity: persist the "show whitespace lines" display setting into
+	// blank-rows.json (write, workflow-driven) — saveBlankRowsFile
+	// (blankrows.go) is the only writer of that file.
+	engine.RegisterActivity("saveBlankRows", func(ctx context.Context, in []byte) ([]byte, error) {
+		var show bool
+		if err := json.Unmarshal(in, &show); err != nil {
+			return nil, err
+		}
+		return nil, saveBlankRowsFile(m.appDataDirOrDefault(), show)
+	})
+
 	// Activity: persist the settings page's Jira-credential edit into the
 	// gitignored .env (write, workflow-driven) — saveEnvValues (env.go) is that
 	// file's only programmatic writer. Deliberately .env and not settings.json:
@@ -3907,6 +3921,7 @@ func (m *TaskManager) SetRuntime(ctx context.Context, ready bool) {
 // has both directories at hand.
 func (m *TaskManager) SetAppDataDir(dir string) {
 	m.appDataDir = dir
+	loadBlankRowsFile(dir)
 }
 
 // appDataDirOrDefault resolves the settings.json/praise-words.json directory
@@ -4887,6 +4902,11 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			if err := w.ExecuteActivity("saveNotifyFilters", filters, nil); err != nil {
 				return nil, fmt.Errorf("save notify filters: %w", err)
+			}
+		case "blankRows":
+			show := sig.ShowBlankRows == nil || *sig.ShowBlankRows
+			if err := w.ExecuteActivity("saveBlankRows", show, nil); err != nil {
+				return nil, fmt.Errorf("save blank rows: %w", err)
 			}
 		case "jiraCreds":
 			if err := w.ExecuteActivity("saveJiraCredentials", sig.JiraCreds, nil); err != nil {

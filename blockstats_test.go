@@ -100,6 +100,10 @@ func TestChangedRowCount(t *testing.T) {
 			want: 5,
 		},
 	}
+	// The expected counts below are for the "whitespace lines hidden" setting;
+	// TestChangedRowCountShowsBlankRows covers the default (shown).
+	blankRowsHidden.Store(true)
+	defer blankRowsHidden.Store(false)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := changedRowCount(c.old, c.new); got != c.want {
@@ -186,5 +190,17 @@ func TestRowForLineSharesRowSpaceWithApproveTotal(t *testing.T) {
 	}
 	if !rowChanged(rows[row]) {
 		t.Errorf("row %d is not marked changed, so it isn't the approvable row", row)
+	}
+}
+
+// With the default "show whitespace lines" setting a blank changed row counts.
+func TestChangedRowCountShowsBlankRows(t *testing.T) {
+	old := "function f() {\n    step1();\n    step2();\n}"
+	nw := "function f() {\n    step1();\n\n    step2();\n}"
+	blankRowsHidden.Store(true)
+	hidden := changedRowCount(old, nw)
+	blankRowsHidden.Store(false)
+	if shown := changedRowCount(old, nw); shown != hidden+1 {
+		t.Fatalf("shown=%d hidden=%d, want shown = hidden+1", shown, hidden)
 	}
 }

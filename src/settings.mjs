@@ -10,6 +10,7 @@
 import { reactive, html, watch } from './vendor/arrow.js'
 import { bindUrlState } from './urlState.mjs'
 import { initTheme, themeToggleButton, cycleTheme } from './theme.mjs'
+import { blankRowsToggleButton, toggleBlankRows } from './blankRows.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn.mjs'
 import { keyboardHintsToggleButton, toggleKeyboardHints } from './keyboardHints.mjs'
 import { ensureAutoIngestPref, autoIngestPrefToggleButton, cycleAutoIngestPref } from './autoingestpref.mjs'
@@ -119,7 +120,7 @@ watch(
 // checkout dir, GitHub identity, Jira notification noise). See
 // .claude/docs/settings-page.md for the full table.
 const TAB_DEFS = [
-  { id: 'display', label: 'Weergave', rows: ['theme', 'keyboardhints', 'debug'] },
+  { id: 'display', label: 'Weergave', rows: ['theme', 'keyboardhints', 'blankrows', 'debug'] },
   { id: 'language', label: 'Taal', rows: ['langui', 'langexplain', 'langreply', 'langcommit'] },
   { id: 'assistant', label: 'AI-assistent', rows: ['autowarn', 'autoingestpref', 'praisewords'] },
   { id: 'account', label: 'Account & Jira', rows: ['auth', 'checkout', 'aliases', 'notifyfilters'] },
@@ -365,6 +366,8 @@ function activateRow(row) {
     toggleLang('reply')
   } else if (row === 'keyboardhints') {
     toggleKeyboardHints()
+  } else if (row === 'blankrows') {
+    toggleBlankRows()
   } else if (row === 'autowarn') {
     toggleAutoWarn()
   } else if (row === 'autoingestpref') {
@@ -533,6 +536,16 @@ function keyboardHintsRow() {
   >
     ${rowLabel(t('Keyboard hints'), t('De hintregel met sneltoetsen onder elke kaart, aan/uit — standaard aan.'))}
     ${keyboardHintsToggleButton()}
+  </div>`
+}
+
+function blankRowsRow() {
+  return html`<div data-testid="settings-row-blankrows" class="${() => rowCls('blankrows')}" @click="${() => selectRow('blankrows')}">
+    ${rowLabel(
+      t('Witregels in code-blokken'),
+      t('Lege regels in een diff selecteerbaar maken en meetellen bij het goedkeuren, aan/uit — standaard aan.'),
+    )}
+    ${blankRowsToggleButton()}
   </div>`
 }
 
@@ -1048,7 +1061,7 @@ function App() {
       <div class="flex-1 overflow-auto px-6 py-5">
         <div class="mx-auto max-w-xl" data-testid="settings-rows">
           ${tabBar()}
-          ${tabPanel('display', 'settings-tab-panel-display', [themeRow(), keyboardHintsRow(), debugRow()])}
+          ${tabPanel('display', 'settings-tab-panel-display', [themeRow(), keyboardHintsRow(), blankRowsRow(), debugRow()])}
           ${tabPanel('language', 'settings-tab-panel-language', [
             langRow(
               'langui',

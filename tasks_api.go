@@ -1768,6 +1768,8 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				if body.NotifyFilters == nil {
 					body.NotifyFilters = []string{}
 				}
+			case "blankRows":
+				// A plain boolean; nothing to validate (nil = default shown).
 			case "jiraCreds":
 				// The Jira notification feed needs an e-mail address AND a
 				// token; a half-filled form would only produce a failing

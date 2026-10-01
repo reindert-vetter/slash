@@ -13,6 +13,7 @@ import { parseAutoWidthPx, resizeHandle, splitDividerHandle } from './columnWidt
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import Prism from './vendor/prism.js'
 import { t } from './i18n.mjs'
+import { blankRowsShown } from './blankRows.mjs'
 import {
   inlineEditState,
   blockNewSourceRangeText,
@@ -4759,6 +4760,9 @@ export function rowAnchorText(r) {
 //
 // Go port: blockstats.go's rowHasContent — keep both in lockstep.
 function rowHasContent(r) {
+  // "Show whitespace lines" setting (blankRows.mjs, default on): a blank changed
+  // row is then a real row. Go port: blockstats.go — keep both in lockstep.
+  if (blankRowsShown()) return true
   const text = displayText(r)
   return !!(text && text.trim() !== '')
 }
@@ -4822,7 +4826,10 @@ export function changedRows(rows) {
 // corresponding Go concept to keep in lockstep with (same reasoning
 // isBracketOnlyRow's own doc comment already gives).
 function isSweepableFillerRow(r) {
-  return isBracketOnlyRow(r) || (rowChanged(r) && !rowHasContent(r))
+  // Blank by TEXT, not by rowHasContent: with the "show whitespace lines"
+  // setting on, a blank row counts as content but is still swept as filler.
+  const text = displayText(r)
+  return isBracketOnlyRow(r) || (rowChanged(r) && !(text && text.trim() !== ''))
 }
 
 // sweepBracketOnlyForward extends a set of just-approved row indices with the

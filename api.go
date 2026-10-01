@@ -45,6 +45,8 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// header bell (see notifyfilters.go). Same reasoning as /api/praisewords:
 	// it reads a file next to the DBs, not the workflow engine.
 	mux.HandleFunc("/api/notifyfilters", s.handleNotifyFilters)
+	// The "show whitespace lines" display setting (blankrows.go).
+	mux.HandleFunc("/api/blankrows", s.handleBlankRows)
 	// GET /api/debug/log → the recorded debug-mode navigation/action log
 	// (debug_log.go). Registered here rather than in routesTasks for the same
 	// reason as /api/praisewords: it reads a file next to the DBs, not the

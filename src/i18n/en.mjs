@@ -718,6 +718,13 @@ export const EN = {
     'The shortcut-hint line under each card, on/off — on by default.',
   'Keyboard hints: {state} — de hintregel met sneltoetsen onder elke kaart (klik om te wisselen)':
     'Keyboard hints: {state} — the shortcut-hint line under each card (click to toggle)',
+  'Witregels in code-blokken': 'Whitespace lines in code blocks',
+  'Lege regels in een diff selecteerbaar maken en meetellen bij het goedkeuren, aan/uit — standaard aan.':
+    'Make blank lines in a diff selectable and count them when approving, on/off — on by default.',
+  'Witregels: {state} — lege regels in een diff zijn selecteerbaar en tellen mee (klik om te wisselen)':
+    'Whitespace lines: {state} — blank lines in a diff are selectable and count (click to toggle)',
+  'Witregels aan': 'Whitespace lines on',
+  'Witregels uit': 'Whitespace lines off',
   'Keyboard hints aan': 'Keyboard hints on',
   'Keyboard hints uit': 'Keyboard hints off',
   'Systeem / licht / donker — opgeslagen in deze browser.': 'System / light / dark — stored in this browser.',

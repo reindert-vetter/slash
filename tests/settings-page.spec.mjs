@@ -118,7 +118,7 @@ test.describe('settings page — keyboard row navigation', () => {
   test('every existing setting is still reachable, one per tab-panel', async ({ page }) => {
     await page.goto('/settings')
     const rows = {
-      display: ['settings-row-theme', 'settings-row-keyboardhints', 'settings-row-debug'],
+      display: ['settings-row-theme', 'settings-row-keyboardhints', 'settings-row-blankrows', 'settings-row-debug'],
       language: ['settings-row-langui', 'settings-row-langexplain', 'settings-row-langreply', 'settings-row-langcommit'],
       assistant: ['settings-row-autowarn', 'settings-row-autoingestpref', 'settings-row-praisewords'],
       account: ['settings-row-auth', 'settings-row-checkout', 'settings-row-aliases', 'settings-row-notifyfilters'],
@@ -260,4 +260,22 @@ test.describe('settings page — Jira notification filters (write path)', () => 
     await page.reload()
     await expect(page.getByTestId('settings-notifyfilters-chips')).not.toContainText('e2e-filter-text')
   })
+})
+
+test('whitespace lines setting: default on, toggle persists server-side', async ({ page }) => {
+  await page.goto('/settings')
+  const toggle = page.getByTestId('blank-rows-toggle')
+  await expect(toggle).toContainText(/Witregels aan|Whitespace lines on/)
+  await toggle.click()
+  await expect(toggle).toContainText(/Witregels uit|Whitespace lines off/)
+  await expect
+    .poll(async () => (await (await page.request.get('/api/blankrows')).json()).show)
+    .toBe(false)
+  await page.reload()
+  await expect(page.getByTestId('blank-rows-toggle')).toContainText(/Witregels uit|Whitespace lines off/)
+  // restore the default for the rest of this worker's run
+  await page.getByTestId('blank-rows-toggle').click()
+  await expect
+    .poll(async () => (await (await page.request.get('/api/blankrows')).json()).show)
+    .toBe(true)
 })

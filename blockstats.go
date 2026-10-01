@@ -315,6 +315,11 @@ func rowChanged(r alignRow) bool {
 // approve total. Keep in lockstep with Block.mjs — see its comment for the
 // full rationale.
 func rowHasContent(r alignRow) bool {
+	// "Show whitespace lines" setting (blankrows.go): on by default, a blank
+	// changed row is a real row. Mirrors Block.mjs.
+	if blankRowsShown() {
+		return true
+	}
 	text := r.left
 	if r.rightMark == "ins" {
 		text = r.right
