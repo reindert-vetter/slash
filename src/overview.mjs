@@ -687,24 +687,29 @@ function approvalPill(pr) {
   // Never round an unfinished PR to 0% or 100%: min 1%, max 99% until really done.
   const pct = full ? 100 : done <= 0 ? 0 : Math.min(99, Math.max(1, Math.round((done / a.total) * 100)))
   // grey = 0, amber = in progress, green = done. Colour is decoration only: the
-  // ring's filled arc is the shape and the percentage stays as text.
+  // SHAPE carries the state — empty ring (0), partial arc (1-99), solid disc
+  // with a check (100). The ring itself is the label (no text, no pill).
   const tone = pct === 100 ? 'emerald' : pct > 0 ? 'amber' : 'slate'
   const cls = {
-    emerald: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-emerald-500/30',
-    amber: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-amber-500/30',
-    slate: 'bg-slate-100 dark:bg-zinc-500/15 text-slate-500 dark:text-zinc-400 ring-slate-300/50 dark:ring-zinc-500/30',
+    emerald: 'text-emerald-600 dark:text-emerald-400',
+    amber: 'text-amber-600 dark:text-amber-400',
+    slate: 'text-slate-400 dark:text-zinc-500',
   }[tone]
-  const C = 2 * Math.PI * 6
-  const arc = pct > 0 ? `<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 8 8)"/>` : ''
-  const ring = `<svg viewBox="0 0 16 16" class="h-3.5 w-3.5" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" opacity="0.25"/>${arc}</svg>`
+  const C = 2 * Math.PI * 7
+  const track = '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" opacity="0.25"/>'
+  const arc = `<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 9 9)"/>`
+  const disc = '<circle cx="9" cy="9" r="8" fill="currentColor"/><path d="M5.5 9.2l2.4 2.4 4.6-5" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+  const ring = `<svg viewBox="0 0 18 18" class="h-5 w-5" aria-hidden="true">${pct === 100 ? disc : pct > 0 ? track + arc : track}</svg>`
   return [
     html`<span
-      class="${'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ' + cls}"
+      class="${'inline-flex shrink-0 ' + cls}"
       data-testid="approval-badge"
       data-pct="${String(pct)}"
+      role="img"
       title="${done + '/' + a.total}"
-      ><span class="inline-flex" .innerHTML="${ring}"></span><span>${pct + '%'}</span></span
-    >`.key('approval:' + pct + ':' + done + '/' + a.total),
+      aria-label="${pct + '% (' + done + '/' + a.total + ')'}"
+      .innerHTML="${ring}"
+    ></span>`.key('approval:' + pct + ':' + done + '/' + a.total),
   ]
 }
 

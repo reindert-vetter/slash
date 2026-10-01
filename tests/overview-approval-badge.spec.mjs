@@ -35,7 +35,10 @@ test.describe('PR Review Tree — PR-overview approval badge', () => {
 
     const badge = page.locator('[data-testid="pr-row"][data-pr="12903"] [data-testid="approval-badge"]')
     await expect(badge).toBeVisible()
-    await expect(badge).toContainText('100%')
+    await expect(badge).toHaveAttribute('data-pct', '100')
+    await expect(badge).toHaveAttribute('aria-label', '100% (10/10)')
+    // Solid disc + check path (a different SHAPE from a partial ring).
+    await expect(badge.locator('svg path')).toHaveCount(1)
     // Green (emerald) + a check svg icon.
     await expect(badge).toHaveClass(/emerald/)
     await expect(badge.locator('svg')).toHaveCount(1)
@@ -53,7 +56,7 @@ test.describe('PR Review Tree — PR-overview approval badge', () => {
 
     const badge = page.locator('[data-testid="pr-row"][data-pr="12903"] [data-testid="approval-badge"]')
     await expect(badge).toBeVisible()
-    await expect(badge).toContainText('40%')
+    await expect(badge).toHaveAttribute('aria-label', '40% (4/10)')
     await expect(badge).not.toHaveClass(/emerald/)
     await expect(badge).toHaveClass(/amber/)
     await expect(badge).toHaveAttribute('data-pct', '40')
