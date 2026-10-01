@@ -698,7 +698,7 @@ function approvalPill(pr) {
   const C = 2 * Math.PI * 7
   const track = '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" opacity="0.25"/>'
   const arc = `<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 9 9)"/>`
-  const disc = '<circle cx="9" cy="9" r="8" fill="currentColor"/><path d="M5.5 9.2l2.4 2.4 4.6-5" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+  const disc = '<circle cx="9" cy="9" r="8" fill="currentColor"/>'
   const ring = `<svg viewBox="0 0 18 18" class="h-5 w-5" aria-hidden="true">${pct === 100 ? disc : pct > 0 ? track + arc : track}</svg>`
   return [
     html`<span

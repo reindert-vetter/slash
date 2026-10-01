@@ -37,8 +37,10 @@ test.describe('PR Review Tree — PR-overview approval badge', () => {
     await expect(badge).toBeVisible()
     await expect(badge).toHaveAttribute('data-pct', '100')
     await expect(badge).toHaveAttribute('aria-label', '100% (10/10)')
-    // Solid disc + check path (a different SHAPE from a partial ring).
-    await expect(badge.locator('svg path')).toHaveCount(1)
+    // Solid disc, no check (a different SHAPE from a partial ring).
+    await expect(badge.locator('svg path')).toHaveCount(0)
+    await expect(badge.locator('svg circle')).toHaveCount(1)
+    await expect(badge.locator('svg circle')).toHaveAttribute('fill', 'currentColor')
     // Green (emerald) + a check svg icon.
     await expect(badge).toHaveClass(/emerald/)
     await expect(badge.locator('svg')).toHaveCount(1)
