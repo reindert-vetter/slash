@@ -807,9 +807,11 @@ function branchFragment(pr) {
 // every row regardless of how much room the right-hand pills take — each
 // line may still wrap internally on a very narrow viewport, but always
 // starts at the same predictable vertical spot.
-function rowMeta(pr) {
+function rowMeta(pr, opts = {}) {
   const stat = diffStatFragment(pr)
   const branch = branchFragment(pr)
+  // The stacked-row section badge sits last on the stat/branch line (not next to the title).
+  const badge = opts.badge ? sectionBadge(opts.badge) : null
   return html`
     <div class="mt-0.5 text-[11.5px] text-slate-500 dark:text-zinc-500">
       <div class="flex items-center gap-2">
@@ -819,9 +821,10 @@ function rowMeta(pr) {
         <span title="${pr.updatedAt || ''}">${t('Bijgewerkt {time}', { time: relativeTime(pr.updatedAt) })}</span>
         ${rowStateMark(pr)} ${newSinceMark(pr)} ${snoozeMark(pr)}
       </div>
-      ${stat || branch
+      ${stat || branch || badge
         ? html`<div class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
             ${stat} ${stat && branch ? html`<span class="text-slate-300 dark:text-zinc-700">·</span>` : null} ${branch}
+            ${badge && (stat || branch) ? html`<span class="text-slate-300 dark:text-zinc-700">·</span>` : null} ${badge}
           </div>`
         : null}
     </div>
@@ -936,9 +939,8 @@ function rowInner(pr, opts) {
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${pr.title}</h3>
-          ${opts.badge ? sectionBadge(opts.badge) : null}
         </div>
-        ${rowMeta(pr)}
+        ${rowMeta(pr, opts)}
       </div>
     `,
     html`
