@@ -1,7 +1,7 @@
 // AnalogClock — a round analog clock styled like the Jira bell button
 // (jiraBell.mjs), pinned next to it in the /pr/<id> corner. Always visible;
 // its colour escalates by local time: normal, orange from 14:30, red from
-// 15:00, normal again from 17:00. Colour is the only signal by request;
+// 15:00, normal again from 17:00 (Tue/Thu: orange 16:45, red from 17:00 on). Colour is the only signal by request;
 // data-state/title exist for tests and screen readers.
 
 import { html, reactive } from './vendor/arrow.js'
@@ -14,9 +14,18 @@ const STATE_CLS = {
   late: 'bg-red-100 text-red-700 ring-red-400 dark:bg-red-500/20 dark:text-red-300 dark:ring-red-500/60',
 }
 
-/** Clock state for a Date: 14:30-15:00 warn, 15:00-17:00 late, else normal. */
+/**
+ * Clock state for a Date. Default days: 14:30-15:00 warn, 15:00-17:00 late,
+ * else normal. Tuesday/Thursday: warn from 16:45, late from 17:00 until midnight.
+ */
 export function clockState(d) {
   const m = d.getHours() * 60 + d.getMinutes()
+  const tueThu = d.getDay() === 2 || d.getDay() === 4
+  if (tueThu) {
+    if (m >= 17 * 60) return 'late'
+    if (m >= 16 * 60 + 45) return 'warn'
+    return 'normal'
+  }
   if (m >= 15 * 60 && m < 17 * 60) return 'late'
   if (m >= 14 * 60 + 30 && m < 15 * 60) return 'warn'
   return 'normal'

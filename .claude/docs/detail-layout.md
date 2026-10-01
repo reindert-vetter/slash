@@ -1271,5 +1271,5 @@ row menu's retry/hide items; the "nog N meer" footer).
 `JiraBellHost` (`home.mjs`, top-right of `/pr/<id>` only) also mounts an
 always-visible analog clock left of the Jira bell, same size/style. Colour by
 local time: normal, orange 14:30-15:00, red 15:00-17:00, normal again from
-17:00 (`clockState`). Colour is the only signal by request; `data-state`
+17:00 (`clockState`); on Tuesday/Thursday instead orange from 16:45 and red from 17:00 until midnight. Colour is the only signal by request; `data-state`
 and `title` are for tests/screen readers. Test: `tests/tree-clock.spec.mjs`.
