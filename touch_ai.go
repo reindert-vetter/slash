@@ -41,10 +41,11 @@ const WorkflowTouchAI = "touch_ai"
 
 // touchAIAllowlist limits the automatic touch_ai run to these PRs (statusKey
 // form) while the feature is being tried out — reviewer request: "doe ai
-// dingen enzo nu alleen voor" AUTH-667 (plug-and-pay/plug-and-pay #13989).
+// dingen enzo nu alleen voor" AUTH-667 (plug-and-pay/plug-and-pay #13989), later also BUG-5203 (#14005).
 // Remove the check in autoStartTouchAI to enable it for every row.
 var touchAIAllowlist = map[string]bool{
 	statusKey("", 13989): true,
+	statusKey("", 14005): true,
 }
 
 // maxTouchAIPatch clips one file's patch in the prompt; a migration/API
