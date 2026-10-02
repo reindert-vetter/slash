@@ -1729,9 +1729,9 @@ async function removeSelfAsReviewer(pr) {
     })
     if (!res.ok) throw new Error('remove_reviewer failed')
     closePopover()
+    selectNextRowAfter(pr)
     removedPrs.add(prUid(pr))
     state.sections = state.sections.map((s) => ({ ...s, prs: s.prs.filter((row) => prUid(row) !== prUid(pr)) }))
-    selectTopRow()
     scheduleRepaint()
     reloadSnapshot()
   } catch (e) {
@@ -1854,9 +1854,9 @@ async function sendSnooze(pr, option) {
     next[uid] = { until: until.toISOString(), snoozedAt: new Date().toISOString() }
   }
   closePopover()
+  if (option !== 'clear') selectNextRowAfter(pr)
   state.snoozes = next
   scheduleSnoozeWake()
-  if (option !== 'clear') selectTopRow()
   scheduleRepaint()
   try {
     const runId = await ensureSnoozeRun()
@@ -2000,8 +2000,8 @@ async function sendIgnore(pr, ignore) {
   if (ignore) next[uid] = true
   else delete next[uid]
   closePopover()
+  if (ignore) selectNextRowAfter(pr)
   state.ignores = next
-  if (ignore) selectTopRow()
   scheduleRepaint()
   try {
     const runId = await ensureIgnoreRun()
@@ -3986,6 +3986,18 @@ function selectTopRow() {
   if (!firstRow) return false
   setSelKey('row:' + prUid(firstRow))
   return true
+}
+
+// selectNextRowAfter moves the selection to the row after `pr` in the visible
+// order of the whole overview (across section borders), or the previous row when
+// `pr` is the last one. Call it BEFORE the row is hidden/removed, so `pr` is
+// still in the list. Used when ignore/snooze/remove-reviewer makes a row leave.
+function selectNextRowAfter(pr) {
+  const uid = prUid(pr)
+  const rows = state.sections.flatMap((s) => s.prs.filter((p) => prUid(p) === uid || !leavesSection(p, s.title)))
+  const i = rows.findIndex((p) => prUid(p) === uid)
+  const next = i < 0 ? rows[0] : rows[i + 1] || rows[i - 1]
+  if (next) setSelKey('row:' + prUid(next))
 }
 
 // originPr/originSel — the same `?pr=`/`?sel=` pair as pendingSelectPr above,
