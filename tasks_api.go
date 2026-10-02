@@ -1301,6 +1301,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 	// lookup is possible. A PR prmeta doesn't know simply gets no entry and the
 	// client falls back to the bare number.
 	titles := map[string]string{}
+	authors := map[string]string{}
 	seen := map[int]bool{}
 	addTitle := func(pr int) {
 		if pr <= 0 || seen[pr] {
@@ -1309,6 +1310,9 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 		seen[pr] = true
 		if meta, ok, err := s.tasks.prmeta.Get(r.Context(), queryRepo(r), pr); err == nil && ok && meta.Title != "" {
 			titles[strconv.Itoa(pr)] = meta.Title
+			if meta.Author != "" {
+				authors[strconv.Itoa(pr)] = meta.Author
+			}
 		}
 	}
 	for _, f := range failed {
@@ -1317,7 +1321,7 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 	for _, l := range logs {
 		addTitle(l.PR)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs, "prTitles": titles})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs, "prTitles": titles, "prAuthors": authors})
 }
 
 // handleRetryRun serves POST /api/workflows/retry {"runId":"…"} — resume the

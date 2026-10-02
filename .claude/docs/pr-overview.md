@@ -2183,3 +2183,7 @@ holding real DOM focus.
   (`closePopover`, shared with the click-outside listener), and
   `←`/`→`/`Home`/`End`/`/` are swallowed so they don't leak to the row list;
   every other key (notably `Tab`) is left alone.
+
+### Failed-task row layout (`problemRunRow`, `src/problems.mjs`)
+
+Shared by the global popup, the /pr-overview block and the review tree. Left: the PR author (avatar with first name under it, `problemAuthorMark`), fed by `prAuthors` in `GET /api/problems` (from `prmeta`; `fetchProblems` awaits `ensureNames` first). A run without a PR shows no author and no PR line; an unknown author gets the neutral initials circle. The PR title is its own `#nr · title` line (`problem-pr`); the error clamps to 4 lines; the per-row Retry/Negeer buttons are stacked vertically.

@@ -13,6 +13,13 @@ import { html } from './vendor/arrow.js'
 import { labelForWorkflow } from './workflowLabels.mjs'
 import { relativeTime } from './relativeTime.mjs'
 import { t } from './i18n.mjs'
+import { avatarHTML, avatarUrlOf, displayNameOf, ensureNames, fullNameOf } from './avatar.mjs'
+
+// problemAuthors — { "<pr>": "<login>" } from the last fetchProblems, so a row
+// can show who wrote the PR. Plain module state: fetchProblems awaits
+// ensureNames BEFORE returning, so rows built from its result already know the
+// real names/avatars (names are non-reactive, see conventions.md).
+let problemAuthors = {}
 
 // fetchProblems — thin read-only wrapper around GET /api/problems. Always
 // resolves (never throws) with non-null arrays/object, so a caller never has
@@ -25,6 +32,11 @@ export async function fetchProblems() {
     if (!res.ok) return { ok: false, failedRuns: [], logErrors: [], prTitles: {} }
     const body = await res.json()
     if (!body || !body.ok) return { ok: false, failedRuns: [], logErrors: [], prTitles: {} }
+    const authors = body.prAuthors && typeof body.prAuthors === 'object' ? body.prAuthors : {}
+    try {
+      await ensureNames(Object.values(authors))
+    } catch (_) {}
+    problemAuthors = authors
     return {
       ok: true,
       failedRuns: Array.isArray(body.failedRuns) ? body.failedRuns : [],
@@ -57,6 +69,25 @@ export function problemPrChip(pr, prTitles) {
   return html`<span class="min-w-0 truncate text-[12px] text-slate-500 dark:text-zinc-500" title="${'#' + pr + (title ? ' · ' + title : '')}"
     >#${pr}${title ? ' · ' + title : ''}</span
   >`
+}
+
+// problemPrTitleLine — "#nr · title" on its own line (wraps to 2 lines).
+function problemPrTitleLine(pr, prTitles) {
+  const title = (prTitles && prTitles[String(pr)]) || ''
+  return html`<p data-testid="problem-pr" class="line-clamp-2 text-[12px] font-medium text-slate-700 dark:text-zinc-300">#${pr}${title ? ' · ' + title : ''}</p>`
+}
+
+// problemAuthorMark — avatar with the first name under it, left of the row.
+// '' when the run has no PR; an unknown author gets the neutral initials
+// circle from avatarHTML and no name.
+export function problemAuthorMark(pr) {
+  if (!pr) return ''
+  const login = problemAuthors[String(pr)] || ''
+  const full = fullNameOf(login)
+  return html`<span class="flex w-14 shrink-0 flex-col items-center gap-1" data-testid="problem-author" title="${full ? full + ' (' + login + ')' : login}">
+    ${avatarHTML(full || login || '?', avatarUrlOf(login), 'h-8 w-8')}
+    <span class="max-w-full truncate text-[11px] font-semibold leading-none text-slate-700 dark:text-zinc-300">${login ? displayNameOf(login) : ''}</span>
+  </span>`
 }
 
 // problemCommentLine — WHICH comment a failed task_code_comment run was about:
@@ -92,7 +123,7 @@ export function problemIgnoreButton(onIgnore) {
     type="button"
     data-testid="problem-ignore"
     title="${t('Negeer deze fout definitief (de taak verdwijnt uit de lijst)')}"
-    class="shrink-0 self-start rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+    class="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
     @click="${(e) => {
       if (!e) return
       e.stopPropagation()
@@ -114,7 +145,7 @@ export function problemRetryButton(onRetry) {
     type="button"
     data-testid="problem-retry"
     title="${t('Probeer alleen deze taak opnieuw, vanaf de laatste stap die wél lukte')}"
-    class="shrink-0 self-start rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
+    class="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800/60"
     @click="${(e) => {
       if (!e) return
       e.stopPropagation()
@@ -135,17 +166,18 @@ export function problemRetryButton(onRetry) {
 export function problemRunRow(run, prTitles, { showPr = true, onIgnore = null, onRetry = null } = {}) {
   return html`
     <div data-testid="problem-run" class="${PROBLEM_ROW_CLASS}">
+      <div class="contents">${() => (showPr ? problemAuthorMark(run.pr) : '')}</div>
       ${problemMark(t('mislukt'))}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <span class="shrink-0 text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${labelForWorkflow(run.workflow)}</span>
-          ${() => (showPr ? problemPrChip(run.pr, prTitles) : '')}
           <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(run.updatedAt)}</span>
         </div>
+        <div class="contents">${() => (showPr && run.pr ? problemPrTitleLine(run.pr, prTitles) : '')}</div>
         <div class="contents">${() => (run.comment ? problemCommentLine(run.comment) : '')}</div>
-        <p class="line-clamp-2 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || t('geen foutmelding vastgelegd')}</p>
+        <p class="line-clamp-4 text-[12px] text-slate-500 dark:text-zinc-500" title="${run.error || ''}">${run.error || t('geen foutmelding vastgelegd')}</p>
       </div>
-      <div class="flex shrink-0 items-start gap-2">
+      <div class="flex shrink-0 flex-col items-stretch gap-2">
         <div class="contents">${() => (onRetry && run.retryable ? problemRetryButton(() => onRetry(run)) : '')}</div>
         <div class="contents">${() => (onIgnore ? problemIgnoreButton(() => onIgnore(run)) : '')}</div>
       </div>
