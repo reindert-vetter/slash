@@ -55,7 +55,7 @@ func TestFilterTouchedSection(t *testing.T) {
 		statusKey("", 3): {},
 		statusKey("", 4): {APIFiles: []string{"routes/api.php"}},
 	}
-	got := filterTouchedSection(sections, statuses)
+	got := filterTouchedSection(sections, statuses, "")
 	if n := len(got[0].PRs); n != 1 {
 		t.Fatalf("other section touched: %d rows", n)
 	}
@@ -71,5 +71,30 @@ func TestFilterTouchedSection(t *testing.T) {
 	}
 	if _, ok := statuses[statusKey("", 1)]; !ok {
 		t.Errorf("status of a row in another section was dropped")
+	}
+}
+
+func TestFilterTouchedSectionDropsOwnReviews(t *testing.T) {
+	mig := []string{"database/migrations/x.php"}
+	sections := []inboxSection{{Title: touchedSectionTitle, PRs: []inboxRow{
+		{Number: 1, Reviewers: []reviewer{{Login: "me-user", State: "APPROVED"}}},
+		{Number: 2, Reviewers: []reviewer{{Login: "me-user", State: "PENDING"}}},
+		{Number: 3, Reviewers: []reviewer{{Login: "me-user", Team: true, State: "PENDING"}}},
+		{Number: 4, Reviewers: []reviewer{{Login: "other", State: "APPROVED"}}},
+		{Number: 5},
+	}}}
+	statuses := map[string]prStatus{}
+	for n := 1; n <= 5; n++ {
+		statuses[statusKey("", n)] = prStatus{MigrationFiles: mig}
+	}
+	// PR 5 carries its reviewers only on the status (light row).
+	statuses[statusKey("", 5)] = prStatus{MigrationFiles: mig, Reviewers: []reviewer{{Login: "me-user", State: "CHANGES_REQUESTED"}}}
+	got := filterTouchedSection(sections, statuses, "me-user")
+	var nums []int
+	for _, r := range got[0].PRs {
+		nums = append(nums, r.Number)
+	}
+	if !reflect.DeepEqual(nums, []int{3, 4}) {
+		t.Errorf("touched section = %v, want [3 4]", nums)
 	}
 }

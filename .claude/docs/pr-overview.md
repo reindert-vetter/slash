@@ -810,7 +810,10 @@ that fit no other section but do change one of those.
   ignored. Middleware, docs and sdks are out of scope (confirmed). A PR with
   more than 100 changed files can miss a badge — accepted. `statusesFor`
   batches per 50 PRs (`statusChunk`) because the section below roughly triples
-  the PR count. Test: `inbox_touched_test.go`.
+  the PR count. A PR where the logged-in user is a personal reviewer (pending
+  request or any submitted review; a team request does not count) never shows
+  up in this section (`isPersonalReviewer`, applied in `filterTouchedSection`);
+  it simply disappears, e.g. one you already approved. Test: `inbox_touched_test.go`.
 - **Badges** (`touchBadges`, `src/overview.mjs`): an icon plus the word
   **"DB"** (database glyph) / **"API"** (plug glyph) right next to the title,
   tooltip naming the files. They read the status backfill

@@ -1165,7 +1165,7 @@ func buildInboxSnapshot(ctx context.Context, db *sql.DB, pm *prmeta.Module) (*sn
 		// A status failure is non-fatal — serve the rows, skip the pills.
 		statuses = map[string]prStatus{}
 	}
-	sections = filterTouchedSection(sections, statuses)
+	sections = filterTouchedSection(sections, statuses, ghLogin(ctx))
 	addTouchSummaries(ctx, sections, statuses)
 	return &snapshotResult{
 		GeneratedFor: ghLogin(ctx),
@@ -1280,12 +1280,30 @@ func classifyTouched(paths []string) (migrations, api []string) {
 	return migrations, api
 }
 
+// isPersonalReviewer reports whether login is a reviewer of the PR in their own
+// name: a pending personal request or any submitted review (approved, changes
+// requested, commented, dismissed). A team entry never counts. Such a PR
+// belongs to the reviewer's own sections, never to the touched one.
+func isPersonalReviewer(r inboxRow, st prStatus, login string) bool {
+	if login == "" || login == "me" {
+		return false
+	}
+	for _, list := range [][]reviewer{r.Reviewers, st.Reviewers} {
+		for _, rv := range list {
+			if !rv.Team && rv.Login == login {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // filterTouchedSection keeps only the touchedSectionTitle rows whose status
 // lists a migration or API file, and drops the statuses of the candidates it
 // removes (they belong to no section any more). An empty statuses map (the
 // status fetch failed) empties the section rather than listing every
 // candidate unfiltered.
-func filterTouchedSection(sections []inboxSection, statuses map[string]prStatus) []inboxSection {
+func filterTouchedSection(sections []inboxSection, statuses map[string]prStatus, login string) []inboxSection {
 	for i, s := range sections {
 		if s.Title != touchedSectionTitle {
 			continue
@@ -1293,7 +1311,7 @@ func filterTouchedSection(sections []inboxSection, statuses map[string]prStatus)
 		kept := make([]inboxRow, 0, len(s.PRs))
 		for _, r := range s.PRs {
 			st := statuses[rowKey(r)]
-			if len(st.MigrationFiles) > 0 || len(st.APIFiles) > 0 {
+			if (len(st.MigrationFiles) > 0 || len(st.APIFiles) > 0) && !isPersonalReviewer(r, st, login) {
 				kept = append(kept, r)
 			} else {
 				delete(statuses, rowKey(r))
