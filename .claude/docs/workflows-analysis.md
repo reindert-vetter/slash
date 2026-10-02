@@ -452,6 +452,39 @@ Rules, in order:
   a PR ingested before rule 4a existed. The frontend collapses them to one card
   instead — `preferredCallRows` in `home.mjs`, see "One card per resolved call
   target" in `.claude/docs/underlying-code.md`.
+- **0 — Laravel routes (a ROUTE-category block), never 6c-bis.** Reported on
+  PR 13997: two routes on one controller (`[HuddleController::class, 'sso']`,
+  `[HuddleController::class, 'disconnect']`) linked only `sso` — not because
+  the route named it, but because 6c-bis's "first method" happened to be `sso`,
+  and `seen[class]` swallowed the second `HuddleController::class`. Rule 0
+  (`resolveCalls`, parsing in `route_resolve.go`) now resolves every route
+  action on a changed line to the EXACT method: `[Foo::class, 'm']`,
+  `'Foo@m'`, and a `resource`/`apiResource`/`singleton`/`apiSingleton` route's
+  implicit REST methods (honouring a chained `->only([...])`/`->except([...])`;
+  only methods the controller declares). `Kind: route_action`, key
+  `route_action:<Class>@<method>`, badge "route". A short class name shared by
+  two modules is disambiguated through the route file's `use` import (PSR-4
+  path match, `methodOnQualifiedClass`). **Middleware** named on a changed line
+  (`middleware(...)`, `withoutMiddleware(...)`, `'middleware' => ...`; a string
+  alias minus its `:params` resolved through `$middlewareAliases`/
+  `$routeMiddleware` in `app/Http/Kernel.php` or `->alias([...])` in
+  `bootstrap/app.php`, or `Foo::class`) links its `handle()` **only when this PR
+  changed or added that middleware class** (explicit request: an untouched or
+  vendor middleware gives no card); `Kind: route_middleware`, key
+  `middleware:<alias|Class>`, badge "middleware" — `withoutMiddleware` too,
+  without a separate badge. Deliberately NOT done: middleware of an enclosing
+  group on an UNCHANGED line, and `$middlewareGroups` names (never expanded).
+  Every class named by a route action or a middleware is kept out of rule
+  6c/6c-bis, and the Route builder calls themselves (`post`/`group`/
+  `middleware`/…, `routeBuilderMethods`) are never resolved (they used to go to
+  haiku and always came back notfound). `findCallSites` (`home.mjs`) has its
+  own branch per key shape, so a second route on the same controller does not
+  scope onto the first one's line. The `route_controller` RELATION
+  (`relations.go`) shares `routeActionsIn`, so a resource route now links only
+  REST methods there too; a module's `Http/Routes/` file is ROUTE since
+  `classify.go`'s `Http/Routes/` rule (needs a re-ingest). Where both exist,
+  the relation card wins (dedup in `relatedChildren`, see
+  `.claude/docs/underlying-code.md`). Tests: `route_resolve_test.go`.
 - **7 — API Resource `toArray()`.** A Resource used on a changed line surfaces
   its own `toArray()`, since that's where the output is defined — even when the
   Resource class itself isn't changed (unlike `controllerResourceDetector`'s

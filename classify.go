@@ -369,6 +369,11 @@ var categoryRules = []categoryRule{
 	{func(p string) bool { return hasSeg(p, "Http/Controllers/") }, "CONTROLLER"},
 	{func(p string) bool { return hasSeg(p, "Http/Requests/") }, "REQUEST"},
 	{func(p string) bool { return hasSeg(p, "Http/Resources/") }, "RESOURCE"},
+	// A module's own route files (modules/<Name>/[<Layer>/]Http/Routes/api.php)
+	// — same reasoning: the `routes/` rule below only matches the top-level
+	// Laravel directory, so a module route file fell through to OTHER and
+	// relations.go's routeControllerDetector (Category == "ROUTE") skipped it.
+	{func(p string) bool { return hasSeg(p, "Http/Routes/") }, "ROUTE"},
 	// A Temporal Activity (`#[ActivityMethod]`) always sits in a
 	// `Workflows/Activities/` directory, one level below the plain
 	// `Workflows/` directory that the generic type-directory table below maps

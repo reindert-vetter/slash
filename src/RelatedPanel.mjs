@@ -9664,6 +9664,11 @@ const KIND_LABEL = {
   // sitting next to them.
   class_ctor: 'constructor',
   class_first_method: 'eerste method',
+  // A Laravel route's exact controller method, and a changed middleware named
+  // on a route line (resolveCalls rule 0, see "Laravel routes" in
+  // .claude/docs/workflows-analysis.md).
+  route_action: 'route',
+  route_middleware: 'middleware',
   // A test's #[DataProvider('m')]/@dataProvider m → the provider method (see
   // .claude/docs/tembed-workflows.md, "PHPUnit data providers").
   data_provider: 'provider',
@@ -9721,6 +9726,8 @@ const DIFFSTAT_KINDS = new Set([
   'class_ref',
   'class_ctor',
   'class_first_method',
+  'route_action',
+  'route_middleware',
 ])
 function diffStatBadge(r) {
   if (!DIFFSTAT_KINDS.has(r.kind) || !r.diff) return ''

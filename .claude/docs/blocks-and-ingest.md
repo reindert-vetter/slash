@@ -1011,6 +1011,12 @@ module's own asset/lang directory, whose lang files must keep reaching the
 plain-module-file ordering guards) and `TestBuildRelationsRouteToModuleController`
 (`relations_test.go`, the whole path → category → edge chain).
 
+**Module route files follow the same rule:** `Http/Routes/` → ROUTE (a module
+keeps its routes at `modules/<Name>/[<Layer>/]Http/Routes/api.php`; the
+`routes/` rule only matches the top-level directory, so such a file was OTHER
+and `routeControllerDetector` skipped it — PR 13997). See rule 0 in
+`.claude/docs/workflows-analysis.md`.
+
 Consequence when this landed: a module controller/request/resource block
 changes category, so its badge changes too — but only after a **re-ingest**,
 since `category` is stored per block row in `graph.db`. (The left-list

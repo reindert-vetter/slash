@@ -423,9 +423,6 @@ var (
 	reArrayCallable = regexp.MustCompile(`\[\s*([\\A-Za-z0-9_]+)::class\s*,\s*['"]([A-Za-z0-9_]+)['"]`)
 	// 'Foo\Bar@method' — the old string-callable action (namespace ignored via shortName).
 	reStringCallable = regexp.MustCompile(`['"]([\\A-Za-z0-9_]+)@([A-Za-z0-9_]+)['"]`)
-	// Route::apiResource('prefix', Foo::class) / resource(...) / apiSingleton(...),
-	// including the old string-controller form Route::resource('prefix', 'Foo').
-	reResourceRoute = regexp.MustCompile(`(?:api)?(?:[Rr]esource|[Ss]ingleton)\s*\(\s*['"][^'"]*['"]\s*,\s*(?:([\\A-Za-z0-9_]+)::class|['"]([\\A-Za-z0-9_]+)['"])`)
 
 	// A FormRequest type-hinted parameter: `SomethingRequest $var`.
 	reRequestParam = regexp.MustCompile(`([\\A-Za-z0-9_]*Request)\s+\$`)
@@ -451,7 +448,9 @@ var (
 )
 
 // routeControllerDetector links a changed route file to the changed controller
-// methods it dispatches to (array-callable, string-callable, and resource routes).
+// methods it dispatches to — array-callable, string-callable, and a resource
+// route's implicit REST methods (routeActionsIn, route_resolve.go, shared with
+// resolveCalls rule 0).
 func routeControllerDetector(headDir string, pr int, blocks []Block) []relations.Relation {
 	ix := indexChangedBlocks(blocks)
 	var out []relations.Relation
@@ -465,26 +464,9 @@ func routeControllerDetector(headDir string, pr int, blocks []Block) []relations
 		if text == "" {
 			continue
 		}
-		for _, m := range reArrayCallable.FindAllStringSubmatch(text, -1) {
-			if b, ok := ix.method(shortName(m[1]), m[2]); ok && b.Category == "CONTROLLER" {
-				emit(route, b, matchLine(text, m[0], src.Start))
-			}
-		}
-		for _, m := range reStringCallable.FindAllStringSubmatch(text, -1) {
-			if b, ok := ix.method(shortName(m[1]), m[2]); ok && b.Category == "CONTROLLER" {
-				emit(route, b, matchLine(text, m[0], src.Start))
-			}
-		}
-		// Resource routes name a controller with implicit REST methods → link to
-		// every changed method of that controller.
-		for _, m := range reResourceRoute.FindAllStringSubmatch(text, -1) {
-			ctrl := m[1]
-			if ctrl == "" {
-				ctrl = m[2]
-			}
-			line := matchLine(text, m[0], src.Start)
-			for _, b := range ix.classMethods(shortName(ctrl), "CONTROLLER") {
-				emit(route, b, line)
+		for _, ra := range routeActionsIn(text) {
+			if b, ok := ix.method(shortName(ra.Class), ra.Method); ok && b.Category == "CONTROLLER" {
+				emit(route, b, matchLine(text, ra.Match, src.Start))
 			}
 		}
 	}

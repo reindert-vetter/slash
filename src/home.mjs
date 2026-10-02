@@ -5960,6 +5960,28 @@ function findCallSites(rows, name, spanArgs = false) {
     const cls = name.replace(/^(class_ctor|class_method):/, '')
     const esc = cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     re = new RegExp('\\b' + esc + '\\s*::\\s*class\\b|\\b' + esc + '\\s*\\(', 'g')
+  } else if (name.startsWith('route_action:')) {
+    // `route_action:<Class>@<method>` (resolveCalls rule 0, a Laravel route's
+    // exact controller method): the site is that route's own action literal —
+    // `[Foo::class, 'method']`, `'Foo@method'` — or, for a resource route's
+    // implicit REST method, the `resource('…', Foo::class)` call. Matching
+    // `Foo::class` alone would scope a second route on the same controller
+    // onto the first one's line too.
+    const [cls, method] = name.slice('route_action:'.length).split('@')
+    const c = cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const m = method.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    re = new RegExp(
+      '\\b' + c + "\\s*::\\s*class\\s*,\\s*['\"]" + m + "['\"]" +
+        '|\\b' + c + '@' + m + "['\"]" +
+        "|(?:[Rr]esource|[Ss]ingleton)\\s*\\(\\s*['\"][^'\"]*['\"]\\s*,\\s*(?:[\\w\\\\]*\\\\)?(?:" + c + "\\s*::\\s*class|['\"]" + c + "['\"])",
+      'g',
+    )
+  } else if (name.startsWith('middleware:')) {
+    // `middleware:<alias|Class>` (resolveCalls rule 0, a changed middleware
+    // named on a route line): the quoted alias with optional `:params`
+    // (`'auth:api'`), or the `Foo::class` form.
+    const esc = name.slice('middleware:'.length).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    re = new RegExp("['\"](?:[\\w\\\\]*\\\\)?" + esc + "(?::[^'\"]*)?['\"]|\\b" + esc + '\\s*::\\s*class\\b', 'g')
   } else if (isBlockLevelCallKey(name)) {
     // A block-level synthetic key (resource:/migration_model:/data_provider:/
     // trait_usage:, see isBlockLevelCallKey) never appears as a literal

@@ -655,6 +655,15 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		}
 		memberHostFiles[key] = extractBlockSourceRaw(filepath.Join(headDir, hb.File), hb.File, hb.Class, classHeaderSentinel).Text != ""
 	}
+	// changedClassBlocks: the PR's own new-side blocks per short class name —
+	// rule 0's middleware gate ("only a middleware this PR changed or added").
+	changedClassBlocks := map[string][]Block{}
+	for _, cb := range blocks {
+		if cb.Side != SideOld && cb.Class != "" {
+			changedClassBlocks[shortName(cb.Class)] = append(changedClassBlocks[shortName(cb.Class)], cb)
+		}
+	}
+	var middlewareAliases map[string]string // loaded on the first ROUTE block
 
 	var out []callresolve.Entry
 	for _, b := range blocks {
@@ -706,6 +715,58 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 		}
 		emit := func(key string, def *Block) {
 			emitKind(key, def, callresolve.KindMethodCall)
+		}
+
+		// 0. Laravel route file (category ROUTE): every route action resolves
+		// to the EXACT controller method it dispatches to — [Foo::class, 'm'],
+		// 'Foo@m', and a resource route's implicit REST methods (only those
+		// the controller declares) — instead of rule 6c-bis's class + "first
+		// method" guess, which linked only whichever method happened to be
+		// declared first and nothing for a second route on the same
+		// controller. A middleware named on a changed line (middleware(...),
+		// withoutMiddleware(...), 'middleware' => ...; a string alias resolved
+		// through the Kernel's $middlewareAliases, or Foo::class) links its
+		// handle() ONLY when this PR changed or added that middleware class —
+		// an untouched or vendor middleware gives no card (explicit request).
+		// Group names ($middlewareGroups) are not expanded. Every class named
+		// here is kept out of rule 6c below, and the Route builder calls
+		// themselves (post/group/middleware/...) are never resolved. See
+		// route_resolve.go and "Laravel routes" in workflows-analysis.md.
+		routeClassRefs := map[string]bool{}
+		if b.Category == "ROUTE" {
+			for name := range routeBuilderMethods {
+				seen[name] = true
+			}
+			imports := useImports(src.Text)
+			for _, ra := range routeActionsIn(scan) {
+				short := shortName(ra.Class)
+				routeClassRefs[short] = true
+				if def := methodOnQualifiedClass(idx, qualifiedClass(ra.Class, imports), short, ra.Method); def != nil {
+					emitKind("route_action:"+short+"@"+ra.Method, def, callresolve.KindRouteAction)
+				}
+			}
+			for _, mw := range routeMiddlewaresIn(scan) {
+				class, key := mw.Class, mw.Class
+				if mw.Alias != "" {
+					if middlewareAliases == nil {
+						middlewareAliases = loadMiddlewareAliases(headDir)
+					}
+					class, key = middlewareAliases[mw.Alias], mw.Alias
+				}
+				if class == "" {
+					continue
+				}
+				routeClassRefs[class] = true
+				changed := changedClassBlocks[class]
+				if len(changed) == 0 {
+					continue
+				}
+				def := methodOnQualifiedClass(idx, qualifiedClass(class, imports), class, "handle")
+				if def == nil {
+					def = &changed[0]
+				}
+				emitKind("middleware:"+key, def, callresolve.KindRouteMiddleware)
+			}
 		}
 
 		// 1. $this->m( / self::m( / static::m( → a method on the caller's own
@@ -1254,7 +1315,7 @@ func resolveCalls(dataDir string, pr int, blocks []Block) []callresolve.Entry {
 				continue
 			}
 			class := shortName(recv)
-			if seen[class] || class == shortName(b.Class) {
+			if seen[class] || class == shortName(b.Class) || routeClassRefs[class] {
 				continue
 			}
 			if def, ok := idx.models[class]; ok {

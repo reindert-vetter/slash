@@ -124,6 +124,14 @@ const (
 	// any other call into an unchanged file.
 	KindClassCtor        = "class_ctor"
 	KindClassFirstMethod = "class_first_method"
+	// KindRouteAction is a Laravel route's action resolved to the exact
+	// controller method ([Foo::class, 'm'], 'Foo@m', or a resource route's
+	// implicit REST method) — resolveCalls rule 0.
+	KindRouteAction = "route_action"
+	// KindRouteMiddleware is a middleware named on a route line (alias or
+	// Foo::class, also withoutMiddleware) resolved to its handle() — only
+	// emitted when the PR itself changed that middleware class (rule 0).
+	KindRouteMiddleware = "route_middleware"
 	// KindConfigValue is a config('file.key.path') call resolved to the value
 	// declared in config/<file>.php — read-only reference material, like
 	// KindTranslation/KindConstRef (see resolveConfigCalls,
