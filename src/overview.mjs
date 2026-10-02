@@ -1667,7 +1667,12 @@ async function copyGithubUrl(pr) {
 // a popover can be opened by hand.
 function canRemoveSelf(pr) {
   const me = meLogin()
-  return !!me && !!pr.author && pr.author !== me
+  if (!me || !pr.author || pr.author === me) return false
+  // Only offered when I am a personal (non-team) reviewer on this PR; reads the
+  // status backfill, so it stays hidden until that has landed.
+  const st = statusFor(pr)
+  const list = st && Array.isArray(st.reviewers) ? st.reviewers : []
+  return list.some((r) => !r.team && r.login === me)
 }
 
 // removedPrs — the PRs this tab took itself off as a reviewer, hidden from every
@@ -2194,7 +2199,7 @@ function popoverPanelCls() {
   )
 }
 
-function popover(pr) {
+function popover(pr, compact) {
   const m = (pr.title || '').match(/\b([A-Z][A-Z0-9]+-\d+)\b/)
   return html`
     <div
@@ -2225,6 +2230,7 @@ function popover(pr) {
       ${repoReady(pr)
         ? html`<div class="contents">
             ${() => (treeSupported(pr) ? (pr.hasGraph ? ingestedActions(pr) : generateAction(pr)) : '')}
+            ${() => (compact ? snoozeAction(pr) : '')}
             ${githubLinkAction(pr)}
             <button type="button" data-testid="copy-url" class="${popoverRowCls()}" @click="${() => copyGithubUrl(pr)}">
               ${() => (ui.copiedFor === prUid(pr) ? icon('check', 'h-3.5 w-3.5') : icon('copy', 'h-3.5 w-3.5'))}
@@ -2236,7 +2242,7 @@ function popover(pr) {
                     ${icon('external-link', 'h-3.5 w-3.5')} ${t('Open Jira-ticket')}
                   </a>`
                 : ''}
-            ${snoozeAction(pr)}
+            ${() => (compact ? '' : snoozeAction(pr))}
             ${() => (canRemoveSelf(pr) ? removeReviewerAction(pr) : '')}
             ${() => (pr.isDraft ? [readyForReviewSection(pr).key('ready-section')] : [])}
           </div>`
@@ -2328,7 +2334,7 @@ function compactPrRow(pr) {
       @click="${() => togglePopover(prUid(pr))}"
       @dblclick="${() => openOrGenerate(pr)}"
     >
-      ${compactRowInner(pr)} ${() => (ui.openPopover === prUid(pr) ? popover(pr) : null)}
+      ${compactRowInner(pr)} ${() => (ui.openPopover === prUid(pr) ? popover(pr, true) : null)}
     </div>
   `.key('row:' + prUid(pr))
 }

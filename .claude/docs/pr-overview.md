@@ -1071,7 +1071,8 @@ copied, mirroring `ingestIcon`'s reactive icon swap.
 The popover's **final** item (`data-testid=remove-reviewer`, `user-minus` icon)
 takes me off the PR's requested reviewers. It only renders when `canRemoveSelf`
 holds — i.e. `pr.author !== meLogin()`: dropping yourself from **your own** PR
-makes no sense. An **unknown** local login (offline / `SLASH_GITHUB=off`, where
+makes no sense. It also requires that I am a personal (non-team) reviewer in
+`statusFor(pr).reviewers` (hidden until the status backfill lands). An **unknown** local login (offline / `SLASH_GITHUB=off`, where
 `GET /api/me` answers `{ok:false}`) hides it too, since "not my PR" cannot be
 established then; that is why `tests/overview-remove-reviewer.spec.mjs` stubs
 `/api/me`. `meLogin()` is primed by `ensureMe()`, which now rides along inside
@@ -1117,6 +1118,9 @@ The row is never an `<a href="/pr/<id>">`, so the old hover-only
 existed to avoid nesting an interactive element in an `<a>`.
 
 ### "Snooze…" — hide a PR until a chosen moment
+
+In a "Migrations & API changes" (compact) row the item sits directly after the
+first real action (generate/open-tree) instead of after "Open Jira-ticket".
 
 Reviewer request (screenshot `data/review-shots/task-overview-snooze-pr.png`):
 "ik wil prs kunnen snoozen, dat moet een menu item zijn onder open jira
