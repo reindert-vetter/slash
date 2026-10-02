@@ -915,12 +915,12 @@ function rowStateMark(pr) {
 // (text-[10.5px] -> text-[12px] font-semibold, slate-500 -> slate-700 /
 // zinc-500 -> zinc-300 for contrast) so the first name reads as prominent
 // as the avatar itself.
-function authorMark(pr) {
+function authorMark(pr, top = false) {
   const login = pr.author || ''
   const full = fullNameOf(login)
   const title = full ? full + ' (' + login + ')' : login
   return html`
-    <span class="flex w-20 shrink-0 flex-col items-center gap-1" data-testid="row-author" data-author="${login}" title="${title}">
+    <span class="${'flex w-20 shrink-0 flex-col items-center gap-1' + (top ? ' self-start' : '')}" data-testid="row-author" data-author="${login}" title="${title}">
       ${avatarHTML(full || login, avatarUrlOf(login), 'h-10 w-10')}
       <span class="max-w-full truncate text-[12px] font-semibold leading-none text-slate-700 dark:text-zinc-300">${displayNameOf(login)}</span>
     </span>
@@ -1086,7 +1086,8 @@ function touchChip(text, sign, verdict, testKey) {
   const title = v ? text + ' — AI: ' + v.word() + (verdict.note ? ': ' + verdict.note : '') : text + ' — ' + legend
   // The reason sits next to the chip as plain grey text for caution/breaking only.
   const note = v && verdict.verdict !== 'safe' && verdict.note ? verdict.note : ''
-  return html`<span class="inline-flex min-w-0 items-center gap-1"
+  // A chip with a note takes a whole line (basis-full in the wrapping parent) so the note sits right of it, uncut.
+  return html`<span class="${'inline-flex min-w-0 items-center gap-1' + (note ? ' basis-full' : '')}"
     ><span
       class="${'inline-flex shrink-0 items-center rounded px-1 py-px text-[10.5px] font-medium ring-1 ring-inset ' + TOUCH_TONE_CLS[tone]}"
       data-testid="touch-chip"
@@ -1114,13 +1115,13 @@ function touchItemSegment(group, it, chips, idx) {
   }
   if (parts.length) {
     const prefix = it.kind === 'routes' ? 'routes/' + it.name : it.new ? t('{name} (nieuw)', { name: it.name }) : it.name
-    return html`<div class="flex min-w-0 flex-col gap-0.5"
+    return html`<div class="flex min-w-0 basis-full flex-col gap-0.5"
       ><span>${prefix + ':'}</span
-      ><div class="flex min-w-0 flex-col gap-0.5 pl-3">${parts}</div></div
+      ><div class="flex min-w-0 flex-wrap gap-1 pl-3">${parts}</div></div
     >`.key('seg:' + group + ':' + idx)
   }
   const k = chipKey(group, it)
-  return html`<div class="flex min-w-0 flex-col">${[touchChip(touchItemText(it), itemSign(it), chips[k], k + '#' + idx)]}</div>`.key(
+  return html`<div class="contents">${[touchChip(touchItemText(it), itemSign(it), chips[k], k + '#' + idx)]}</div>`.key(
     'seg:' + group + ':' + idx,
   )
 }
@@ -1161,7 +1162,7 @@ function touchSummaryLines(pr) {
         title="${text + ' — ' + t('+ toegevoegd · − verwijderd · ~ gewijzigd')}"
       >
         <span class="shrink-0 font-semibold text-slate-700 dark:text-zinc-300">${prefix}</span>
-        <div class="flex min-w-0 flex-col gap-0.5">${body}</div>
+        <div class="flex min-w-0 flex-wrap gap-1">${body}</div>
       </div>`.key(testid + ':' + text + ':' + JSON.stringify(chips)),
     )
   }
@@ -1210,7 +1211,7 @@ function touchAiSummary(pr) {
 // opens the same popover as every other row.
 function compactRowInner(pr) {
   return [
-    authorMark(pr),
+    authorMark(pr, true),
     html`
       <div class="min-w-0 flex-1" data-testid="touch-summary">
         <div class="flex items-center gap-2">

@@ -62,7 +62,7 @@ test.describe('PR overview — Migrations & API changes summary rows', () => {
     // One chip per column/route/key; the direction glyph stays in the text.
     const dbChips = row.locator('[data-testid="touch-summary-db"] [data-testid="touch-chip"]')
     await expect(dbChips).toHaveText(['+refund_id', '✕ −legacy', 'Nieuwe tabel refunds'])
-    // Every chip on its own line (strictly increasing y).
+    // Chips without a note flow side by side; the one with a note (chip 2) gets its own line.
     const ys = []
     for (let i = 0; i < 3; i++) ys.push((await dbChips.nth(i).boundingBox()).y)
     expect(ys[0] < ys[1] && ys[1] < ys[2]).toBe(true)
