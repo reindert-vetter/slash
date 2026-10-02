@@ -875,7 +875,7 @@ as a pill next to the DB/API badges (`touch-ai-impact`: `✓ additief` /
 `⚠ let op` / `✕ breaking`, reason on the AI sentence line); a **summary sentence**
 preceded by that impact reason as grey text (`touch-ai-summary`, no "AI" pill; `touch-ai-impact-reason`); and a **verdict per chip**
 (`safe`/`caution`/`breaking`) — the chip colour then follows the verdict and a
-second glyph `✓`/`⚠`/`✕` is prepended, never colour alone; for `caution`/`breaking` the chip's note also shows as small grey text next to it (`touch-chip-note`), not only in the tooltip.
+second glyph `✓`/`⚠`/`✕` is prepended, never colour alone; for `caution`/`breaking` the chip's note also shows as small grey text next to it (`touch-chip-note`), not only in the tooltip. Every chip sits on its own line under the single "DB"/"API" label (a multi-chip item shows its `name:` prefix with its chips indented below), so a long list is never cut off at the right edge.
 
 - **Trigger:** `autoStartTouchAI` from the `pr_inbox` tracker's `refreshInbox`
   Activity, fire-and-forget, gated by `runtimeReady`, `!ghDisabled()`, the

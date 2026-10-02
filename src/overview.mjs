@@ -1114,12 +1114,13 @@ function touchItemSegment(group, it, chips, idx) {
   }
   if (parts.length) {
     const prefix = it.kind === 'routes' ? 'routes/' + it.name : it.new ? t('{name} (nieuw)', { name: it.name }) : it.name
-    return html`<span class="inline-flex shrink-0 items-center gap-1"
-      ><span>${prefix + ':'}</span>${parts}</span
+    return html`<div class="flex min-w-0 flex-col gap-0.5"
+      ><span>${prefix + ':'}</span
+      ><div class="flex min-w-0 flex-col gap-0.5 pl-3">${parts}</div></div
     >`.key('seg:' + group + ':' + idx)
   }
   const k = chipKey(group, it)
-  return html`<span class="inline-flex shrink-0 items-center gap-1">${[touchChip(touchItemText(it), itemSign(it), chips[k], k + '#' + idx)]}</span>`.key(
+  return html`<div class="flex min-w-0 flex-col">${[touchChip(touchItemText(it), itemSign(it), chips[k], k + '#' + idx)]}</div>`.key(
     'seg:' + group + ':' + idx,
   )
 }
@@ -1154,13 +1155,14 @@ function touchSummaryLines(pr) {
     if (!text) return
     const body = segs || [html`<span class="truncate">${text}</span>`.key('files')]
     lines.push(
-      html`<p
-        class="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-slate-600 dark:text-zinc-400"
+      html`<div
+        class="flex min-w-0 items-start gap-1.5 overflow-hidden text-[11.5px] text-slate-600 dark:text-zinc-400"
         data-testid="${testid}"
         title="${text + ' — ' + t('+ toegevoegd · − verwijderd · ~ gewijzigd')}"
       >
-        <span class="shrink-0 font-semibold text-slate-700 dark:text-zinc-300">${prefix}</span> ${body}
-      </p>`.key(testid + ':' + text + ':' + JSON.stringify(chips)),
+        <span class="shrink-0 font-semibold text-slate-700 dark:text-zinc-300">${prefix}</span>
+        <div class="flex min-w-0 flex-col gap-0.5">${body}</div>
+      </div>`.key(testid + ':' + text + ':' + JSON.stringify(chips)),
     )
   }
   push('DB', 'db', sum.db, st.migrationFiles, 'touch-summary-db')

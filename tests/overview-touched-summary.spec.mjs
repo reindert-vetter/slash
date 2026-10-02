@@ -62,6 +62,10 @@ test.describe('PR overview — Migrations & API changes summary rows', () => {
     // One chip per column/route/key; the direction glyph stays in the text.
     const dbChips = row.locator('[data-testid="touch-summary-db"] [data-testid="touch-chip"]')
     await expect(dbChips).toHaveText(['+refund_id', '✕ −legacy', 'Nieuwe tabel refunds'])
+    // Every chip on its own line (strictly increasing y).
+    const ys = []
+    for (let i = 0; i < 3; i++) ys.push((await dbChips.nth(i).boundingBox()).y)
+    expect(ys[0] < ys[1] && ys[1] < ys[2]).toBe(true)
     // The AI verdict adds its own glyph (never colour alone).
     await expect(dbChips.nth(1)).toHaveAttribute('data-verdict', 'breaking')
     await expect(dbChips.nth(0)).toHaveAttribute('data-verdict', '')
