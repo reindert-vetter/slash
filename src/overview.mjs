@@ -92,6 +92,9 @@ const state = reactive({
   snoozes: {},
   snoozedOpen: false,
   snoozeTick: 0,
+  // ignores: prUid -> true from GET /api/prignores ("Negeren": hidden from
+  // Migrations & API changes only, see "Negeren" in .claude/docs/pr-overview.md).
+  ignores: {},
   recentLoading: false,
   recentPrs: [], // [{ pr, blocks, files, title, author?, additions?, deletions?, changedFiles?, headRefName?, updatedAt? }]
   // Preset-filter drawer (a second expandable button like "Recent gegenereerd").
@@ -163,6 +166,7 @@ const ui = reactive({
   // snoozeFor: the prUid whose snooze options are expanded in the popover;
   // snoozeBusy: a pr_snooze Signal in flight; snoozeError: its last failure.
   snoozeFor: null, snoozeBusy: false, snoozeError: null,
+  ignoreBusy: false, ignoreError: null,
   popoverAbove: false,
   // sectionsRefreshing/jiraIssuesRefreshing — the busy flag behind the manual
   // "Refresh" button now shown above every category (see refreshButton
@@ -1909,6 +1913,100 @@ function snoozeAction(pr) {
   `
 }
 
+// ── ignoring a PR (Migrations & API changes only) ───────────────────────────
+// "Negeren" (popover of a compact row, right before Snooze) hides the PR from
+// "Migrations & API changes" only — in any other section it stays. No expiry,
+// not lifted by activity. Ignored rows live in the bottom "Gesnoozed &
+// genegeerd" block, whose popover offers "Negeren opheffen". Write: the
+// pr_ignore workflow (start + Signal); read: GET /api/prignores.
+
+let ignoreRunId = ''
+
+function isIgnored(pr) {
+  return !!state.ignores[prUid(pr)]
+}
+
+// leavesSection — snoozed anywhere, or ignored while in the M&A section: the PR
+// moves out of its section into the bottom block.
+function leavesSection(pr, secTitle) {
+  return !!activeSnooze(pr) || (secTitle === TOUCHED_SECTION && isIgnored(pr))
+}
+
+async function loadIgnores() {
+  try {
+    const res = await fetch('/api/prignores')
+    if (!res.ok) return
+    const body = await res.json()
+    if (!body || !body.ok || !Array.isArray(body.ignores)) return
+    const next = {}
+    body.ignores.forEach((ig) => {
+      next[prUid({ repo: ig.repo, number: ig.pr })] = true
+    })
+    state.ignores = next
+  } catch (e) {
+    // keep the current ignores
+  }
+}
+
+async function ensureIgnoreRun() {
+  if (ignoreRunId) return ignoreRunId
+  const res = await fetch('/api/workflows/pr_ignore', { method: 'POST' })
+  if (!res.ok) throw new Error('pr_ignore start failed')
+  const body = await res.json()
+  ignoreRunId = body.runId || ''
+  if (!ignoreRunId) throw new Error('pr_ignore: no run id')
+  return ignoreRunId
+}
+
+// sendIgnore signals {repo, pr, ignore} to the pr_ignore tracker, updates the
+// list optimistically and re-reads the server's truth.
+async function sendIgnore(pr, ignore) {
+  if (ui.ignoreBusy) return
+  ui.ignoreBusy = true
+  ui.ignoreError = null
+  try {
+    const runId = await ensureIgnoreRun()
+    const res = await fetch('/api/workflows/' + runId + '/signals/pr_ignore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo: pr.repo || undefined, pr: pr.number, ignore }),
+    })
+    if (!res.ok) throw new Error('pr_ignore signal failed')
+    closePopover()
+    const next = { ...state.ignores }
+    if (ignore) next[prUid(pr)] = true
+    else delete next[prUid(pr)]
+    state.ignores = next
+    if (ignore) selectTopRow()
+    scheduleRepaint()
+    loadIgnores()
+  } catch (e) {
+    ui.ignoreError = t('Negeren mislukt')
+  } finally {
+    ui.ignoreBusy = false
+  }
+}
+
+// ignoreAction — "Negeren" / "Negeren opheffen" popover row (stable root; the
+// label is one string binding, the error its own keyed array).
+function ignoreAction(pr) {
+  return html`
+    <div class="contents">
+      <button
+        type="button"
+        data-testid="ignore-pr"
+        disabled="${() => ui.ignoreBusy}"
+        class="${popoverRowCls()}"
+        @click="${() => sendIgnore(pr, !isIgnored(pr))}"
+      >
+        ${icon('x', 'h-3.5 w-3.5')}
+        <span class="flex-1 truncate">${() => t(isIgnored(pr) ? 'Negeren opheffen' : 'Negeren')}</span>
+      </button>
+      ${() => (ui.ignoreError ? [html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400" data-testid="ignore-error">${ui.ignoreError}</p>`.key('ignore-err')] : [])}
+    </div>
+  `
+}
+
 // snoozeMark — "· gesnoozed tot ma 5 okt 08:00" in the row's meta line, for a
 // snoozed row (the "Gesnoozed" section, and a search hit). Stable root, the
 // toggle lives inside it (same shape as newSinceMark).
@@ -1941,7 +2039,7 @@ function snoozedSection(prs) {
           >${chevronFilled('h-4 w-4 text-slate-500 dark:text-zinc-500')}</span
         >
         ${icon('clock', 'h-3.5 w-3.5 text-slate-500 dark:text-zinc-500')}
-        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t('Gesnoozed ({n})', { n: prs.length })}</span>
+        <span class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t('Gesnoozed & genegeerd ({n})', { n: prs.length })}</span>
       </button>
       ${() => (state.snoozedOpen ? [html`<div class="mt-2">${listBox(prs.map((pr) => ({ pr })))}</div>`.key('snoozed:open')] : [html`<span class="hidden"></span>`.key('snoozed:closed')])}
     </section>
@@ -2230,6 +2328,7 @@ function popover(pr, compact) {
       ${repoReady(pr)
         ? html`<div class="contents">
             ${() => (treeSupported(pr) ? (pr.hasGraph ? ingestedActions(pr) : generateAction(pr)) : '')}
+            ${() => (compact || isIgnored(pr) ? ignoreAction(pr) : '')}
             ${() => (compact ? snoozeAction(pr) : '')}
             ${githubLinkAction(pr)}
             <button type="button" data-testid="copy-url" class="${popoverRowCls()}" @click="${() => copyGithubUrl(pr)}">
@@ -2535,7 +2634,7 @@ function headerBlock() {
         ${() => runningBadge()}
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
           >${() => {
-            const n = state.sections.reduce((acc, s) => acc + s.prs.filter((pr) => !activeSnooze(pr)).length, 0)
+            const n = state.sections.reduce((acc, s) => acc + s.prs.filter((pr) => !leavesSection(pr, s.title)).length, 0)
             return n + ' PR' + (n === 1 ? '' : 's')
           }}</span
         >
@@ -3313,7 +3412,7 @@ function mainContent() {
         const snoozed = []
         state.sections.forEach((sec) => {
           sec.prs.forEach((pr) => {
-            if (activeSnooze(pr)) {
+            if (leavesSection(pr, sec.title)) {
               if (!snoozed.some((p) => prUid(p) === prUid(pr))) snoozed.push(pr)
               return
             }
@@ -3344,7 +3443,7 @@ function mainContent() {
         // back to the end of the list rather than disappearing with it.
         let issuesAt = -1
         state.sections.forEach((sec) => {
-          const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)) && !activeSnooze(pr))
+          const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)) && !leavesSection(pr, sec.title))
           const block = sectionBlock(sec, filtered)
           if (block) out.push(block)
           // "Migrations & API changes" sits directly under "Needs your
@@ -3639,7 +3738,7 @@ async function loadInbox() {
       if (body && body.ok && body.live) {
         // The snoozes decide which section a row renders in, so they land
         // before the rows do (no flash of a snoozed row in its section).
-        await loadSnoozes()
+        await Promise.all([loadSnoozes(), loadIgnores()])
         if (gen !== loadGen) return
         await applyLive(body)
         kickOffStatuses(gen)
@@ -3845,7 +3944,7 @@ function trySelectTopAfterApprove() {
 // simply be released (reanchorSelection can't find selKey anymore) and the page
 // would sit there with no ring at all.
 function selectTopRow() {
-  const firstRow = state.sections.flatMap((s) => s.prs).find((pr) => !activeSnooze(pr))
+  const firstRow = state.sections.flatMap((s) => s.prs.filter((pr) => !leavesSection(pr, s.title))).find(Boolean)
   if (!firstRow) return false
   setSelKey('row:' + prUid(firstRow))
   return true
@@ -4853,6 +4952,7 @@ watch(
       // Snoozing/waking a row moves it in or out of the "Gesnoozed" block.
       state.snoozedOpen,
       Object.keys(state.snoozes).length,
+      Object.keys(state.ignores).length,
       state.snoozeTick,
     ]),
   () => scheduleRepaint(),
@@ -4908,7 +5008,7 @@ async function reloadSnapshot() {
       state.generatedFor = body.generatedFor || state.generatedFor
       state.inboxRunId = body.runId || state.inboxRunId
       const sections = normalizeSections(body.sections)
-      await Promise.all([primeSectionNames(sections), loadSnoozes()])
+      await Promise.all([primeSectionNames(sections), loadSnoozes(), loadIgnores()])
       if (gen !== loadGen) return
       state.sections = sections
       state.cached = false

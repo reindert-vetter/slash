@@ -35,14 +35,14 @@ test.describe('PR overview — snooze a PR', () => {
 
     await expect(inSection).toHaveCount(0)
     const snoozed = page.locator('[data-testid="snoozed-section"]')
-    await expect(snoozed.locator('[data-testid="snoozed-toggle"]')).toContainText('Gesnoozed (1)')
+    await expect(snoozed.locator('[data-testid="snoozed-toggle"]')).toContainText('Gesnoozed & genegeerd (1)')
     // Collapsed by default.
     await expect(snoozed.locator('[data-testid="pr-row"]')).toHaveCount(0)
 
     // It is durable: a reload still has it snoozed.
     await page.reload()
     await appReady(page)
-    await expect(page.locator('[data-testid="snoozed-toggle"]')).toContainText('Gesnoozed (1)')
+    await expect(page.locator('[data-testid="snoozed-toggle"]')).toContainText('Gesnoozed & genegeerd (1)')
     await expect(inSection).toHaveCount(0)
 
     await page.locator('[data-testid="snoozed-toggle"]').click()
@@ -74,7 +74,7 @@ test.describe('PR overview — snooze a PR', () => {
     const section = page.locator('[data-testid="section"][data-title="Needs your review"]')
     await expect(section.locator('[data-testid="pr-row"][data-pr="12888"]')).toBeVisible()
     await expect(section.locator('[data-testid="pr-row"][data-pr="12903"]')).toHaveCount(0)
-    await expect(page.locator('[data-testid="snoozed-toggle"]')).toContainText('Gesnoozed (1)')
+    await expect(page.locator('[data-testid="snoozed-toggle"]')).toContainText('Gesnoozed & genegeerd (1)')
   })
 
   test('a search hit that is snoozed still shows, with its snooze mark', async ({ page }) => {

@@ -1154,7 +1154,7 @@ ticket … morgen 8 uur, volgende week maandag, 7 dagen".
   row (`selectTopRow`, which skips snoozed rows) and the snoozes are re-read.
 - **Where a snoozed PR goes:** out of its section (and out of any stack), into
   one collapsed block at the very bottom of the inbox sections,
-  **"Gesnoozed (N)"** (`snoozedSection`, `data-testid=snoozed-section`/
+  **"Gesnoozed & genegeerd (N)"** (`snoozedSection`, `data-testid=snoozed-section`/
   `snoozed-toggle`, `state.snoozedOpen`). Its rows are ordinary `prRow`s —
   same popover — and carry a **"gesnoozed tot ma 5 okt 08:00"** word in the
   meta line (`snoozeMark`, `data-testid=snooze-mark`). The header's "N PRs"
@@ -1178,6 +1178,19 @@ ticket … morgen 8 uur, volgende week maandag, 7 dagen".
   A wake-up timer (`scheduleSnoozeWake`, one `setTimeout` to the earliest
   `until`, bumping `state.snoozeTick`) brings a row back while the tab stays
   open; activity arrives with the ordinary 60s snapshot poll.
+### "Negeren" — ignore a PR in Migrations & API changes
+
+Only offered in **compact (M&A) rows**: `ignoreAction` sits directly before
+Snooze (menu: Sluit menu, first action, Negeren, Snooze, rest). It hides the PR
+from the M&A section **only**, per PR (repo + number); no expiry, not lifted by
+activity. Such a row goes to the same bottom block as snoozed PRs
+(`leavesSection(pr, secTitle)`: snoozed anywhere, or ignored while in M&A), whose
+popover shows **"Negeren opheffen"** instead (`isIgnored`). Write: `pr_ignore`
+tracker (`pr_ignore.go`, `modules/prignore`, `data/prignore.db`; start
+`POST /api/workflows/pr_ignore`, Signal `{repo, pr, ignore}`); read:
+`GET /api/prignores` into `state.ignores`, awaited with the snoozes before rows
+are pushed. Test: `tests/overview-ignore.spec.mjs`, `pr_ignore_test.go`.
+
 - Tests: `tests/overview-snooze.spec.mjs` (real workflow end-to-end, the
   activity wake-up, the search mark), `pr_snooze_test.go`,
   `modules/prsnooze/prsnooze_test.go`.

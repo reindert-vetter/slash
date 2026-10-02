@@ -33,6 +33,7 @@ import (
 	"slash/modules/jiranotify"
 	"slash/modules/langpref"
 	"slash/modules/plan"
+	"slash/modules/prignore"
 	"slash/modules/prmeta"
 	"slash/modules/prsnooze"
 	"slash/modules/relations"
@@ -349,6 +350,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		ji.Close()
 		return nil, nil, err
 	}
+	pig, err := prignore.Open(dataDir + "/prignore.db")
+	if err != nil {
+		return nil, nil, err
+	}
 	psz, err := prsnooze.Open(dataDir + "/prsnooze.db")
 	if err != nil {
 		sq.Close()
@@ -456,6 +461,8 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// Same pattern for the /pr-overview snoozes: a nil store makes the
 	// pr_snooze Activities no-ops and GET /api/prsnoozes empty.
 	mgr.prsnooze = psz
+	// Same for the "Negeren" ignores (pr_ignore, GET /api/prignores).
+	mgr.prignore = pig
 	// Same pattern for the per-type language preference: a nil store makes
 	// LangFor report "nl" (the default) and saveLangPref a no-op, i.e. the
 	// pre-existing all-Dutch behaviour.
@@ -543,6 +550,10 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		// ID to signal to (no poller — waking up is a read-side check).
 		if _, err := mgr.EnsurePrSnooze(); err != nil {
 			mgr.logf("prsnooze: ensure: %v", err)
+		}
+		// Own the pr_ignore tracker (same reasoning as pr_snooze).
+		if _, err := mgr.EnsurePrIgnore(); err != nil {
+			mgr.logf("prignore: ensure: %v", err)
 		}
 		// Own the per-repo language-preference tracker so the settings page's
 		// three language toggles have a Run ID to signal to (no poller — it
@@ -967,6 +978,9 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workflows/pr_snooze", s.handlePrSnoozeStart)
 	// GET /api/prsnoozes → read-only list of pending snoozes.
 	mux.HandleFunc("/api/prsnoozes", s.handlePrSnoozes)
+	// pr_ignore tracker + read-only list of ignores (Migrations & API changes).
+	mux.HandleFunc("/api/workflows/pr_ignore", s.handlePrIgnoreStart)
+	mux.HandleFunc("/api/prignores", s.handlePrIgnores)
 	// POST /api/workflows/lang_pref {repo?} → ensure the per-repo
 	// language-preference tracker; the settings page then signals one
 	// {kind, lang} pair to its Run ID via .../signals/lang_pref.
@@ -1689,6 +1703,19 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// for automatic review-tree generation (from the toggle on /settings and
 		// in the /pr-overview header).
 		// The pr_snooze signal snoozes/un-snoozes one PR on /pr-overview.
+		if parts[2] == SignalPrIgnore {
+			body, err := decodePrIgnoreSignal(r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := s.tasks.engine.SignalWorkflow(runID, SignalPrIgnore, body); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "set"})
+			return
+		}
 		if parts[2] == SignalPrSnooze {
 			body, err := decodePrSnoozeSignal(r)
 			if err != nil {

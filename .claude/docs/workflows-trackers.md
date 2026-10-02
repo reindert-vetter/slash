@@ -721,6 +721,12 @@ trivially deterministic.
 - Tests: `remove_reviewer_test.go`,
   `tests/overview-remove-reviewer.spec.mjs`.
 
+## Ignoring a PR in Migrations & API changes (`pr_ignore` + `modules/prignore`)
+
+Same shape as `pr_snooze` below, minus the clock: one tracker, Signal `pr_ignore
+{repo, pr, ignore}` -> `savePrIgnore`/`clearPrIgnore` Activities, read-only
+`GET /api/prignores`. See "Negeren" in `.claude/docs/pr-overview.md`.
+
 ## Snoozing a PR on the overview (`pr_snooze` + `modules/prsnooze`)
 
 Backs the overview popover's "Snooze…" item (see "Snooze…" in

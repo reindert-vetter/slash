@@ -30,6 +30,7 @@ import (
 	"slash/modules/jiranotify"
 	"slash/modules/langpref"
 	"slash/modules/plan"
+	"slash/modules/prignore"
 	"slash/modules/prmeta"
 	"slash/modules/prsnooze"
 	"slash/modules/relations"
@@ -1054,6 +1055,8 @@ type TaskManager struct {
 	// post-construction in newTasks; a nil store makes the pr_snooze Activities
 	// no-ops and GET /api/prsnoozes empty.
 	prsnooze *prsnooze.Module
+	// prignore holds the "Negeren" ignores (see pr_ignore.go); nil = no-ops.
+	prignore *prignore.Module
 	// langpref is the repo-wide LANGUAGE preference per output type
 	// ("ui"|"explain"|"reply"), read by LangFor while an Activity builds a
 	// Claude prompt and by GET /api/langpref. Set post-construction like the
@@ -1149,6 +1152,7 @@ type TaskManager struct {
 	jiraIssuesRun     string           // jira_issues Run ID (one per process — the issue lists are per-user, see jira_issues.go)
 	autoWarnRun       string           // auto_warn Run ID (one per repo/process)
 	autoIngestPrefRun string           // auto_ingest_pref Run ID (one per repo/process)
+	prIgnoreRun       string           // pr_ignore Run ID (one per process, see pr_ignore.go)
 	prSnoozeRun       string           // pr_snooze Run ID (one per process, see pr_snooze.go)
 	langPrefRun       string           // lang_pref Run ID (one per repo/process)
 	appSettingsRun    string           // app_settings Run ID (one per process, no repo scope)
@@ -3789,6 +3793,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	m.registerPlanExecuteActivities(engine)
 	// The two snooze Activities (see pr_snooze.go).
 	m.registerPrSnoozeActivities(engine)
+	m.registerPrIgnoreActivities(engine)
 	// Editing the PR's own title/description (see pr_description_edit.go).
 	m.registerPrDescriptionEdit(engine)
 
@@ -3814,6 +3819,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowAutoWarn, autoWarnPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAutoIngestPref, autoIngestPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowPrSnooze, prSnoozeWorkflow)
+	engine.RegisterWorkflow(WorkflowPrIgnore, prIgnoreWorkflow)
 	engine.RegisterWorkflow(WorkflowLangPref, langPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)
