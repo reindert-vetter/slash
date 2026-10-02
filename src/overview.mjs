@@ -1228,6 +1228,21 @@ function compactRowInner(pr) {
     `,
     html`<div class="flex shrink-0 items-center justify-end gap-3">
       <div class="flex justify-end">${() => graphChip(pr)}</div>
+      <button
+        type="button"
+        data-testid="ignore-x"
+        title="${t('Negeren')}"
+        aria-label="${t('Negeren')}"
+        class="shrink-0 cursor-pointer rounded-md p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 dark:text-zinc-500 dark:hover:bg-zinc-700/60 dark:hover:text-zinc-200"
+        @click="${(e) => {
+          // Stop propagation FIRST: the row's own @click would open the popover.
+          e.stopPropagation()
+          sendIgnore(pr, true)
+        }}"
+        @keydown="${(e) => e.stopPropagation()}"
+      >
+        ${icon('x', 'h-3.5 w-3.5')}
+      </button>
       ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </div>`,
   ]

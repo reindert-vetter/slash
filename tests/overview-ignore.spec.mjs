@@ -95,4 +95,17 @@ test.describe('PR overview — ignore a PR in Migrations & API changes', () => {
     await expect(row).toBeVisible()
     await expect(page.locator('[data-testid="ignore-error"]')).toBeVisible()
   })
+
+  test('the always-visible x button ignores at once without opening the popover', async ({ page }) => {
+    await injectSection(page)
+    await page.goto('/pr-overview')
+    await appReady(page)
+    const row = page.locator(`[data-testid="section"][data-title="${TOUCHED}"] [data-testid="pr-row"][data-pr="${PR}"]`)
+    const x = row.locator('[data-testid="ignore-x"]')
+    await expect(x).toHaveAttribute('aria-label', 'Negeren')
+    await x.click()
+    await expect(page.locator('[data-testid="pr-popover"]')).toHaveCount(0)
+    await expect(row).toHaveCount(0)
+    await expect(page.locator('[data-testid="snoozed-toggle"]')).toContainText('Gesnoozed & genegeerd (1)')
+  })
 })

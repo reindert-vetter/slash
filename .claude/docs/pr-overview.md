@@ -1191,7 +1191,7 @@ popover shows **"Negeren opheffen"** instead (`isIgnored`). Write: `pr_ignore`
 tracker (`pr_ignore.go`, `modules/prignore`, `data/prignore.db`; start
 `POST /api/workflows/pr_ignore`, Signal `{repo, pr, ignore}`); read:
 `GET /api/prignores` into `state.ignores`, awaited with the snoozes before rows
-are pushed. Test: `tests/overview-ignore.spec.mjs`, `pr_ignore_test.go`.
+are pushed. Every compact row also has an always-visible **✕ button** (`data-testid=ignore-x`, between the review-tree chip and the chevron, `title`/`aria-label` "Negeren") that calls `sendIgnore(pr, true)` directly, no confirmation (undo = "Negeren opheffen" in the bottom block); it stops propagation first so the row popover does not open. `sendIgnore`/`sendSnooze` are optimistic: the row leaves before the Signal returns and is restored (popover reopens with the error) on failure. Test: `tests/overview-ignore.spec.mjs`, `pr_ignore_test.go`.
 
 - Tests: `tests/overview-snooze.spec.mjs` (real workflow end-to-end, the
   activity wake-up, the search mark), `pr_snooze_test.go`,
