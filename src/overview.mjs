@@ -4459,7 +4459,7 @@ function paintSelection() {
   // See lastScrolledSelKey above: only scroll when the SELECTED ROW ITSELF
   // just changed, never on a plain repaint of an unchanged selection.
   if (selIndex >= 0 && rows[selIndex] && selKey !== lastScrolledSelKey) {
-    rows[selIndex].scrollIntoView({ block: 'nearest' })
+    rows[selIndex].scrollIntoView({ block: 'center', inline: 'nearest' })
   }
   lastScrolledSelKey = selKey
 }
