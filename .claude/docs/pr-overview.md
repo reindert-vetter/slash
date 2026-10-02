@@ -866,10 +866,10 @@ that fit no other section but do change one of those.
 One context-only Haiku call per PR head commit returns, as one JSON object:
 an **impact label** (`additive`/`caution`/`breaking` + a short reason) shown
 as a pill next to the DB/API badges (`touch-ai-impact`: `✓ additief` /
-`⚠ let op` / `✕ breaking`, reason in the tooltip); a **summary sentence**
-behind an "AI" label (`touch-ai-summary`); and a **verdict per chip**
+`⚠ let op` / `✕ breaking`, reason on the AI sentence line); a **summary sentence**
+preceded by that impact reason as grey text (`touch-ai-summary`, no "AI" pill; `touch-ai-impact-reason`); and a **verdict per chip**
 (`safe`/`caution`/`breaking`) — the chip colour then follows the verdict and a
-second glyph `✓`/`⚠`/`✕` is prepended, never colour alone.
+second glyph `✓`/`⚠`/`✕` is prepended, never colour alone; for `caution`/`breaking` the chip's note also shows as small grey text next to it (`touch-chip-note`), not only in the tooltip.
 
 - **Trigger:** `autoStartTouchAI` from the `pr_inbox` tracker's `refreshInbox`
   Activity, fire-and-forget, gated by `runtimeReady`, `!ghDisabled()`, the

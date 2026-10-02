@@ -1080,12 +1080,16 @@ function touchChip(text, sign, verdict, testKey) {
   const label = (v ? v.glyph + ' ' : '') + text
   const legend = t('+ toegevoegd · − verwijderd · ~ gewijzigd')
   const title = v ? text + ' — AI: ' + v.word() + (verdict.note ? ': ' + verdict.note : '') : text + ' — ' + legend
-  return html`<span
-    class="${'inline-flex shrink-0 items-center rounded px-1 py-px text-[10.5px] font-medium ring-1 ring-inset ' + TOUCH_TONE_CLS[tone]}"
-    data-testid="touch-chip"
-    data-verdict="${v ? verdict.verdict : ''}"
-    title="${title}"
-    >${label}</span
+  // The reason sits next to the chip as plain grey text for caution/breaking only.
+  const note = v && verdict.verdict !== 'safe' && verdict.note ? verdict.note : ''
+  return html`<span class="inline-flex min-w-0 items-center gap-1"
+    ><span
+      class="${'inline-flex shrink-0 items-center rounded px-1 py-px text-[10.5px] font-medium ring-1 ring-inset ' + TOUCH_TONE_CLS[tone]}"
+      data-testid="touch-chip"
+      data-verdict="${v ? verdict.verdict : ''}"
+      title="${title}"
+      >${label}</span
+    ><span class="truncate text-[10.5px] text-slate-500 dark:text-zinc-500" data-testid="touch-chip-note">${note}</span></span
   >`.key(testKey)
 }
 
@@ -1179,15 +1183,17 @@ function touchAiImpact(pr) {
   ]
 }
 
-// touchAiSummary — the touch_ai sentence under the chips, behind an "AI" label
-// so it never reads as the deterministic summary. Keyed array of 0–1.
+// touchAiSummary — the touch_ai line under the chips: the impact label's reason
+// (when set) followed by the summary sentence. Keyed array of 0–1.
 function touchAiSummary(pr) {
   const ai = statusFor(pr)?.touchAi
-  if (!ai || !ai.summary) return []
+  if (!ai || !(ai.summary || ai.reason)) return []
+  const reason = ai.reason || ''
+  const sum = ai.summary || ''
   return [
-    html`<p class="truncate text-[11.5px] text-slate-600 dark:text-zinc-400" data-testid="touch-ai-summary" title="${ai.summary + (ai.reason ? ' — ' + ai.reason : '')}">
-      <span class="mr-1 rounded bg-violet-100 px-1 text-[10px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">AI</span>${ai.summary}
-    </p>`.key('aisum:' + ai.summary),
+    html`<p class="truncate text-[11.5px] text-slate-600 dark:text-zinc-400" data-testid="touch-ai-summary" title="${'AI: ' + (reason ? reason + ' — ' : '') + sum}"
+      ><span class="mr-1 text-slate-500 dark:text-zinc-500" data-testid="touch-ai-impact-reason">${reason}</span>${sum}</p
+    >`.key('aisum:' + sum + ':' + reason),
   ]
 }
 

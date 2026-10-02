@@ -67,7 +67,8 @@ test.describe('PR overview — Migrations & API changes summary rows', () => {
     await expect(dbChips.nth(0)).toHaveAttribute('data-verdict', '')
     await expect(row.locator('[data-testid="touch-summary-api"] [data-testid="touch-chip"]')).toHaveText(['+POST /orders/{id}/refund'])
     await expect(row.locator('[data-testid="touch-ai-impact"]')).toHaveText('✕ breaking')
-    await expect(row.locator('[data-testid="touch-ai-summary"]')).toHaveText(/^\s*AI\s*Orders krijgen een refund-koppeling\.\s*$/)
+    await expect(row.locator('[data-testid="touch-ai-summary"]')).toHaveText(/^\s*kolom legacy verdwijnt\s*Orders krijgen een refund-koppeling\.\s*$/)
+    await expect(row.locator('[data-testid="touch-chip-note"]')).toHaveText(['', 'nog gelezen', '', ''])
     await expect(row.locator('[data-testid="touch-updated"]')).toContainText('Bijgewerkt')
     // The full row's tracks are absent.
     await expect(row.locator('[data-testid="reviewers"]')).toHaveCount(0)
