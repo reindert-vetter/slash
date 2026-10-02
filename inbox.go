@@ -1310,7 +1310,7 @@ func isPersonalReviewer(r inboxRow, st prStatus, login string) bool {
 
 // filterTouchedSection keeps only the touchedSectionTitle rows whose status
 // lists a migration or API file, and drops the statuses of the candidates it
-// removes (they belong to no section any more). An empty statuses map (the
+// removes (they belong to no section any more). Draft PRs never belong here. An empty statuses map (the
 // status fetch failed) empties the section rather than listing every
 // candidate unfiltered.
 func filterTouchedSection(sections []inboxSection, statuses map[string]prStatus, login string) []inboxSection {
@@ -1321,7 +1321,7 @@ func filterTouchedSection(sections []inboxSection, statuses map[string]prStatus,
 		kept := make([]inboxRow, 0, len(s.PRs))
 		for _, r := range s.PRs {
 			st := statuses[rowKey(r)]
-			if (len(st.MigrationFiles) > 0 || len(st.APIFiles) > 0) && !isPersonalReviewer(r, st, login) {
+			if (len(st.MigrationFiles) > 0 || len(st.APIFiles) > 0) && !r.IsDraft && !isPersonalReviewer(r, st, login) {
 				kept = append(kept, r)
 			} else {
 				delete(statuses, rowKey(r))

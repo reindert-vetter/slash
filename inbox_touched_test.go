@@ -98,3 +98,22 @@ func TestFilterTouchedSectionDropsOwnReviews(t *testing.T) {
 		t.Errorf("touched section = %v, want [3 4]", nums)
 	}
 }
+
+func TestFilterTouchedSectionDropsDrafts(t *testing.T) {
+	mig := []string{"database/migrations/x.php"}
+	sections := []inboxSection{
+		{Title: touchedSectionTitle, PRs: []inboxRow{{Number: 1, IsDraft: true}, {Number: 2}}},
+		{Title: "Other", PRs: []inboxRow{{Number: 1, IsDraft: true}}},
+	}
+	statuses := map[string]prStatus{
+		statusKey("", 1): {MigrationFiles: mig},
+		statusKey("", 2): {MigrationFiles: mig},
+	}
+	got := filterTouchedSection(sections, statuses, "")
+	if len(got[0].PRs) != 1 || got[0].PRs[0].Number != 2 {
+		t.Errorf("touched section = %v, want only PR 2", got[0].PRs)
+	}
+	if len(got[1].PRs) != 1 {
+		t.Errorf("a draft in another section must stay")
+	}
+}
