@@ -86,4 +86,20 @@ test.describe('PR overview — snooze a PR', () => {
     const hit = page.locator('[data-testid="pr-row"][data-pr="12903"]')
     await expect(hit.locator('[data-testid="snooze-mark"]')).toBeVisible()
   })
+
+  test('a slow Signal still hides the row at once; a failed one restores it with an error', async ({ page }) => {
+    await page.route('**/signals/pr_snooze', async (route) => {
+      await new Promise((r) => setTimeout(r, 3000))
+      await route.fulfill({ status: 500, body: 'boom' })
+    })
+    await page.goto('/pr-overview')
+    await appReady(page)
+    const inSection = page.locator('[data-testid="section"][data-title="Needs your review"] [data-testid="pr-row"][data-pr="12888"]')
+    await inSection.click()
+    await page.locator('[data-testid="snooze-pr"]').click()
+    await page.locator('[data-testid="snooze-option"]').first().click()
+    await expect(inSection).toHaveCount(0, { timeout: 1000 })
+    await expect(inSection).toBeVisible({ timeout: 6000 })
+    await expect(page.locator('[data-testid="snooze-error"]')).toBeVisible()
+  })
 })

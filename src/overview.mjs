@@ -1829,6 +1829,20 @@ async function sendSnooze(pr, option) {
   ui.snoozeBusy = true
   ui.snoozeError = null
   const uid = prUid(pr)
+  // Optimistic FIRST (see sendIgnore): on failure restore and reopen the popover.
+  const prev = state.snoozes
+  const next = { ...prev }
+  if (option === 'clear') {
+    delete next[uid]
+  } else {
+    const until = snoozePreviewUntil(option)
+    next[uid] = { until: until.toISOString(), snoozedAt: new Date().toISOString() }
+  }
+  closePopover()
+  state.snoozes = next
+  scheduleSnoozeWake()
+  if (option !== 'clear') selectTopRow()
+  scheduleRepaint()
   try {
     const runId = await ensureSnoozeRun()
     const res = await fetch('/api/workflows/' + runId + '/signals/pr_snooze', {
@@ -1837,21 +1851,16 @@ async function sendSnooze(pr, option) {
       body: JSON.stringify({ repo: pr.repo || undefined, pr: pr.number, option }),
     })
     if (!res.ok) throw new Error('pr_snooze signal failed')
-    closePopover()
-    const next = { ...state.snoozes }
-    if (option === 'clear') {
-      delete next[uid]
-    } else {
-      const until = snoozePreviewUntil(option)
-      next[uid] = { until: until.toISOString(), snoozedAt: new Date().toISOString() }
-    }
-    state.snoozes = next
-    scheduleSnoozeWake()
-    if (option !== 'clear') selectTopRow()
-    scheduleRepaint()
     loadSnoozes()
   } catch (e) {
+    const back = { ...state.snoozes }
+    if (prev[uid]) back[uid] = prev[uid]
+    else delete back[uid]
+    state.snoozes = back
+    scheduleSnoozeWake()
     ui.snoozeError = t('Snoozen mislukt')
+    ui.openPopover = uid
+    scheduleRepaint()
   } finally {
     ui.snoozeBusy = false
   }
@@ -1967,6 +1976,18 @@ async function sendIgnore(pr, ignore) {
   if (ui.ignoreBusy) return
   ui.ignoreBusy = true
   ui.ignoreError = null
+  const uid = prUid(pr)
+  // Optimistic FIRST: the Signal can take many seconds on a busy server, and a
+  // popover that just sits there reads as "the click did nothing". On failure
+  // everything is put back and the popover reopens with the error.
+  const prev = state.ignores
+  const next = { ...prev }
+  if (ignore) next[uid] = true
+  else delete next[uid]
+  closePopover()
+  state.ignores = next
+  if (ignore) selectTopRow()
+  scheduleRepaint()
   try {
     const runId = await ensureIgnoreRun()
     const res = await fetch('/api/workflows/' + runId + '/signals/pr_ignore', {
@@ -1975,16 +1996,15 @@ async function sendIgnore(pr, ignore) {
       body: JSON.stringify({ repo: pr.repo || undefined, pr: pr.number, ignore }),
     })
     if (!res.ok) throw new Error('pr_ignore signal failed')
-    closePopover()
-    const next = { ...state.ignores }
-    if (ignore) next[prUid(pr)] = true
-    else delete next[prUid(pr)]
-    state.ignores = next
-    if (ignore) selectTopRow()
-    scheduleRepaint()
     loadIgnores()
   } catch (e) {
+    const back = { ...state.ignores }
+    if (prev[uid]) back[uid] = true
+    else delete back[uid]
+    state.ignores = back
     ui.ignoreError = t('Negeren mislukt')
+    ui.openPopover = uid
+    scheduleRepaint()
   } finally {
     ui.ignoreBusy = false
   }

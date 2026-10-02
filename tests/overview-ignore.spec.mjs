@@ -55,4 +55,44 @@ test.describe('PR overview — ignore a PR in Migrations & API changes', () => {
     await page.locator('[data-testid="ignore-pr"]').click()
     await expect(row).toBeVisible()
   })
+
+  async function injectSection(page) {
+    await page.route('**/api/inbox', async (route) => {
+      const res = await route.fetch()
+      const body = await res.json()
+      body.sections = body.sections || []
+      body.sections.push({
+        title: TOUCHED,
+        prs: [{ number: PR, title: 'Alter orders', author: 'alice', updatedAt: '2026-09-30T10:00:00Z', baseRefName: 'main', headRefName: 'feat/x' }],
+      })
+      await route.fulfill({ response: res, json: body })
+    })
+  }
+
+  test('the row leaves at once even when the Signal POST is slow', async ({ page }) => {
+    await injectSection(page)
+    await page.route('**/signals/pr_ignore', async (route) => {
+      await new Promise((r) => setTimeout(r, 4000))
+      await route.continue()
+    })
+    await page.goto('/pr-overview')
+    await appReady(page)
+    const row = page.locator(`[data-testid="section"][data-title="${TOUCHED}"] [data-testid="pr-row"][data-pr="${PR}"]`)
+    await row.click()
+    await page.locator('[data-testid="ignore-pr"]').click()
+    await expect(row).toHaveCount(0, { timeout: 1000 })
+    await expect(page.locator('[data-testid="pr-popover"]')).toHaveCount(0)
+  })
+
+  test('a failed Signal puts the row back and shows the error', async ({ page }) => {
+    await injectSection(page)
+    await page.route('**/signals/pr_ignore', (route) => route.fulfill({ status: 500, body: 'boom' }))
+    await page.goto('/pr-overview')
+    await appReady(page)
+    const row = page.locator(`[data-testid="section"][data-title="${TOUCHED}"] [data-testid="pr-row"][data-pr="${PR}"]`)
+    await row.click()
+    await page.locator('[data-testid="ignore-pr"]').click()
+    await expect(row).toBeVisible()
+    await expect(page.locator('[data-testid="ignore-error"]')).toBeVisible()
+  })
 })
