@@ -104,10 +104,12 @@ test('a cold restore of rel.foc still scrolls into view once the delayed diff fi
   // the flow genuinely overflowing (926px card + 288px panel), so the
   // overflow-observer path under test still runs.
   await page.setViewportSize({ width: 1100, height: 900 })
-  // Block 1 (CreatePaymentAction::execute) — same fixture as the test above,
+  // CreatePaymentAction::execute (its real file:line, :26 — an unknown ref
+  // used to fall back to row 0, which was execute until the fixed category
+  // tier put the migration there) — same fixture as the test above,
   // restored straight from the URL with the related panel already focused on
   // Onderliggende code (rel.foc=code), diff mode, change group 0.
-  await page.goto('/pr/12903?sel=app%2FActions%2FCreatePaymentAction.php%3A1&mode=diff&chg=0&rel.foc=code')
+  await page.goto('/pr/12903?sel=app%2FActions%2FCreatePaymentAction.php%3A26&mode=diff&chg=0&rel.foc=code')
 
   const related = page.getByTestId('related-code')
   const appColumns = page.getByTestId('app-columns')

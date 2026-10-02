@@ -14,13 +14,14 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 //
 // Same fixture as sidebar-skip-approved.spec.mjs. Blocks are selected by
 // label, not by raw index — see "Sort order of the left list" in
-// blocks-and-ingest.md. Order::address (rather than
-// CreatePaymentAction::execute) is the one approved+hidden here: it has a
-// still-visible row on both sides (Address::billingAddress before it, the
-// migration's `up` after it — see materializeMainWorktrees in _setup.mjs),
-// which is what a "hidden row directly after the selection" needs. execute
-// itself now sorts first, so hiding it never leaves a row before it to
-// select in the first place.
+// blocks-and-ingest.md. CreatePaymentAction::execute is the one approved+hidden
+// here: it has a still-visible row on both sides (ContractController::index
+// before it, CreatePaymentAction::findOrCreateCustomer after it), which is what a "hidden row directly
+// after the selection" needs. (Order::address used to play this role, but
+// since the fixed category tier moved the migration's `up` to the top, the
+// row after it is the TEST class row; execute no longer sorts first, so it
+// can be sandwiched now. Only execute and Order::address have approvable
+// rows in this fixture.)
 const cards = (page) => page.locator('[data-testid=block-column] [data-testid=detail-card]')
 
 test.describe('the look-ahead preview follows the next VISIBLE row', () => {
@@ -28,7 +29,7 @@ test.describe('the look-ahead preview follows the next VISIBLE row', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    const block6Row = page.getByTestId('block-row').filter({ hasText: 'Order::address' })
+    const block6Row = page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::execute' })
     await block6Row.click()
     await leaveSearchBox(page)
 
@@ -36,19 +37,18 @@ test.describe('the look-ahead preview follows the next VISIBLE row', () => {
     // runs afterApproveAction/findNextUnapproved (see its own doc comment in
     // home.mjs), unlike the command palette's approve action. That matters
     // here: findNextUnapproved only searches FORWARD from the approved
-    // block, and nothing after Order::address has any changed rows, so
-    // approving it via the palette would open the review-submit follow-up
-    // menu instead of just hiding its row.
+    // block, so approving it via the palette could open a follow-up menu
+    // instead of just hiding its row.
     const approve = page.getByTestId('detail-panel').locator('input[type=checkbox]').first()
     await approve.click()
     await expect(approve).toBeChecked()
     await expect(block6Row).toHaveCount(0)
 
     // Select the row before it. The preview must skip the now-hidden row.
-    await page.getByTestId('block-row').filter({ hasText: 'Address::billingAddress' }).click()
+    await page.getByTestId('block-row').filter({ hasText: 'ContractController::index' }).click()
     await expect(cards(page)).toHaveCount(2)
-    await expect(cards(page).nth(0)).toContainText('Address::billingAddress')
-    await expect(cards(page).nth(1)).not.toContainText('Order::address')
+    await expect(cards(page).nth(0)).toContainText('ContractController::index')
+    await expect(cards(page).nth(1)).not.toContainText('CreatePaymentAction::execute')
 
     // …and that preview is exactly where ↓ goes: the previewed card becomes the
     // selected one, one step later.

@@ -894,8 +894,9 @@ match).
 ### Sort order of the left list
 
 `recomputeLeftList` (`home.mjs`) sorts by `rank(b)`, built right before the
-sort call. Three bands, ascending: ordinary (non-TEST) blocks first — see
-"most underlying blocks first" below — then TEST (fixed `2.39`), then
+sort call. Three bands, ascending: ordinary (non-TEST) blocks first — a
+fixed category tier, then "most underlying blocks first" within it, see
+below — then TEST (fixed `2.39`), then
 **relation children after everything** (rank `3`, the "Onderliggende code"
 section at the bottom, see `recomputeLeftList`/`state.underlyingIds` in
 `.claude/docs/underlying-code.md`). A comment-index item sits in its own
@@ -918,6 +919,29 @@ ROUTE/CONTROLLER tiers and the "most left to approve" heuristic were dropped
 (2026-08-25, reviewer request: "ik wil daar niet meer naar kijken, kijk naar
 de aantal onderliggende blokken") in favor of the ranking below. TEST always
 sorting last is the one part of the old behavior that was kept unchanged.
+**Partly reversed 2026-10-02** (reviewer request, knowingly undoing part of
+the 2026-08-25 decision): a fixed category tier is back on top — see the
+next section.
+
+### A fixed category tier first: MIGRATION, ROUTE, CONTROLLER, REQUEST, RESOURCE
+
+Reviewer request: "migraties bovenaan de blokken index, daarna routing,
+controllers, request en resources (als ze niet onderdeel zijn van
+onderliggende code blok)". `LEFT_LIST_CATEGORY_TIERS` (`home.mjs`) lists
+those five categories (as assigned by `classify.go`, path-based); every other
+category is one shared last tier. `fileTier` gives each FILE its tier (from
+its first block — the category is path-derived, so a file never mixes
+tiers), and `fileOrder` sorts on tier first, then on `fileUnderlyingCount`
+as described below. Consequences:
+
+- Only top-level rows take part: a controller/request/resource that is a
+  relation child or resolved call target already lives in "Onderliggende
+  code" (rank 3) or is hidden, which is exactly the "not part of an
+  underlying block" condition — no extra check needed.
+- Purely ordering — no section heading per tier. A migration's `up` and
+  `down` both go to the top (same file).
+- TEST (2.39), the comment sections and "Onderliggende code" are unchanged;
+  an OpenAPI/yaml file is not a tier, it sorts with the rest.
 
 ### Ordinary blocks sort by "most underlying blocks first", per FILE, TEST always last
 
@@ -972,7 +996,8 @@ avoided reshuffling on the approve path by not calling `recomputeLeftList`
 there, see `toggleBlockApproval`/`toggleApprove`/`toggleCallApprove`; that
 same omission still holds, it's just no longer load-bearing for this reason).
 Test: `tests/index-category-order.spec.mjs` (PR 125,
-`materializeCategoryOrderWorktrees` in `_setup.mjs` — four top-level blocks,
+`materializeCategoryOrderWorktrees` in `_setup.mjs` — five zero-children
+tier blocks seeded in reverse tier order, plus four top-level blocks,
 each with a known, distinct number of relation children via
 `categoryorder-relations.json`: WORKFLOW=3, PROVIDER=2, CONFIG=1, TEST=5, TEST
 deliberately the highest of the four to prove it still sorts last).

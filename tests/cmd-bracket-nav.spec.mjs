@@ -38,11 +38,14 @@ test.describe('Cmd+[ / Cmd+] step through the previously selected blocks', () =>
 
     const selParam = () => new URL(page.url()).searchParams.get('sel')
 
-    await page.locator('[data-idx="0"]').click()
-    const ref0 = selParam()
-    await page.locator('[data-idx="1"]').click()
-    const ref1 = selParam()
+    // Row 2 (CreatePaymentAction::execute) is the fresh-open default pick
+    // (rows 0-1 are the fixed MIGRATION/CONTROLLER tier, see fileTier in
+    // home.mjs) — clicking it is no move, so the stack starts empty there.
     await page.locator('[data-idx="2"]').click()
+    const ref0 = selParam()
+    await page.locator('[data-idx="3"]').click()
+    const ref1 = selParam()
+    await page.locator('[data-idx="4"]').click()
     expect(selParam()).not.toBe(ref1)
 
     await page.keyboard.press('Meta+[')

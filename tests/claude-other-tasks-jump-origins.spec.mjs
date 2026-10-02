@@ -63,7 +63,7 @@ test('jump to the general chat from "Andere chats in deze PR" opens its overlay'
   await expect(page.getByTestId('block-column')).toBeVisible()
   await leaveSearchBox(page)
 
-  await page.locator('[data-idx="1"]').click()
+  await page.getByTestId('block-row').filter({ hasText: 'CreatePaymentAction::findOrCreateCustomer' }).click()
   await page.keyboard.press('ArrowRight') // list -> diff
   await page.keyboard.press('ArrowRight') // diff -> comment head (hasVisibleComments())
   await page.keyboard.press('ArrowRight') // comment -> claude

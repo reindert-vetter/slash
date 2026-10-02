@@ -136,12 +136,13 @@ test.describe('PR Review Tree — change navigation', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Block 0 (CreatePaymentAction::execute) is the file with the most
-    // underlying blocks (fileRank in home.mjs), so it sorts first; it's also
+    // Block 2 (CreatePaymentAction::execute) is the file with the most
+    // underlying blocks (fileRank in home.mjs), so it sorts first right after
+    // the fixed MIGRATION/CONTROLLER tier rows 0-1 (fileTier); it's also
     // the block with a reliable change used by the rest of this file's
     // cross-block-flow tests.
-    await page.locator('[data-idx="0"]').click()
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="2"]').click()
+    await expect(page.locator('[data-idx="2"]')).toHaveClass(/bg-indigo-50/)
 
     // Wait for the selected block's diff to load.
     const panel = page.getByTestId('detail-panel')
@@ -168,55 +169,57 @@ test.describe('PR Review Tree — change navigation', () => {
   })
 
   // Cross-block flow only continues within the SAME file. In the fixture,
-  // block 0 and block 1 are both CreatePaymentAction.php (linked by the
-  // connector; that file sorts first because it has the most underlying
-  // blocks, see fileRank in home.mjs) while block 2 is a different file
-  // (ProcessCartAction.php). Walking ↓ off the end of block 0 should flow
-  // into block 1, but must stop at the file boundary before block 2. Walking
-  // ↑ off the top of block 1 flows back into block 0 and stops.
+  // block 2 and block 3 are both CreatePaymentAction.php (linked by the
+  // connector; that file sorts first after the fixed MIGRATION/CONTROLLER
+  // tier rows 0-1 because it has the most underlying blocks, see
+  // fileTier/fileRank in home.mjs) while block 4 is a different file
+  // (ProcessCartAction.php). Walking ↓ off the end of block 2 should flow
+  // into block 3, but must stop at the file boundary before block 4. Walking
+  // ↑ off the top of block 3 flows back into block 2 and stops. Block 1
+  // (ContractController.php) is a different file too, so ↑ stops at 2.
   const selected = (page, i) => expect(page.locator(`[data-idx="${i}"]`))
 
   test('↓ flows into the next same-file block but stops at the file boundary', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="0"]').click()
-    await selected(page, 0).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="2"]').click()
+    await selected(page, 2).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
-    // Step into block 0's diff, then walk down well past its changes. More presses
+    // Step into block 2's diff, then walk down well past its changes. More presses
     // than either block can have groups, so we're guaranteed to reach the boundary.
     await page.keyboard.press('ArrowRight')
     for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowDown')
 
-    // Landed on block 1 (same file) and never crossed into block 2 (other file).
-    await selected(page, 1).toHaveClass(/bg-indigo-50/)
-    await selected(page, 2).not.toHaveClass(/bg-indigo-50/)
+    // Landed on block 3 (same file) and never crossed into block 4 (other file).
+    await selected(page, 3).toHaveClass(/bg-indigo-50/)
+    await selected(page, 4).not.toHaveClass(/bg-indigo-50/)
   })
 
   test('↑ flows back into the previous same-file block and stops at the top', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Block 1 (findOrCreateCustomer) carries no local diff of its own, so
+    // Block 3 (findOrCreateCustomer) carries no local diff of its own, so
     // entering the diff directly on it would silently no-op (enterDiff bails
-    // when groupsFor(b) is empty). Step in via block 0 (execute, the reliable
-    // diff) and flow all the way down into block 1 first (same mechanism as
-    // the previous test), then reverse: flowing back up must land on block 0
+    // when groupsFor(b) is empty). Step in via block 2 (execute, the reliable
+    // diff) and flow all the way down into block 3 first (same mechanism as
+    // the previous test), then reverse: flowing back up must land on block 2
     // and stop there — there's no earlier same-file neighbour to flow into.
-    await page.locator('[data-idx="0"]').click()
+    await page.locator('[data-idx="2"]').click()
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
     await page.keyboard.press('ArrowRight')
     for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowDown')
-    await selected(page, 1).toHaveClass(/bg-indigo-50/) // sanity: flowed into block 1
+    await selected(page, 3).toHaveClass(/bg-indigo-50/) // sanity: flowed into block 3
 
     for (let n = 0; n < 40; n++) await page.keyboard.press('ArrowUp')
 
-    // Flowed back into block 0 and stopped there (no previous same-file block).
-    await selected(page, 0).toHaveClass(/bg-indigo-50/)
+    // Flowed back into block 2 and stopped there (no previous same-file block).
+    await selected(page, 2).toHaveClass(/bg-indigo-50/)
   })
 
   // Comments are the task_code_comment workflow; seeding one is the only write
@@ -621,15 +624,15 @@ test.describe('PR Review Tree — change navigation', () => {
   test('f on a single-line group jumps straight to call; d coarsens back', async ({
     page,
   }) => {
-    // Use block 0 (CreatePaymentAction::execute, proven to load in the other
+    // Use block 2 (CreatePaymentAction::execute, proven to load in the other
     // nav tests — the file with the most underlying blocks, see fileRank in
-    // home.mjs). Its first change group
+    // home.mjs, right after the fixed category tier rows 0-1). Its first change group
     // spans a single row, so refining it with f has no meaningful 'line' step
     // (line == the whole group) and jumps straight to 'call'. See home.mjs
     // (setGran).
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="0"]').click()
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="2"]').click()
+    await expect(page.locator('[data-idx="2"]')).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     await expect(page.locator('[data-change-active]').first()).toBeVisible()
@@ -697,8 +700,8 @@ test.describe('PR Review Tree — change navigation', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="0"]').click()
-    await expect(page.locator('[data-idx="0"]')).toHaveClass(/bg-indigo-50/)
+    await page.locator('[data-idx="2"]').click()
+    await expect(page.locator('[data-idx="2"]')).toHaveClass(/bg-indigo-50/)
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     await page.keyboard.press('ArrowRight')
@@ -779,9 +782,10 @@ test.describe('PR Review Tree — change navigation', () => {
   // (sKey → setGran(-1)), never walking the calls. See home.mjs.
   test('on the call level f steps to the next call and s zooms back out', async ({ page }) => {
     await page.goto('/pr/12903')
-    // Block 0 (CreatePaymentAction::execute) is the file with the most
-    // underlying blocks, see fileRank in home.mjs, so it sorts first.
-    await page.locator('[data-idx="0"]').click()
+    // Block 2 (CreatePaymentAction::execute) is the file with the most
+    // underlying blocks, see fileRank in home.mjs, so it sorts first after
+    // the fixed category tier rows 0-1 (fileTier).
+    await page.locator('[data-idx="2"]').click()
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
 
@@ -812,9 +816,10 @@ test.describe('PR Review Tree — change navigation', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    // Block 0 (CreatePaymentAction::execute) is the file with the most
-    // underlying blocks, see fileRank in home.mjs, so it sorts first.
-    await page.locator('[data-idx="0"]').click()
+    // Block 2 (CreatePaymentAction::execute) is the file with the most
+    // underlying blocks, see fileRank in home.mjs, so it sorts first after
+    // the fixed category tier rows 0-1 (fileTier).
+    await page.locator('[data-idx="2"]').click()
     const panel = page.getByTestId('detail-panel')
     await expect(panel.locator('code.language-php').first()).toBeVisible()
     const footer = page.getByTestId('footer')
@@ -848,7 +853,7 @@ test.describe('PR Review Tree — change navigation', () => {
     page,
   }) => {
     await page.goto('/pr/12903')
-    await page.locator('[data-idx="0"]').click()
+    await page.locator('[data-idx="2"]').click()
     const footer = page.getByTestId('footer')
 
     // List mode: no diff open, footer hidden.

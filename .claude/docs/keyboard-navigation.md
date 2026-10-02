@@ -322,6 +322,14 @@ non-persisted module state, the same ephemeral category as
 both empty again, so `Cmd+[` right after a refresh goes straight to
 `/pr-overview`.
 
+**The fresh-open auto-pick records nothing.** `applyDefaultUnapprovedSelection`
+moves the selection away from the placeholder row 0 to the first unapproved
+block in file order; it sets `navigatingViaHistory` (only when the ref really
+changes) so that automatic landing doesn't push row 0 onto the stack. Latent
+until the fixed category tier (`fileTier`, see "Sort order of the left list"
+in `blocks-and-ingest.md`) made row 0 and the auto-pick routinely differ — a
+migration on top, `Cmd+[` then landed on it instead of `/pr-overview`.
+
 **`Shift+Cmd+[` / `Shift+Cmd+]` are deliberately excluded** (reviewer
 follow-up request, unchanged across all three reversals above) and fall
 straight through this whole function untouched — no `preventDefault` — so the

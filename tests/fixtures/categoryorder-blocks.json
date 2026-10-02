@@ -1,6 +1,61 @@
 [
   {
     "pr": 125,
+    "file": "app/Http/Resources/SyncResource.php",
+    "class": "SyncResource",
+    "name": "toArray",
+    "category": "RESOURCE",
+    "line": 9,
+    "endLine": 9,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Http/Requests/SyncRequest.php",
+    "class": "SyncRequest",
+    "name": "rules",
+    "category": "REQUEST",
+    "line": 9,
+    "endLine": 9,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "app/Http/Controllers/SyncController.php",
+    "class": "SyncController",
+    "name": "store",
+    "category": "CONTROLLER",
+    "line": 9,
+    "endLine": 9,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "routes/api.php",
+    "class": "",
+    "name": "api.php",
+    "category": "ROUTE",
+    "line": 3,
+    "endLine": 3,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
+    "file": "database/migrations/2026_01_01_000000_add_sync_column.php",
+    "class": "AddSyncColumn",
+    "name": "up",
+    "category": "MIGRATION",
+    "line": 9,
+    "endLine": 9,
+    "status": "modified",
+    "side": "new"
+  },
+  {
+    "pr": 125,
     "file": "config/settings.php",
     "class": "",
     "name": "settings.php",

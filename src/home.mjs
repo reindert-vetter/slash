@@ -3199,10 +3199,10 @@ function notifyFullyApprovedIfNeeded() {
 // neither side. Selection is preserved by block id so a callResolve/testCovers
 // reload (poll after a search) doesn't jump the cursor.
 //
-// recomputeLeftList's rank() no longer groups by category at all (that fixed
-// ROUTE/CONTROLLER Laravel-hierarchy priority was dropped in favor of
-// fileRank/fileUnderlyingCount, see recomputeLeftList) — it groups by FILE
-// instead, for the same reason a category grouping used to give it for free:
+// recomputeLeftList's rank() groups by FILE: a fixed category tier first
+// (MIGRATION, ROUTE, CONTROLLER, REQUEST, RESOURCE, then the rest — see
+// fileTier), then fileRank/fileUnderlyingCount within a tier. Per file, not
+// per block, for the same reason a category grouping used to give it for free:
 // sameFileNeighbour/stepBlock (the same-file connector hint + ↑/↓
 // block-to-block flow, see keyboard-navigation.md) only look at the
 // immediate index neighbour, so splitting one file's blocks apart would
@@ -3856,6 +3856,10 @@ function commentGroupKeyOf(c, anchoredBlocks) {
   return null
 }
 
+// The fixed category order at the top of the blocks index, see fileTier in
+// recomputeLeftList.
+const LEFT_LIST_CATEGORY_TIERS = ['MIGRATION', 'ROUTE', 'CONTROLLER', 'REQUEST', 'RESOURCE']
+
 function recomputeLeftList() {
   // Only the resolved-call targets are hidden from the index (panel-only
   // reference code). Relation children STAY in state.blocks — fully navigable
@@ -3956,7 +3960,25 @@ function recomputeLeftList() {
     if (b.category === 'TEST') continue // always sorts last, see fileRank below
     fileUnderlyingCount[b.file] = (fileUnderlyingCount[b.file] || 0) + nestedPrBlocksCached(b).length
   }
-  const fileOrder = Object.keys(fileUnderlyingCount).sort((a, b) => fileUnderlyingCount[b] - fileUnderlyingCount[a])
+  // fileTier puts the Laravel entry points first, in a fixed order
+  // (reviewer request: "migraties bovenaan de blokken index, daarna routing,
+  // controllers, request en resources"): MIGRATION, ROUTE, CONTROLLER,
+  // REQUEST, RESOURCE, then every other file. Within a tier the "most
+  // underlying blocks first" order above still decides. Only top-level rows
+  // reach this — a controller/request/resource that is a relation child or
+  // resolved call already sits in "Onderliggende code" (rank 3) or is hidden.
+  // A file's category is path-derived (classify.go), so its first block
+  // speaks for the whole file and the file's blocks stay contiguous.
+  const fileTier = {}
+  for (const b of groupedRows) {
+    if (b.file in fileUnderlyingCount && !(b.file in fileTier)) {
+      const t = LEFT_LIST_CATEGORY_TIERS.indexOf(b.category)
+      fileTier[b.file] = t < 0 ? LEFT_LIST_CATEGORY_TIERS.length : t
+    }
+  }
+  const fileOrder = Object.keys(fileUnderlyingCount).sort(
+    (a, b) => fileTier[a] - fileTier[b] || fileUnderlyingCount[b] - fileUnderlyingCount[a],
+  )
   // fileRank slots an ordinary (non-TEST) file's blocks into a fractional
   // value in (0, 2.3) — safely below the comment ranks (2.4/2.5) and
   // "Onderliggende code" (3): the file with the most underlying blocks gets
@@ -4803,6 +4825,15 @@ function applyDefaultUnapprovedSelection() {
     }
   })
   if (idx >= 0) {
+    // An automatic landing is not a reviewer move: it must not push the
+    // placeholder row it replaces (row 0 — since the fixed category tier in
+    // recomputeLeftList, typically a migration rather than this pick) onto
+    // Cmd+['s history stack. Reuses navigatingViaHistory's "don't record
+    // this step" flag — only when the ref really changes, because the
+    // selection watch early-returns on an unchanged ref without clearing it.
+    const b = state.blocks[idx]
+    const ref = b.kind === 'comment' || b.kind === 'test_class' ? b.id : `${b.file}:${b.line}`
+    if (ref !== lastFiredSelectionRef) navigatingViaHistory = true
     state.selected = idx
     // A comment-index item (kind:'comment') has no diff — a stray restored
     // `?mode=diff` (with no matching ?sel=, so this default-landing path ran

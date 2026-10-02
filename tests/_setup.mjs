@@ -1820,6 +1820,35 @@ class BigTest
     bigTest('head-1', 'head-2', 'head-3', 'head-4', 'head-5', 'head-6'),
   )
 
+  // The fixed category tier (MIGRATION, ROUTE, CONTROLLER, REQUEST, RESOURCE
+  // — fileTier in recomputeLeftList): one zero-children top-level block each,
+  // listed in REVERSE tier order in categoryorder-blocks.json so the spec
+  // proves the sort, not the seed order.
+  const tierClass = (ns, cls, method, v) => `<?php
+
+namespace ${ns};
+
+class ${cls}
+{
+    public function ${method}()
+    {
+        $v = '${v}';
+    }
+}
+`
+  const tierFiles = [
+    ['database/migrations/2026_01_01_000000_add_sync_column.php', 'Database\\Migrations', 'AddSyncColumn', 'up'],
+    ['app/Http/Controllers/SyncController.php', 'App\\Http\\Controllers', 'SyncController', 'store'],
+    ['app/Http/Requests/SyncRequest.php', 'App\\Http\\Requests', 'SyncRequest', 'rules'],
+    ['app/Http/Resources/SyncResource.php', 'App\\Http\\Resources', 'SyncResource', 'toArray'],
+  ]
+  for (const [file, ns, cls, method] of tierFiles) {
+    write('base', file, tierClass(ns, cls, method, 'base'))
+    write('head', file, tierClass(ns, cls, method, 'head'))
+  }
+  write('base', 'routes/api.php', `<?php\n\nRoute::get('/sync', 'base');\n`)
+  write('head', 'routes/api.php', `<?php\n\nRoute::get('/sync', 'head');\n`)
+
   // One trivial helper class per relation child (categoryorder-relations.json)
   // — a real, one-line diff each, just enough for the Onderliggende-code
   // subtree to resolve; their own content doesn't matter for this fixture.
