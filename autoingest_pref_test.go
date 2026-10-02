@@ -45,11 +45,11 @@ func TestEligibleAutoIngestPRsModeOff(t *testing.T) {
 
 func TestEligibleAutoIngestPRsModeOwn(t *testing.T) {
 	// Own mode only covers "Needs action", "Waiting for review or checks" and
-	// "Your drafts" (confirmed section list) — never "Ready to merge" (#1,
+	// "Your drafts" (confirmed section list) plus every "Needs your review" PR (#8, any author; the team section #7 stays out) — never "Ready to merge" (#1,
 	// excluded on purpose) and never a PR authored by someone else (#3) or one
 	// that already has a graph (#5).
 	got := eligibleAutoIngestPRs(autoingestpref.ModeOwn, "me", aiSections())
-	want := []int{2, 4, 6}
+	want := []int{2, 4, 6, 8}
 	if !reflect.DeepEqual(sortedNumbers(got), want) {
 		t.Fatalf("ModeOwn: got PRs %v, want %v", sortedNumbers(got), want)
 	}

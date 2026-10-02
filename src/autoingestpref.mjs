@@ -13,7 +13,8 @@
 //   - "own" — automatic only for the reviewer's OWN PRs, and only in
 //     "Needs action" / "Waiting for review or checks" / "Your drafts" (NOT
 //     "Ready to merge" — nothing left to review there, see
-//     eligibleAutoIngestPRs/autoIngestOwnSections in inbox.go). Default when
+//     eligibleAutoIngestPRs/autoIngestOwnSections in inbox.go), plus every PR
+//     in "Needs your review" (personal review requests). Default when
 //     nothing was ever saved.
 //   - "all" — automatic for every PR the inbox shows, any author, any
 //     section — including a PR someone else asked the reviewer to review, so

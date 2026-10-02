@@ -388,8 +388,9 @@ should not need a manual "Generate review tree" click at all.
     `author:@me` sections: **"Needs action"**, **"Waiting for review or
     checks"** and **"Your drafts"** (drafts included, on explicit reviewer
     request) — **not** "Ready to merge", since nothing is left to review
-    there. "Needs your team's review"/"Needs your review" are never
-    `author:@me` sections at all, so they never match in `"own"` mode.
+    there. On top of that, **every** PR in "Needs your review" (any
+    author — personal review requests) is included; "Needs your team's
+    review" is not.
   - `"all"` — every PR in every section, regardless of author, so a PR the
     reviewer must review (e.g. "Needs your review") also gets a tree before
     they open it.

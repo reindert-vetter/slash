@@ -1188,6 +1188,10 @@ var autoIngestOwnSections = map[string]bool{
 	"Your drafts":                  true,
 }
 
+// needsYourReviewTitle is the inbox section of PRs where the reviewer is
+// personally asked to review; the "own" auto-ingest mode includes it.
+const needsYourReviewTitle = "Needs your review"
+
 // eligibleAutoIngestPRs picks every PR that autoIngestOwnPRs (workflows.go)
 // should generate a review tree for, given the reviewer's auto_ingest_pref
 // mode. Entirely deterministic and free of side effects — StartIngest etc.
@@ -1197,7 +1201,8 @@ var autoIngestOwnSections = map[string]bool{
 //   - autoingestpref.ModeOff — nothing, ever.
 //   - autoingestpref.ModeOwn — PRs authored by myLogin, restricted to
 //     autoIngestOwnSections (see its own doc comment for exactly which
-//     sections and why).
+//     sections and why), plus every PR in "Needs your review" (any author,
+//     not the team section).
 //   - autoingestpref.ModeAll — every PR in the inbox, from every section,
 //     regardless of author — including PRs the reviewer did not author
 //     (e.g. "Needs your review"), so a tree is ready before the reviewer
@@ -1222,7 +1227,12 @@ func eligibleAutoIngestPRs(mode string, myLogin string, sections []inboxSection)
 			case autoingestpref.ModeAll:
 				// every PR, every section
 			case autoingestpref.ModeOwn:
-				if myLogin == "" || pr.Author != myLogin || !autoIngestOwnSections[s.Title] {
+				if myLogin == "" {
+					continue
+				}
+				// "Needs your review" (personal review requests) counts too,
+				// whoever authored the PR; the team section does not.
+				if s.Title != needsYourReviewTitle && (pr.Author != myLogin || !autoIngestOwnSections[s.Title]) {
 					continue
 				}
 			default:
