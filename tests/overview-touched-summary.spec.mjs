@@ -36,6 +36,14 @@ test.describe('PR overview — Migrations & API changes summary rows', () => {
           db: [{ kind: 'alter', name: 'orders', add: ['refund_id'], del: ['legacy'] }, { kind: 'create', name: 'refunds' }],
           api: [{ kind: 'routes', name: 'api', add: ['POST /orders/{id}/refund'] }],
         },
+        // touch_ai verdict (touch_ai.go), joined in by handleInboxStatus.
+        touchAi: {
+          status: 'done',
+          impact: 'breaking',
+          reason: 'kolom legacy verdwijnt',
+          summary: 'Orders krijgen een refund-koppeling.',
+          chips: { 'db|orders|−legacy': { verdict: 'breaking', note: 'nog gelezen' } },
+        },
       }
       // No summary (e.g. the patch fetch failed): falls back to file names.
       body.statuses['970902'] = { apiFiles: ['app/Http/Resources/OrderResource.php'] }
@@ -51,12 +59,21 @@ test.describe('PR overview — Migrations & API changes summary rows', () => {
     await expect(row.locator('[data-testid="row-author"]')).toBeVisible()
     await expect(row.locator('[data-testid="touch-migrations"]')).toBeVisible()
     await expect(row.locator('[data-testid="touch-api"]')).toBeVisible()
-    await expect(row.locator('[data-testid="touch-summary-db"]')).toHaveText('DB orders: +refund_id, −legacy · Nieuwe tabel refunds')
-    await expect(row.locator('[data-testid="touch-summary-api"]')).toHaveText('API routes/api: +POST /orders/{id}/refund')
+    // One chip per column/route/key; the direction glyph stays in the text.
+    const dbChips = row.locator('[data-testid="touch-summary-db"] [data-testid="touch-chip"]')
+    await expect(dbChips).toHaveText(['+refund_id', '✕ −legacy', 'Nieuwe tabel refunds'])
+    // The AI verdict adds its own glyph (never colour alone).
+    await expect(dbChips.nth(1)).toHaveAttribute('data-verdict', 'breaking')
+    await expect(dbChips.nth(0)).toHaveAttribute('data-verdict', '')
+    await expect(row.locator('[data-testid="touch-summary-api"] [data-testid="touch-chip"]')).toHaveText(['+POST /orders/{id}/refund'])
+    await expect(row.locator('[data-testid="touch-ai-impact"]')).toHaveText('✕ breaking')
+    await expect(row.locator('[data-testid="touch-ai-summary"]')).toHaveText(/^\s*AI\s*Orders krijgen een refund-koppeling\.\s*$/)
+    await expect(row.locator('[data-testid="touch-updated"]')).toContainText('Bijgewerkt')
     // The full row's tracks are absent.
     await expect(row.locator('[data-testid="reviewers"]')).toHaveCount(0)
 
     await expect(section.locator('[data-pr="970902"] [data-testid="touch-summary-api"]')).toHaveText('API OrderResource')
+    await expect(section.locator('[data-pr="970902"] [data-testid="touch-ai-impact"]')).toHaveCount(0)
     // Not lifted into a stack.
     await expect(page.locator('[data-testid="stack"] [data-pr="970901"]')).toHaveCount(0)
 

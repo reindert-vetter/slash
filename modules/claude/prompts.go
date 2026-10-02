@@ -204,3 +204,12 @@ var ChatConflictSystemPrompt string
 //
 //go:embed prompts/chat_commit_message.md
 var ChatCommitMessageSystemPrompt string
+
+// TouchAISystemPrompt frames the touch_ai workflow's context-only Haiku call:
+// judge a PR's migration/API changes (impact label + reason, a one-sentence
+// summary and a verdict per summary chip) for the /pr-overview
+// "Migrations & API changes" rows. Its call-specific content is the patches
+// plus the numbered chip list (touchAIPrompt, touch_ai.go).
+//
+//go:embed prompts/touch_ai.md
+var TouchAISystemPrompt string

@@ -1035,35 +1035,160 @@ function fileBase(path) {
   return path.split('/').pop().replace(/\.php$/, '')
 }
 
+// ── Chips: deterministic colour per direction, AI verdict when present ──
+//
+// Every column/route/key (and every item without such a list, e.g.
+// "PolicyController aangepast") renders as its own chip. Without an AI
+// verdict the chip colour follows the direction glyph — "+" emerald, "−" rose,
+// "~" amber — and the glyph itself stays in the chip text. With a touch_ai
+// verdict (prStatus.touchAi.chips, touch_ai.go) the colour follows the verdict
+// instead and a second glyph is prepended — "✓" veilig, "⚠" let op,
+// "✕" breaking — so the meaning never rests on colour alone
+// (user_colorblind.md); the tooltip spells both out.
+const TOUCH_TONE_CLS = {
+  green: 'bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30',
+  red: 'bg-rose-50 text-rose-800 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-300 dark:ring-rose-500/30',
+  amber: 'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30',
+}
+const SIGN_TONE = { '+': 'green', '−': 'red', '~': 'amber' }
+const VERDICT = {
+  safe: { tone: 'green', glyph: '✓', word: () => t('veilig') },
+  caution: { tone: 'amber', glyph: '⚠', word: () => t('let op') },
+  breaking: { tone: 'red', glyph: '✕', word: () => t('breaking') },
+}
+const IMPACT = {
+  additive: { tone: 'green', glyph: '✓', word: () => t('additief') },
+  caution: { tone: 'amber', glyph: '⚠', word: () => t('let op') },
+  breaking: { tone: 'red', glyph: '✕', word: () => t('breaking') },
+}
+
+// chipKey MUST match touchChip.Key in touch_ai.go.
+function chipKey(group, it, sign = '', val = '') {
+  return group + '|' + it.name + '|' + sign + val
+}
+
+// itemSign — the direction glyph of an item-level chip (no add/del/chg list).
+function itemSign(it) {
+  if (it.kind === 'create' || it.new) return '+'
+  if (it.kind === 'drop') return '−'
+  return '~'
+}
+
+function touchChip(text, sign, verdict, testKey) {
+  const v = verdict && VERDICT[verdict.verdict]
+  const tone = v ? v.tone : SIGN_TONE[sign] || 'amber'
+  const label = (v ? v.glyph + ' ' : '') + text
+  const legend = t('+ toegevoegd · − verwijderd · ~ gewijzigd')
+  const title = v ? text + ' — AI: ' + v.word() + (verdict.note ? ': ' + verdict.note : '') : text + ' — ' + legend
+  return html`<span
+    class="${'inline-flex shrink-0 items-center rounded px-1 py-px text-[10.5px] font-medium ring-1 ring-inset ' + TOUCH_TONE_CLS[tone]}"
+    data-testid="touch-chip"
+    data-verdict="${v ? verdict.verdict : ''}"
+    title="${title}"
+    >${label}</span
+  >`.key(testKey)
+}
+
+// touchItemSegment — one item of a summary line: a plain name prefix plus one
+// chip per column/route/key, or a single item-level chip.
+function touchItemSegment(group, it, chips, idx) {
+  const lists = [
+    ['+', it.add || []],
+    ['−', it.del || []],
+    ['~', it.chg || []],
+  ]
+  const parts = []
+  for (const [sign, vals] of lists) {
+    for (const v of vals) {
+      const k = chipKey(group, it, sign, v)
+      parts.push(touchChip(sign + v, sign, chips[k], k + '#' + idx))
+    }
+  }
+  if (parts.length) {
+    const prefix = it.kind === 'routes' ? 'routes/' + it.name : it.new ? t('{name} (nieuw)', { name: it.name }) : it.name
+    return html`<span class="inline-flex shrink-0 items-center gap-1"
+      ><span>${prefix + ':'}</span>${parts}</span
+    >`.key('seg:' + group + ':' + idx)
+  }
+  const k = chipKey(group, it)
+  return html`<span class="inline-flex shrink-0 items-center gap-1">${[touchChip(touchItemText(it), itemSign(it), chips[k], k + '#' + idx)]}</span>`.key(
+    'seg:' + group + ':' + idx,
+  )
+}
+
 // touchSummaryLines — the at most two summary lines under a compact row's
-// title: one for the database, one for the API. Falls back to the bare file
-// names while the summary is missing (status not backfilled yet, or the
-// patch fetch failed). Always a keyed array so the slot never flips
-// single↔array.
+// title: one for the database, one for the API, each a row of chips. Falls
+// back to the bare file names while the summary is missing (status not
+// backfilled yet, or the patch fetch failed). Always a keyed array so the
+// slot never flips single↔array; each line's key carries its full content
+// (incl. AI verdicts) so a change always mounts a fresh node.
 function touchSummaryLines(pr) {
   const st = statusFor(pr)
   if (!st) return []
   const sum = st.touchSummary || {}
+  const chips = (st.touchAi && st.touchAi.chips) || {}
   const lines = []
-  const push = (prefix, items, files, testid) => {
+  const push = (prefix, group, items, files, testid) => {
+    let segs = null
     let text = ''
-    // Deduped: two modules can each have a same-named class (UpsellController).
-    if (items && items.length) text = [...new Set(items.map(touchItemText))].join(' · ')
-    else if (files && files.length) text = files.map(fileBase).join(', ')
+    if (items && items.length) {
+      // Deduped: two modules can each have a same-named class (UpsellController).
+      const seen = new Set()
+      const uniq = items.filter((it) => {
+        const k = touchItemText(it)
+        if (seen.has(k)) return false
+        seen.add(k)
+        return true
+      })
+      text = uniq.map(touchItemText).join(' · ')
+      segs = uniq.map((it, i) => touchItemSegment(group, it, chips, i))
+    } else if (files && files.length) text = files.map(fileBase).join(', ')
     if (!text) return
+    const body = segs || [html`<span class="truncate">${text}</span>`.key('files')]
     lines.push(
       html`<p
-        class="truncate text-[11.5px] text-slate-600 dark:text-zinc-400"
+        class="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-slate-600 dark:text-zinc-400"
         data-testid="${testid}"
         title="${text + ' — ' + t('+ toegevoegd · − verwijderd · ~ gewijzigd')}"
       >
-        <span class="font-semibold text-slate-700 dark:text-zinc-300">${prefix}</span> ${text}
-      </p>`.key(testid + ':' + text),
+        <span class="shrink-0 font-semibold text-slate-700 dark:text-zinc-300">${prefix}</span> ${body}
+      </p>`.key(testid + ':' + text + ':' + JSON.stringify(chips)),
     )
   }
-  push('DB', sum.db, st.migrationFiles, 'touch-summary-db')
-  push('API', sum.api, st.apiFiles, 'touch-summary-api')
+  push('DB', 'db', sum.db, st.migrationFiles, 'touch-summary-db')
+  push('API', 'api', sum.api, st.apiFiles, 'touch-summary-api')
   return lines
+}
+
+// touchAiImpact — the touch_ai impact label next to the DB/API badges: glyph +
+// word + colour, the reason as tooltip. Keyed array of 0–1.
+function touchAiImpact(pr) {
+  const ai = statusFor(pr)?.touchAi
+  const imp = ai && IMPACT[ai.impact]
+  if (!imp) return []
+  const title = 'AI: ' + imp.word() + (ai.reason ? ' — ' + ai.reason : '')
+  return [
+    html`<span
+      class="${'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ' + TOUCH_TONE_CLS[imp.tone]}"
+      data-testid="touch-ai-impact"
+      data-impact="${ai.impact}"
+      title="${title}"
+      aria-label="${title}"
+      >${imp.glyph + ' ' + imp.word()}</span
+    >`.key('impact:' + ai.impact + ':' + (ai.reason || '')),
+  ]
+}
+
+// touchAiSummary — the touch_ai sentence under the chips, behind an "AI" label
+// so it never reads as the deterministic summary. Keyed array of 0–1.
+function touchAiSummary(pr) {
+  const ai = statusFor(pr)?.touchAi
+  if (!ai || !ai.summary) return []
+  return [
+    html`<p class="truncate text-[11.5px] text-slate-600 dark:text-zinc-400" data-testid="touch-ai-summary" title="${ai.summary + (ai.reason ? ' — ' + ai.reason : '')}">
+      <span class="mr-1 rounded bg-violet-100 px-1 text-[10px] font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">AI</span>${ai.summary}
+    </p>`.key('aisum:' + ai.summary),
+  ]
 }
 
 // compactRowInner — the row shape of the "Migrations & API changes" section:
@@ -1079,8 +1204,13 @@ function compactRowInner(pr) {
         <div class="flex items-center gap-2">
           <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${pr.title}</h3>
           <div class="contents">${() => touchBadges(pr)}</div>
+          <div class="contents">${() => touchAiImpact(pr)}</div>
         </div>
-        <div class="mt-0.5">${() => touchSummaryLines(pr)}</div>
+        <div class="mt-0.5 space-y-0.5">${() => touchSummaryLines(pr)}</div>
+        <div class="contents">${() => touchAiSummary(pr)}</div>
+        <p class="mt-0.5 text-[11px] text-slate-500 dark:text-zinc-500" data-testid="touch-updated" title="${pr.updatedAt || ''}">
+          ${() => t('Bijgewerkt {time}', { time: relativeTime(pr.updatedAt) })}
+        </p>
       </div>
     `,
     html`<div class="flex shrink-0 justify-end">

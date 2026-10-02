@@ -93,7 +93,7 @@ func (s *server) handleInboxStatus(w http.ResponseWriter, r *http.Request) {
 			for _, k := range wanted {
 				key := statusKey(k.Repo, k.PR)
 				if st, has := all[key]; has {
-					out[key] = st
+					out[key] = s.tasks.manager.withTouchAI(r.Context(), k.Repo, k.PR, st)
 				}
 			}
 		}

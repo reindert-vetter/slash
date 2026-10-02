@@ -853,6 +853,41 @@ that fit no other section but do change one of those.
   back to the bare file names. Lists are capped at 8 entries. Test:
   `inbox_touch_summary_test.go`.
 
+- **Chips + "Bijgewerkt … geleden"** (reviewer request): every column/route/
+  key — and every item without such a list ("PolicyController aangepast") —
+  is its own chip (`touchChip`/`touchItemSegment`, `src/overview.mjs`).
+  Without an AI verdict the colour follows the direction glyph, which stays in
+  the chip text: `+` emerald, `−` rose, `~` amber (item-level chips: the word
+  "Nieuwe"/"verwijderd"/"aangepast" carries it). Under the chips the row shows
+  `Bijgewerkt {time}` (`data-testid=touch-updated`, time only, no repo#nr).
+
+### AI read of the change (`touch_ai`, `touch_ai.go`)
+
+One context-only Haiku call per PR head commit returns, as one JSON object:
+an **impact label** (`additive`/`caution`/`breaking` + a short reason) shown
+as a pill next to the DB/API badges (`touch-ai-impact`: `✓ additief` /
+`⚠ let op` / `✕ breaking`, reason in the tooltip); a **summary sentence**
+behind an "AI" label (`touch-ai-summary`); and a **verdict per chip**
+(`safe`/`caution`/`breaking`) — the chip colour then follows the verdict and a
+second glyph `✓`/`⚠`/`✕` is prepended, never colour alone.
+
+- **Trigger:** `autoStartTouchAI` from the `pr_inbox` tracker's `refreshInbox`
+  Activity, fire-and-forget, gated by `runtimeReady`, `!ghDisabled()`, the
+  "Live AI assistent" toggle (autowarn) and — for now — the hardcoded
+  `touchAIAllowlist` (only `plug-and-pay/plug-and-pay#13989`, reviewer
+  request; drop the check to enable it for every row).
+- **Run ID** `touchAIRunID(repo, pr, headSHA)`, so the per-minute poll never
+  repeats the call and a push gets a fresh run. Activities: `generateTouchAI`
+  (gh patches + Haiku; any failure records `status:"failed"`), `saveTouchAI`
+  → `modules/touchai` (`data/touchai.db`, keyed repo+pr+head_sha).
+- **Read path:** the snapshot carries `touchSha` (the head the summary was
+  built from); `handleInboxStatus` joins the stored result as `touchAi` only
+  when that SHA matches — never stored in the snapshot itself, so it shows up
+  on the next status fetch after the run finishes.
+- **Chip keys** `<db|api>|<item name>|<sign><value>` (or `…|` for an
+  item-level chip): `touchChips` (Go) and `chipKey` (JS) must agree.
+- Tests: `touch_ai_test.go`, `tests/overview-touched-summary.spec.mjs`.
+
 ## The per-row popover
 
 **Every row** — ingested or not — opens the same popover menu on click

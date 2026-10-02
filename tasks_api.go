@@ -38,6 +38,7 @@ import (
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
 	"slash/modules/testcovers"
+	"slash/modules/touchai"
 	"slash/modules/warndismiss"
 	"slash/modules/warnreviewed"
 )
@@ -466,6 +467,13 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 	// resolveWarningScope's filter a pass-through and the recording in
 	// runAgenticReview a no-op.
 	mgr.warnreviewed = wr
+	// The touch_ai result store (touch_ai.go). Optional: a failure to open it
+	// only disables that one AI read (nil store = saveTouchAI no-op).
+	if ta, err := touchai.Open(dataDir + "/touchai.db"); err != nil {
+		mgr.logf("touchai: open: %v (AI read of migration/API changes disabled)", err)
+	} else {
+		mgr.touchai = ta
+	}
 	// Same pattern for the Jira-notification read-model: a nil store makes the
 	// jira_inbox Activities no-ops and leaves the feed list empty.
 	mgr.jiranotify = jn
@@ -575,6 +583,9 @@ func newTasks(ctx context.Context, db *sql.DB, dataDir, repo string, resumeRunti
 		_ = lp.Close()
 		_ = wd.Close()
 		_ = wr.Close()
+		if mgr.touchai != nil {
+			_ = mgr.touchai.Close()
+		}
 		_ = jn.Close()
 		_ = pl.Close()
 		return cs.Close()

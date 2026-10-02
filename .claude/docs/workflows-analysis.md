@@ -1168,6 +1168,13 @@ frontend gate was lifted with "Diepgravend onderzoek"). One Execution per
 - Tests: `explain_test.go`, `modules/explanations/explanations_test.go`,
   `tests/footer-explanation.spec.mjs`.
 
+## AI read of migration/API changes (`touch_ai` + `touch_ai.go`)
+
+One Haiku call per PR head commit for the /pr-overview "Migrations & API
+changes" rows (impact label, summary sentence, verdict per chip), started from
+`refreshInbox`, allowlisted and gated by "Live AI assistent". Full mechanism:
+"AI read of the change" in `.claude/docs/pr-overview.md`.
+
 ## Short titles for review comments (`comment_titles` + `comment_titles.go`)
 
 Gives a **long comment** a heading: one Dutch sentence of **at most 6 words**,

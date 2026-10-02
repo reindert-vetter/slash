@@ -35,6 +35,7 @@ import (
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
 	"slash/modules/testcovers"
+	"slash/modules/touchai"
 	"slash/modules/warndismiss"
 	"slash/modules/warnreviewed"
 )
@@ -1171,6 +1172,13 @@ type TaskManager struct {
 	// only means a PR still without a graph may be retried once more; StartIngest
 	// itself is safe to run twice for the same PR.
 	autoIngestTried map[prKey]bool
+	// touchAITried dedups autoStartTouchAI per Run ID within this process
+	// (StartWorkflowID dedups durably anyway; this only skips the lookup).
+	touchAITried map[string]bool
+	// touchai stores the AI read of a PR's migration/API changes (touch_ai
+	// workflow, touch_ai.go). Set post-construction like the stores above; a
+	// nil store makes saveTouchAI a no-op and the status join a pass-through.
+	touchai *touchai.Module
 
 	// meCache caches the authenticated GitHub user (see CurrentUser) for the
 	// process lifetime: it never changes while the server runs, so one `gh api
@@ -1271,6 +1279,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			myLogin = cfg.Me.Login
 		}
 		m.autoIngestOwnPRs(ctx, myLogin, snap.Sections)
+		// AI read of the "Migrations & API changes" rows (touch_ai.go) —
+		// fire-and-forget, allowlisted, gated by "Live AI assistent".
+		m.autoStartTouchAI(ctx, snap.Sections, snap.Statuses)
 
 		return json.Marshal(inboxRefreshResult{UpdatedAt: updatedAt, PRs: n})
 	})
@@ -3819,6 +3830,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowTestRun, testRunWorkflow)
 	engine.RegisterWorkflow(WorkflowSummarizeChat, summarizeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentTitles, commentTitlesWorkflow)
+	m.registerTouchAI(engine)
 
 	// The LLM-heavy workflows make many/long claude calls (resolve_call runs one
 	// claude call per unresolved call in the block; code_warning a whole agentic

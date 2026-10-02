@@ -320,6 +320,8 @@ func addTouchSummaries(ctx context.Context, sections []inboxSection, statuses ma
 			continue
 		}
 		cacheKey := ""
+		st.TouchSHA = st.headSHA
+		statuses[j.key] = st
 		if st.headSHA != "" {
 			cacheKey = j.key + "@" + st.headSHA
 			touchSummaryCache.Lock()

@@ -78,6 +78,13 @@ type prStatus struct {
 	// filled for the "Migrations & API changes" rows — the one section that
 	// shows it, in place of the full row.
 	TouchSummary *touchSummary `json:"touchSummary,omitempty"`
+	// TouchSHA is the head commit TouchSummary was derived from (only set on
+	// "Migrations & API changes" rows) — the key the touch_ai result is
+	// joined on at read time, so an AI verdict is never shown for newer code.
+	TouchSHA string `json:"touchSha,omitempty"`
+	// TouchAI is the touch_ai workflow's verdict (touch_ai.go), joined in by
+	// handleInboxStatus from modules/touchai — never stored in the snapshot.
+	TouchAI *touchAI `json:"touchAi,omitempty"`
 	// headSHA keys touchSummaryCache; not serialized.
 	headSHA string
 }

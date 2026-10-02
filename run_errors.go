@@ -207,6 +207,7 @@ var perItemRunID = map[string]bool{
 	WorkflowChatMerge:       true, // chatMergeQueueRunID(pr)
 	WorkflowSummarizeChat:   true, // chatSummaryRunID(commentID, msgCount)
 	WorkflowCommentTitles:   true, // commentTitlesRunID(pr, items)
+	WorkflowTouchAI:         true, // touchAIRunID(repo, pr, headSHA)
 }
 
 // runIdentity answers "which task is this run an attempt at?" — the key
