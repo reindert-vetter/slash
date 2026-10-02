@@ -1199,7 +1199,7 @@ function touchAiSummary(pr) {
 
 // compactRowInner — the row shape of the "Migrations & API changes" section:
 // who, what (title + DB/API badges) and the 1–2 line change summary, then the
-// chevron. No reviewers/status/approval/comments/AI tracks: the reviewer only
+// review-tree chip (graphChip) and chevron. No reviewers/status/approval/comments/AI tracks: the reviewer only
 // scans this list to know what changed in the schema/API, clicking still
 // opens the same popover as every other row.
 function compactRowInner(pr) {
@@ -1219,7 +1219,8 @@ function compactRowInner(pr) {
         </p>
       </div>
     `,
-    html`<div class="flex shrink-0 justify-end">
+    html`<div class="flex shrink-0 items-center justify-end gap-3">
+      <div class="flex justify-end">${() => graphChip(pr)}</div>
       ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
     </div>`,
   ]

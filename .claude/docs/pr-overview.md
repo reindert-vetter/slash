@@ -832,8 +832,9 @@ that fit no other section but do change one of those.
   - **Compact row** (`compactPrRow`/`compactRowInner`, its own template so a
     pooled full-row chunk is never patched into a compact one): avatar + name,
     title + DB/API badges, then at most two summary lines (`touchSummaryLines`,
-    `data-testid=touch-summary-db`/`-api`) and the chevron — no
-    reviewer/status/approval/comment/AI tracks.
+    `data-testid=touch-summary-db`/`-api`), the same review-tree chip as the
+    full rows (`graphChip`, `data-testid=graph-chip`: generating / generated /
+    on GitHub) and the chevron — no reviewer/status/approval/comment/AI tracks.
   The client renders it directly under "Needs your review" and puts the
   Planning blocks after it, not between the two.
 - **The summary** (`prStatus.touchSummary`, `inbox_touch_summary.go`) is
