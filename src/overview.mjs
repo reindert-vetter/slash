@@ -429,13 +429,39 @@ function reviewerAvatar(r) {
   `
 }
 
-function reviewersStrip(status) {
+// balancedRows splits n avatars into rows of at most `max`, as even as possible
+// with the extra ones in the earlier rows (4 -> 2+2, 5 -> 3+2, 7 -> 3+2+2), so
+// the first row never has more than one avatar over any later row.
+function balancedRows(list, max = 3) {
+  const rows = Math.max(1, Math.ceil(list.length / max))
+  const base = Math.floor(list.length / rows)
+  const extra = list.length % rows
+  const out = []
+  let at = 0
+  for (let i = 0; i < rows; i++) {
+    const n = base + (i < extra ? 1 : 0)
+    out.push(list.slice(at, at + n))
+    at += n
+  }
+  return out
+}
+
+function reviewersStrip(status, balanced) {
   const reviewers = Array.isArray(status.reviewers) ? status.reviewers : []
   if (!reviewers.length) return null
   // Approved first, then changes-requested/commented, then pending — the eye
   // lands on who still owes a review.
   const order = { APPROVED: 0, CHANGES_REQUESTED: 1, COMMENTED: 2 }
   const sorted = [...reviewers].sort((a, b) => (order[a.state] ?? 3) - (order[b.state] ?? 3))
+  if (balanced) {
+    return html`
+      <span class="flex w-full flex-col items-center gap-1.5" data-testid="reviewers">
+        ${balancedRows(sorted).map((row, ri) =>
+          html`<span class="flex items-center justify-center gap-1.5">${row.map((r) => reviewerAvatar(r).key('rev:' + r.login))}</span>`.key('revrow:' + ri),
+        )}
+      </span>
+    `
+  }
   return html`
     <span class="flex w-28 flex-wrap justify-end items-center gap-1.5" data-testid="reviewers">
       ${sorted.map((r, i) => reviewerAvatar(r).key('rev:' + i + ':' + r.login))}
@@ -596,9 +622,9 @@ function statusSkeleton(pr) {
 // their own space. Same keyed-array/reactive-binding shape as statusPills
 // (never a bare template, so the async status backfill's null→loaded flip
 // can't hit the single↔array slot pitfall).
-function reviewersList(pr, status) {
+function reviewersList(pr, status, balanced) {
   if (!status) return []
-  const strip = reviewersStrip(status)
+  const strip = reviewersStrip(status, balanced)
   return strip ? [strip.key('reviewers')] : []
 }
 
@@ -1214,7 +1240,7 @@ function compactRowInner(pr) {
     html`<div class="flex w-28 shrink-0 flex-col items-center gap-1.5 self-start" data-testid="touch-left">
       ${authorMark(pr)}
       <div class="flex min-h-[22px] w-full flex-wrap items-center justify-center gap-1.5" data-testid="reviewers-slot">
-        ${() => reviewersList(pr, statusFor(pr))}
+        ${() => reviewersList(pr, statusFor(pr), true)}
       </div>
       <p class="text-center text-[11px] leading-tight text-slate-500 dark:text-zinc-500" data-testid="touch-updated" title="${pr.updatedAt || ''}">
         ${() => t('Bijgewerkt {time}', { time: relativeTime(pr.updatedAt) })}
