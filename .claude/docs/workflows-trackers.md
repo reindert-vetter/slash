@@ -986,6 +986,7 @@ Signal-less, one Execution per run.
   Every dependency may be `nil` (a caller that doesn't wire a store skips it),
   and every delete is unconditional on `pr`/the path, so **re-running cleanup on
   the same PR is always a no-op** — the idempotency the daily trigger relies on.
+- **Merged OR closed = purgeable immediately (no 7-day wait).** `resolveCleanupTargets` targets a PR with `MergedAt` set, or whose `PRState` is `closed`; open PRs and gh errors are left alone. Besides the daily pass (safety net), `runPRMergeSweepOnce` (`pr_status_poll.go`) starts a `pr_purge` one-shot (`pr_purge.go`, Activity `purgePRNow`) the moment it sees a merged/closed PR (primary repo only). Its input field is `target`, NOT `pr`, because `purgePR` deletes every run whose input has a `pr` (it would delete itself). `purgePR` takes `ingestMu` only around the worktree/ref removal (never across `DeleteRun`: a running ingest holds its run lock while waiting for `ingestMu`), and `purgePRAndForget` drops the cached pr_status/relations/approve/ignore_comment Run IDs. "Negeren" in `/pr-overview` runs the same purge, see `pr-overview.md`.
 - **Three age-based sweeps run once per pass, independent of the PR targets**
   (they are about the RESIDUE's own age, not a PR's merge date):
   `sweepTestRunResidue` (see `.claude/docs/workflows-test-run.md`),

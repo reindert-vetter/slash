@@ -356,16 +356,25 @@ func resolveCleanupTargets(ctx context.Context, gh github.Client, db *sql.DB, da
 			log.Printf("cleanup: pr %d: PRMeta failed, skipping: %v", pr, err)
 			continue
 		}
-		if meta.MergedAt == "" {
-			continue // not merged (open, or closed without merging) — never touch
-		}
-		mergedAt, err := time.Parse(time.RFC3339, meta.MergedAt)
-		if err != nil {
-			log.Printf("cleanup: pr %d: unparsable mergedAt %q, skipping: %v", pr, meta.MergedAt, err)
-			continue
-		}
-		if mergedAt.After(in.Cutoff) {
-			continue // merged, but not old enough yet
+		var mergedAt time.Time
+		if meta.MergedAt != "" {
+			// Merged: purgeable right away, no retention window any more.
+			mergedAt, err = time.Parse(time.RFC3339, meta.MergedAt)
+			if err != nil {
+				log.Printf("cleanup: pr %d: unparsable mergedAt %q, skipping: %v", pr, meta.MergedAt, err)
+				continue
+			}
+		} else {
+			// Not merged: purgeable only when definitively closed. An open PR,
+			// or a gh hiccup, leaves it alone.
+			state, err := gh.PRState(ctx, pr)
+			if err != nil {
+				log.Printf("cleanup: pr %d: PRState failed, skipping: %v", pr, err)
+				continue
+			}
+			if state != "closed" {
+				continue
+			}
 		}
 		res.Targets = append(res.Targets, CleanupTarget{PR: pr, MergedAt: mergedAt})
 	}
@@ -435,7 +444,12 @@ type purgeDeps struct {
 func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, error) {
 	res := CleanupPurgeResult{PR: pr, RowsDeleted: map[string]int{}}
 
+	// ingestMu only around the git/disk part: it makes a running ingest of this
+	// PR finish first. It must NOT be held across DeleteRun below — a running
+	// ingest holds its run lock while waiting for ingestMu (deadlock).
+	ingestMu.Lock()
 	n, err := removePRWorktrees(ctx, d.dataDir, cleanupRepo, pr)
+	ingestMu.Unlock()
 	if err != nil {
 		return res, fmt.Errorf("remove worktrees: %w", err)
 	}
@@ -444,7 +458,9 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 	// A PR that is purged is merged/closed and gone from the review tree, so a
 	// pending ref that was never pushed has nothing left to belong to — sweeping
 	// it keeps refs/slash/pending/ from accumulating dead refs (pending_push.go).
+	ingestMu.Lock()
 	removePendingRefs(ctx, cleanupRepo, pr)
+	ingestMu.Unlock()
 
 	if d.engine != nil {
 		deleted, err := deletePRWorkflowRuns(d.engine, pr)
@@ -736,6 +752,7 @@ func purgeOrphanCommentRuns(ctx context.Context, engine *tembed.Engine, cm *comm
 var sweptOneShotTypes = map[string]bool{
 	WorkflowDebugLog:   true,
 	WorkflowIgnoreRuns: true,
+	WorkflowPrPurge:    true,
 }
 
 // sweepDebugLogRuns deletes the run history of every COMPLETED one-shot of a
@@ -881,4 +898,30 @@ func collectTestRunResidueList(ctx context.Context, dir string) ([]string, error
 		}
 	}
 	return paths, nil
+}
+
+// purgeDeps wires the manager's stores into purgePR.
+func (m *TaskManager) purgeDeps() purgeDeps {
+	return purgeDeps{
+		engine: m.engine, db: m.db, dataDir: m.dataDir,
+		comments: m.comments, approvals: m.approvals, relations: m.relations,
+		callresolve: m.callresolve, testcovers: m.testcovers, prmeta: m.prmeta, explain: m.explain,
+		commentignore: m.commentignore, chat: m.chat,
+	}
+}
+
+// purgePRAndForget runs purgePR for a primary-repo PR and then drops the
+// manager's cached Run IDs for it: purgePR deletes those runs, and a stale
+// cache entry would make a later EnsurePRStatus/EnsureRelations (e.g. the
+// regeneration after "Negeren opheffen") hand out a run that no longer exists.
+func (m *TaskManager) purgePRAndForget(ctx context.Context, pr int) (CleanupPurgeResult, error) {
+	res, err := purgePR(ctx, m.purgeDeps(), pr)
+	key := prKey{cleanupRepo, pr}
+	m.mu.Lock()
+	delete(m.prRuns, key)
+	delete(m.relRuns, key)
+	delete(m.apprRuns, key)
+	delete(m.ignRuns, key)
+	m.mu.Unlock()
+	return res, err
 }

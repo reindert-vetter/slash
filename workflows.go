@@ -3162,13 +3162,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &t); err != nil {
 			return nil, err
 		}
-		deps := purgeDeps{
-			engine: m.engine, db: m.db, dataDir: m.dataDir,
-			comments: m.comments, approvals: m.approvals, relations: m.relations,
-			callresolve: m.callresolve, testcovers: m.testcovers, prmeta: m.prmeta, explain: m.explain,
-			commentignore: m.commentignore, chat: m.chat,
-		}
-		res, err := purgePR(ctx, deps, t.PR)
+		res, err := m.purgePRAndForget(ctx, t.PR)
 		if err != nil {
 			return nil, err
 		}
@@ -3794,6 +3788,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// The two snooze Activities (see pr_snooze.go).
 	m.registerPrSnoozeActivities(engine)
 	m.registerPrIgnoreActivities(engine)
+	m.registerPrPurgeActivities(engine)
 	// Editing the PR's own title/description (see pr_description_edit.go).
 	m.registerPrDescriptionEdit(engine)
 
@@ -3820,6 +3815,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowAutoIngestPref, autoIngestPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowPrSnooze, prSnoozeWorkflow)
 	engine.RegisterWorkflow(WorkflowPrIgnore, prIgnoreWorkflow)
+	engine.RegisterWorkflow(WorkflowPrPurge, prPurgeWorkflow)
 	engine.RegisterWorkflow(WorkflowLangPref, langPrefWorkflow)
 	engine.RegisterWorkflow(WorkflowAppSettings, appSettingsWorkflow)
 	engine.RegisterWorkflow(WorkflowDebugLog, debugLogWorkflow)

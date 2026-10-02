@@ -108,5 +108,12 @@ func (m *TaskManager) runPRMergeSweepOnce(ctx context.Context) {
 		if err := m.engine.SignalWorkflow(r.ID, SignalPRState, PRStateSignal{State: state}); err != nil {
 			m.logf("pr_status: merge sweep signal pr=%d: %v", input.PR, err)
 		}
+		// Merged or closed: drop everything stored for the PR right away (the
+		// daily cleanup is the safety net). Primary repo only, like cleanup.
+		if repo == cleanupRepo {
+			if _, err := m.engine.StartWorkflow(WorkflowPrPurge, PrPurgeInput{Target: input.PR}); err != nil {
+				m.logf("pr_status: merge sweep purge pr=%d: %v", input.PR, err)
+			}
+		}
 	}
 }

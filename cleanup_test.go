@@ -83,7 +83,7 @@ func TestResolveCleanupTargets(t *testing.T) {
 
 	// PR 1: merged well before the cutoff -> eligible.
 	gh.SetPRMetaFor(1, github.Meta{MergedAt: cutoff.Add(-48 * time.Hour).Format(time.RFC3339)})
-	// PR 2: merged, but only just, after the cutoff -> not eligible yet.
+	// PR 2: merged only just after the cutoff -> eligible too (no retention window).
 	gh.SetPRMetaFor(2, github.Meta{MergedAt: cutoff.Add(1 * time.Hour).Format(time.RFC3339)})
 	// PR 3: open (never merged) -> never eligible, regardless of age.
 	gh.SetPRMetaFor(3, github.Meta{MergedAt: ""})
@@ -94,8 +94,29 @@ func TestResolveCleanupTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(targets.Targets) != 2 || targets.Targets[0].PR != 1 || targets.Targets[1].PR != 2 {
+		t.Fatalf("targets = %+v, want exactly pr 1 and 2", targets.Targets)
+	}
+}
+
+// A PR closed without merging is purgeable too; open stays untouched.
+func TestResolveCleanupTargetsClosedNotMerged(t *testing.T) {
+	dataDir := t.TempDir()
+	db := seedGraphDB(t, 1)
+	gh := &github.Fake{}
+	gh.SetPRMetaFor(1, github.Meta{MergedAt: ""})
+	gh.SetPRState("closed")
+	targets, err := resolveCleanupTargets(context.Background(), gh, db, dataDir, nil, CleanupInput{Cutoff: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(targets.Targets) != 1 || targets.Targets[0].PR != 1 {
-		t.Fatalf("targets = %+v, want exactly pr 1", targets.Targets)
+		t.Fatalf("targets = %+v, want pr 1", targets.Targets)
+	}
+	gh.SetPRState("open")
+	targets, _ = resolveCleanupTargets(context.Background(), gh, db, dataDir, nil, CleanupInput{Cutoff: time.Now()})
+	if len(targets.Targets) != 0 {
+		t.Fatalf("open PR targeted: %+v", targets.Targets)
 	}
 }
 
@@ -421,26 +442,22 @@ func TestPurgePRRemovesEverything(t *testing.T) {
 	}
 }
 
-func TestCleanupSkipsRecentMerge(t *testing.T) {
+func TestCleanupPurgesRecentMerge(t *testing.T) {
 	ctm := newCleanupTestManager(t)
 	const pr = 7
 	ctm.seedAllPRData(t, pr)
 
-	now := time.Now()
-	ctm.gh.SetPRMetaFor(pr, github.Meta{MergedAt: now.Add(-2 * 24 * time.Hour).Format(time.RFC3339)})
+	ctm.gh.SetPRMetaFor(pr, github.Meta{MergedAt: time.Now().Add(-2 * 24 * time.Hour).Format(time.RFC3339)})
 
 	res, err := ctm.mgr.StartCleanup(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Purged) != 0 {
-		t.Fatalf("Purged = %+v, want empty (merged too recently)", res.Purged)
+	if len(res.Purged) != 1 {
+		t.Fatalf("Purged = %+v, want the recently merged PR (no retention window)", res.Purged)
 	}
-	if !worktreesExist(ctm.dataDir, pr) {
-		t.Fatal("worktrees were removed for a recently-merged PR")
-	}
-	if blocks, _ := blocksByPR(ctm.graphDB, "", pr); len(blocks) == 0 {
-		t.Fatal("blocks were removed for a recently-merged PR")
+	if worktreesExist(ctm.dataDir, pr) {
+		t.Fatal("worktrees survived for a merged PR")
 	}
 }
 

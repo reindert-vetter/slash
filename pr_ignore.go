@@ -68,7 +68,20 @@ func (m *TaskManager) registerPrIgnoreActivities(engine *tembed.Engine) {
 		if m.prignore == nil {
 			return nil, nil
 		}
-		return nil, m.prignore.Set(ctx, arg.Repo, arg.PR, arg.At)
+		if err := m.prignore.Set(ctx, arg.Repo, arg.PR, arg.At); err != nil {
+			return nil, err
+		}
+		// "Negeren" also drops everything stored for the PR. Inside this
+		// EXISTING Activity (not a new step) so the tracker's recorded history
+		// keeps its shape. Safe for the tracker itself: its input carries no
+		// "pr", so deletePRWorkflowRuns never matches it. Primary repo only —
+		// purge does not carry a repo yet (see cleanupRepo).
+		if canonRepo(arg.Repo) == cleanupRepo {
+			if _, err := m.purgePRAndForget(ctx, arg.PR); err != nil {
+				return nil, fmt.Errorf("purge ignored pr %d: %w", arg.PR, err)
+			}
+		}
+		return nil, nil
 	})
 	engine.RegisterActivity("clearPrIgnore", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg PrIgnoreSignal
@@ -78,7 +91,16 @@ func (m *TaskManager) registerPrIgnoreActivities(engine *tembed.Engine) {
 		if m.prignore == nil {
 			return nil, nil
 		}
-		return nil, m.prignore.Clear(ctx, arg.Repo, arg.PR)
+		if err := m.prignore.Clear(ctx, arg.Repo, arg.PR); err != nil {
+			return nil, err
+		}
+		// Lifting the ignore regenerates the review tree right away, through
+		// the ordinary ingest workflow (same path as the auto-ingest). In the
+		// background: an ingest takes long and must not block this tracker.
+		if m.baseCtx != nil && !ghDisabled() {
+			go m.autoIngestOne(m.baseCtx, arg.Repo, arg.PR)
+		}
+		return nil, nil
 	})
 }
 
