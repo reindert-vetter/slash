@@ -153,6 +153,21 @@ section is the mechanism; that one is the numbers.
   approximation (folding N unchanged rows into one short text line already
   breaks exact row-for-row height parity for that stretch).
 
+**The gate, the margin and the hysteresis are counted in RENDERED units, not
+raw rows** (`renderedUnits`/`shouldVirtualize`/`windowEdgeBefore`/
+`windowEdgeAfter`, `Block.mjs`): a real row costs 1, and a whole collapsed run
+from `collapsePlan` also costs just 1, so `collapsePlan` is built *before* the
+window now. Counted in raw rows, PR 13960's `routes/api.php` (~485 rows: a
+`use` line near the top, a route change near the bottom, a 437-row collapsed
+run in between) got a window ending at row ~272 — the straddling collapsed run
+was drawn, but the route change right behind it fell into the trailing blank
+spacer, although the whole visible diff was ~20 real rows. Now such a block
+isn't virtualized at all (≤400 rendered units), and in a block that really is
+virtualized a hunk behind a long collapsed run stays within the 250-unit
+margin. A window edge never cuts a collapsed run (it's taken whole), so its
+`"${start}-${end}"` expand key stays intact. Test: "a far hunk behind a long
+collapsed run…" in `tests/diff-virtualize-huge-block.spec.mjs`.
+
 **Keeping the two panes of a 'split' diff aligned — the one genuinely tricky
 part.** "Only the new/right pane drives selection" (below) means the
 old/left pane's own `activeGroup` argument is a permanently-null stub

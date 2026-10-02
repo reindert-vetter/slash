@@ -155,4 +155,82 @@ test.describe('virtualizing a huge, mostly-changed block', () => {
     // find — but the approval COUNT above already proves it's still counted.
     await expect(host.locator(`[data-row="${res.farApprovedRow}"]`)).toHaveCount(0)
   })
+
+  // Regression: PR 13960's routes/api.php (~485 lines, a `use` line near the
+  // top and a route change near the bottom) showed only the first hunk — the
+  // window used to be counted in RAW rows, so the route change behind the
+  // 437-row collapsed run fell into the trailing blank spacer. The window and
+  // its gate are now counted in RENDERED units (a collapsed run costs 1).
+  test('a far hunk behind a long collapsed run is real DOM, not a blank spacer', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await leaveSearchBox(page)
+    await appReady(page)
+    const res = await evaluateSettled(page, async () => {
+      const { reactive } = await import('/src/vendor/arrow.js')
+      const Block = (await import('/src/Block.mjs')).default
+      const { blockRows, changedRows } = await import('/src/Block.mjs')
+      const mount = (id, oldLines, newLines, cursorAt) => {
+        const b = reactive({
+          category: 'ROUTE',
+          label: 'api.php',
+          status: 'modified',
+          file: 'routes/api.php',
+          line: 1,
+          approved: false,
+          code: { old: { start: 1, text: oldLines.join('\n') }, new: { start: 1, text: newLines.join('\n') } },
+        })
+        const rows = blockRows(b)
+        const changed = changedRows(rows)
+        const cursor = cursorAt === 'first' ? changed[0] : changed[cursorAt]
+        const host = document.createElement('div')
+        host.id = id
+        document.body.appendChild(host)
+        Block(b, { activeGroup: () => ({ start: cursor, end: cursor }) })(host)
+        return { rows: rows.length, changed }
+      }
+
+      // (1) The reported shape: ~500 lines, one change near line 20, one near
+      // line 480, cursor on the first one.
+      const base = Array.from({ length: 500 }, (_, i) => `Route::get('r${i}', 'C${i}@index');`)
+      const changedTwo = base.slice()
+      changedTwo[19] = 'use App\\Http\\Controllers\\Api\\CountryController;'
+      changedTwo[479] = "Route::get('countries', [CountryController::class, 'index'])"
+      const two = mount('virt-host-two-hunks', base, changedTwo, 'first')
+
+      // (2) A block that really is virtualized (>400 rendered rows: 450
+      // rewritten lines) with one more hunk behind an 800-line unchanged run.
+      // Counted in raw rows the window ended inside that run; counted in
+      // rendered units the run costs 1 and the far hunk is in reach.
+      const head = 450
+      const tail = 800
+      const oldBig = [
+        ...Array.from({ length: head }, (_, i) => `old_${i}_padding_to_avoid_accidental_matches`),
+        ...Array.from({ length: tail }, (_, i) => `same_${i}`),
+        'far_old_line',
+      ]
+      const newBig = [
+        ...Array.from({ length: head }, (_, i) => `new_${i}_padding_to_avoid_accidental_matches`),
+        ...Array.from({ length: tail }, (_, i) => `same_${i}`),
+        'far_new_line',
+      ]
+      // Cursor on the last change of the rewritten head.
+      const bigProbe = blockRows(reactive({ code: { old: { start: 1, text: oldBig.join('\n') }, new: { start: 1, text: newBig.join('\n') } } }))
+      const bigChanged = changedRows(bigProbe)
+      const lastHeadIdx = bigChanged.findIndex((r) => r > head * 2) - 1
+      const big = mount('virt-host-far-hunk', oldBig, newBig, lastHeadIdx)
+      return { two, big, farRow: big.changed[big.changed.length - 1], firstBig: big.changed[0] }
+    })
+
+    const two = page.locator('#virt-host-two-hunks')
+    expect(res.two.rows).toBeGreaterThan(400)
+    for (const r of res.two.changed) await expect(two.locator(`[data-row="${r}"]`).first()).toBeAttached()
+    await expect(two.locator('[data-virtualized-spacer]')).toHaveCount(0)
+    await expect(two.locator('[data-testid=collapsed-run]').first()).toBeAttached()
+
+    const big = page.locator('#virt-host-far-hunk')
+    await expect(big.locator(`[data-row="${res.farRow}"]`).first()).toBeAttached()
+    // Still genuinely virtualized: the start of the rewritten head is outside the window.
+    await expect(big.locator(`[data-row="${res.firstBig}"]`)).toHaveCount(0)
+    await expect(big.locator('[data-virtualized-spacer="before"]')).toHaveCount(2)
+  })
 })

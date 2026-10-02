@@ -3674,21 +3674,101 @@ const VIRTUALIZE_ROW_PX = 18
 // *window* still has to follow the real cursor.
 const windowByRows = new WeakMap()
 
+// The window is measured in RENDERED units, not raw row indices: every real
+// row costs 1, and a whole collapsed run (collapsePlan's `skip` segment, one
+// short "⋯ N ongewijzigde regels" spacer) also costs just 1. Measuring in
+// raw rows used to hide real changes: a big file with a few small hunks
+// (routes/api.php, PR 13960 — a `use` line at row ~22 and a route change at
+// row ~465, a 437-row collapsed run in between) had a raw-row window ending
+// at row ~272, so the collapsed run straddling that edge was drawn but the
+// second hunk right behind it was folded into the trailing blank spacer —
+// although the whole visible diff was barely 20 real rows. The same unit
+// measure also gates whether virtualizing is needed at all (renderedUnits
+// vs VIRTUALIZE_MIN_ROWS): a huge block that collapses down to a handful of
+// rows renders in full.
+
+// renderedUnits counts the rendered units (see above) of `segs` that overlap
+// rows [from, to] (inclusive; an empty range counts 0).
+function renderedUnits(segs, from = 0, to = Infinity) {
+  let units = 0
+  for (const seg of segs) {
+    if (seg.end < from || seg.start > to) continue
+    units += seg.skip ? 1 : Math.min(seg.end, to) - Math.max(seg.start, from) + 1
+  }
+  return units
+}
+
+// shouldVirtualize — the one gate both paneHTML and unifiedHTML use. The
+// raw `rows.length` check comes first so a small block never even builds a
+// unit count (and paneHTML never calls its cursorGroupFn, see there).
+function shouldVirtualize(rows, segs, wrap) {
+  return !wrap && rows.length > VIRTUALIZE_MIN_ROWS && renderedUnits(segs) > VIRTUALIZE_MIN_ROWS
+}
+
+// windowEdgeBefore returns the smallest row index `start` such that rows
+// [start, row-1] cost at most `budget` rendered units — a collapsed run is
+// always taken whole (never cut by the window edge, so its
+// "${start}-${end}" expand key stays intact, see virtualizedSegs).
+function windowEdgeBefore(segs, row, budget) {
+  let start = row
+  for (let k = segs.length - 1; k >= 0 && budget > 0; k--) {
+    const seg = segs[k]
+    const hi = Math.min(seg.end, start - 1)
+    if (hi < seg.start) continue
+    if (seg.skip) {
+      start = seg.start
+      budget -= 1
+      continue
+    }
+    const take = Math.min(budget, hi - seg.start + 1)
+    start = hi - take + 1
+    budget -= take
+  }
+  return start
+}
+
+// windowEdgeAfter — windowEdgeBefore's mirror: the largest row index `end`
+// such that rows [row+1, end] cost at most `budget` rendered units.
+function windowEdgeAfter(segs, row, budget) {
+  let end = row
+  for (let k = 0; k < segs.length && budget > 0; k++) {
+    const seg = segs[k]
+    const lo = Math.max(seg.start, end + 1)
+    if (lo > seg.end) continue
+    if (seg.skip) {
+      end = seg.end
+      budget -= 1
+      continue
+    }
+    const take = Math.min(budget, seg.end - lo + 1)
+    end = lo + take - 1
+    budget -= take
+  }
+  return end
+}
+
 // computeWindow decides which row range actually gets rendered as real DOM
-// for a huge, virtualized block. `cursorStart`/`cursorEnd` is the active
-// unit's own row span — always kept fully inside the returned window, so
-// nothing that needs a `data-row`/an active bar/a call-arrow anchor/a
-// `data-change-active` marker is ever virtualized away. Returns null when
-// this block isn't (or no longer needs to be) virtualized at all.
-function computeWindow(rows, cursorStart, cursorEnd) {
+// for a huge, virtualized block. `segs` is the block's segment list
+// (collapsePlan's, or the single "everything" span) — the margin and the
+// hysteresis are counted in rendered units over it (see above).
+// `cursorStart`/`cursorEnd` is the active unit's own row span — always kept
+// fully inside the returned window, so nothing that needs a `data-row`/an
+// active bar/a call-arrow anchor/a `data-change-active` marker is ever
+// virtualized away. Only called once shouldVirtualize said yes.
+function computeWindow(rows, segs, cursorStart, cursorEnd) {
   const n = rows.length
-  if (n <= VIRTUALIZE_MIN_ROWS) return null
   const cached = windowByRows.get(rows)
-  if (cached && cursorStart >= cached.start + VIRTUALIZE_HYSTERESIS && cursorEnd <= cached.end - VIRTUALIZE_HYSTERESIS) {
+  if (
+    cached &&
+    cursorStart >= cached.start &&
+    cursorEnd <= cached.end &&
+    (cached.start === 0 || renderedUnits(segs, cached.start, cursorStart - 1) >= VIRTUALIZE_HYSTERESIS) &&
+    (cached.end === n - 1 || renderedUnits(segs, cursorEnd + 1, cached.end) >= VIRTUALIZE_HYSTERESIS)
+  ) {
     return cached
   }
-  const start = Math.max(0, cursorStart - VIRTUALIZE_MARGIN)
-  const end = Math.min(n - 1, cursorEnd + VIRTUALIZE_MARGIN)
+  const start = Math.max(0, windowEdgeBefore(segs, cursorStart, VIRTUALIZE_MARGIN))
+  const end = Math.min(n - 1, windowEdgeAfter(segs, cursorEnd, VIRTUALIZE_MARGIN))
   const win = { start, end }
   windowByRows.set(rows, win)
   return win
@@ -4155,10 +4235,14 @@ function paneHTML(
   // no fixed height (see VIRTUALIZE_ROW_PX's own doc comment), so a
   // fixed-height spacer estimate would be actively wrong there, not just
   // approximate.
+  // The gate and the window are both counted in RENDERED units over the
+  // collapse plan (see computeWindow), so the plan is built first.
+  const plan = collapsePlan(rows, commented)
+  const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
   let win = null
-  if (!wrap && rows.length > VIRTUALIZE_MIN_ROWS && typeof cursorGroupFn === 'function') {
+  if (typeof cursorGroupFn === 'function' && shouldVirtualize(rows, baseSegs, wrap)) {
     const cg = cursorGroupFn()
-    win = computeWindow(rows, cg ? cg.start : 0, cg ? cg.end : 0)
+    win = computeWindow(rows, baseSegs, cg ? cg.start : 0, cg ? cg.end : 0)
   }
   const parts = []
   const pushRow = (i) => {
@@ -4191,8 +4275,6 @@ function paneHTML(
       ),
     )
   }
-  const plan = collapsePlan(rows, commented)
-  const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
   const { segs, beforeCount, afterCount } = virtualizedSegs(baseSegs, win)
   if (beforeCount) parts.push(virtualSpacerHTML(beforeCount, 'before'))
   const breadcrumbs = isYaml && plan ? yamlBreadcrumbsForSegs(rows, plan) : null
@@ -4286,7 +4368,11 @@ function unifiedHTML(
   // estimate would be actively wrong — this stand used to never receive
   // `wrap:true` at all (see unifiedCodeDiff's own doc comment), so this gate
   // was unreachable before wrap started applying to every stand.
-  const win = !wrap && rows.length > VIRTUALIZE_MIN_ROWS ? computeWindow(rows, group ? group.start : 0, group ? group.end : 0) : null
+  const plan = collapsePlan(rows, commented)
+  const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
+  const win = shouldVirtualize(rows, baseSegs, wrap)
+    ? computeWindow(rows, baseSegs, group ? group.start : 0, group ? group.end : 0)
+    : null
   const parts = []
   const pushRow = (i) => {
     const r = rows[i]
@@ -4298,8 +4384,6 @@ function unifiedHTML(
     const segDots = partial ? segDotMarkers(r.right != null ? r.right : r.left, partial) : null
     parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange, lang, wrap))
   }
-  const plan = collapsePlan(rows, commented)
-  const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
   const { segs, beforeCount, afterCount } = virtualizedSegs(baseSegs, win)
   if (beforeCount) parts.push(virtualSpacerHTML(beforeCount, 'before'))
   const breadcrumbs = isYaml && plan ? yamlBreadcrumbsForSegs(rows, plan) : null
