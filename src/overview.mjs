@@ -1211,7 +1211,15 @@ function touchAiSummary(pr) {
 // opens the same popover as every other row.
 function compactRowInner(pr) {
   return [
-    authorMark(pr, true),
+    html`<div class="flex w-28 shrink-0 flex-col items-center gap-1.5 self-start" data-testid="touch-left">
+      ${authorMark(pr)}
+      <div class="flex min-h-[22px] w-full flex-wrap items-center justify-center gap-1.5" data-testid="reviewers-slot">
+        ${() => reviewersList(pr, statusFor(pr))}
+      </div>
+      <p class="text-center text-[11px] leading-tight text-slate-500 dark:text-zinc-500" data-testid="touch-updated" title="${pr.updatedAt || ''}">
+        ${() => t('Bijgewerkt {time}', { time: relativeTime(pr.updatedAt) })}
+      </p>
+    </div>`,
     html`
       <div class="min-w-0 flex-1" data-testid="touch-summary">
         <div class="flex items-center gap-2">
@@ -1221,9 +1229,6 @@ function compactRowInner(pr) {
         </div>
         <div class="mt-0.5 space-y-0.5">${() => touchSummaryLines(pr)}</div>
         <div class="contents">${() => touchAiSummary(pr)}</div>
-        <p class="mt-0.5 text-[11px] text-slate-500 dark:text-zinc-500" data-testid="touch-updated" title="${pr.updatedAt || ''}">
-          ${() => t('Bijgewerkt {time}', { time: relativeTime(pr.updatedAt) })}
-        </p>
       </div>
     `,
     html`<div class="flex shrink-0 items-center justify-end gap-3">

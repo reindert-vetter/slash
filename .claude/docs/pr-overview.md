@@ -864,7 +864,8 @@ that fit no other section but do change one of those.
   is its own chip (`touchChip`/`touchItemSegment`, `src/overview.mjs`).
   Without an AI verdict the colour follows the direction glyph, which stays in
   the chip text: `+` emerald, `−` rose, `~` amber (item-level chips: the word
-  "Nieuwe"/"verwijderd"/"aangepast" carries it). Under the chips the row shows
+  "Nieuwe"/"verwijderd"/"aangepast" carries it). The left column (`touch-left`) stacks author
+  avatar + name, the reviewer-avatar strip (all reviewers incl. pending) and
   `Bijgewerkt {time}` (`data-testid=touch-updated`, time only, no repo#nr).
 
 ### AI read of the change (`touch_ai`, `touch_ai.go`)
