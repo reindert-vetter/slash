@@ -873,7 +873,7 @@ that fit no other section but do change one of those.
 One context-only Haiku call per PR head commit returns, as one JSON object:
 an **impact label** (`additive`/`caution`/`breaking` + a short reason) shown
 as a pill next to the DB/API badges (`touch-ai-impact`: `✓ additief` /
-`⚠ let op` / `✕ breaking`, reason on the AI sentence line); a **summary sentence**
+`⚠ let op` / `✕ breaking`, reason on the AI sentence line); a **summary** (max 2 sentences, always states whether the change is backward compatible; wraps, never truncated)
 preceded by that impact reason as grey text (`touch-ai-summary`, no "AI" pill; `touch-ai-impact-reason`); and a **verdict per chip**
 (`safe`/`caution`/`breaking`) — the chip colour then follows the verdict and a
 second glyph `✓`/`⚠`/`✕` is prepended, never colour alone; for `caution`/`breaking` the chip's note also shows as small grey text next to it (`touch-chip-note`), not only in the tooltip. Chips under the single "DB"/"API" label wrap fluidly (`flex-wrap`); only a chip with a `caution`/`breaking` note takes its own line (`basis-full`) with the note right of it, so a note is never cut off at the right edge (this replaces the "every chip on its own line" of 5f86977 for note-less chips; a multi-chip item shows its `name:` prefix with its chips wrapping indented below). The compact rows' avatar is top-aligned (`authorMark(pr, true)`, `self-start`).

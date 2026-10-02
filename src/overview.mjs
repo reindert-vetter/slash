@@ -1120,7 +1120,7 @@ function touchChip(text, sign, verdict, testKey) {
       data-verdict="${v ? verdict.verdict : ''}"
       title="${title}"
       >${label}</span
-    ><span class="truncate text-[10.5px] text-slate-500 dark:text-zinc-500" data-testid="touch-chip-note">${note}</span></span
+    ><span class="min-w-0 break-words text-[10.5px] text-slate-500 dark:text-zinc-500" data-testid="touch-chip-note">${note}</span></span
   >`.key(testKey)
 }
 
@@ -1224,7 +1224,7 @@ function touchAiSummary(pr) {
   const reason = ai.reason || ''
   const sum = ai.summary || ''
   return [
-    html`<p class="truncate text-[11.5px] text-slate-600 dark:text-zinc-400" data-testid="touch-ai-summary" title="${'AI: ' + (reason ? reason + ' — ' : '') + sum}"
+    html`<p class="break-words text-[11.5px] text-slate-600 dark:text-zinc-400" data-testid="touch-ai-summary" title="${'AI: ' + (reason ? reason + ' — ' : '') + sum}"
       ><span class="mr-1 text-slate-500 dark:text-zinc-500" data-testid="touch-ai-impact-reason">${reason}</span>${sum}</p
     >`.key('aisum:' + sum + ':' + reason),
   ]

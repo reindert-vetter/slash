@@ -20,8 +20,10 @@ Geef terug:
      hernoemde route, een verwijderde response-key, een nieuw verplicht veld in
      een request).
 2. "reason" — één korte zin (max 15 woorden) waarom je dat oordeel geeft.
-3. "summary" — één Nederlandse zin (max 30 woorden) die inhoudelijk uitlegt
-   wat er functioneel verandert, niet welke bestanden er zijn aangepast.
+3. "summary" — Nederlandse tekst (max 2 zinnen, max 50 woorden) die inhoudelijk
+   uitlegt wat er functioneel verandert, niet welke bestanden er zijn
+   aangepast. Sluit af met expliciet of de wijziging backward compatible is
+   (bijvoorbeeld "Backward compatible." of "Niet backward compatible: <reden>").
 4. "chips" — per onderdeel uit de lijst een oordeel:
    - "verdict": "safe", "caution" of "breaking" (zelfde betekenis als hierboven,
      maar dan voor dat ene onderdeel);
