@@ -7063,7 +7063,13 @@ func (m *TaskManager) autoIngestOwnPRs(ctx context.Context, myLogin string, sect
 	if mode == autoingestpref.ModeOff {
 		return
 	}
-	for _, key := range eligibleAutoIngestPRs(mode, myLogin, sections) {
+	ignored := map[prKey]bool{}
+	if igs, err := m.PrIgnores(ctx); err == nil {
+		for _, ig := range igs {
+			ignored[prKey{canonRepo(ig.Repo), ig.PR}] = true
+		}
+	}
+	for _, key := range eligibleAutoIngestPRs(mode, myLogin, sections, ignored) {
 		m.mu.Lock()
 		if m.autoIngestTried[key] {
 			m.mu.Unlock()

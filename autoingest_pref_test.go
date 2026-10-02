@@ -22,7 +22,7 @@ func aiSections() []inboxSection {
 		{Title: "Your drafts", PRs: []inboxRow{aiRow(6, "me", false)}},
 		{Title: "Needs your team's review", PRs: []inboxRow{aiRow(7, "other", false)}},
 		{Title: "Needs your review", PRs: []inboxRow{aiRow(8, "other", false)}},
-		// Never auto-ingested, in any mode: a summary-only section.
+		// Only auto-ingested in ModeAll (minus ignored PRs).
 		{Title: touchedSectionTitle, PRs: []inboxRow{aiRow(9, "other", false), aiRow(10, "me", false)}},
 	}
 }
@@ -37,7 +37,7 @@ func sortedNumbers(keys []prKey) []int {
 }
 
 func TestEligibleAutoIngestPRsModeOff(t *testing.T) {
-	got := eligibleAutoIngestPRs(autoingestpref.ModeOff, "me", aiSections())
+	got := eligibleAutoIngestPRs(autoingestpref.ModeOff, "me", aiSections(), nil)
 	if len(got) != 0 {
 		t.Fatalf("ModeOff: got %v, want none", got)
 	}
@@ -48,7 +48,7 @@ func TestEligibleAutoIngestPRsModeOwn(t *testing.T) {
 	// "Your drafts" (confirmed section list) plus every "Needs your review" PR (#8, any author; the team section #7 stays out) — never "Ready to merge" (#1,
 	// excluded on purpose) and never a PR authored by someone else (#3) or one
 	// that already has a graph (#5).
-	got := eligibleAutoIngestPRs(autoingestpref.ModeOwn, "me", aiSections())
+	got := eligibleAutoIngestPRs(autoingestpref.ModeOwn, "me", aiSections(), nil)
 	want := []int{2, 4, 6, 8}
 	if !reflect.DeepEqual(sortedNumbers(got), want) {
 		t.Fatalf("ModeOwn: got PRs %v, want %v", sortedNumbers(got), want)
@@ -57,7 +57,7 @@ func TestEligibleAutoIngestPRsModeOwn(t *testing.T) {
 
 func TestEligibleAutoIngestPRsModeOwnEmptyLogin(t *testing.T) {
 	// An unresolved "who am I" must never fall back to matching every author.
-	got := eligibleAutoIngestPRs(autoingestpref.ModeOwn, "", aiSections())
+	got := eligibleAutoIngestPRs(autoingestpref.ModeOwn, "", aiSections(), nil)
 	if len(got) != 0 {
 		t.Fatalf("ModeOwn with empty myLogin: got %v, want none", got)
 	}
@@ -65,10 +65,20 @@ func TestEligibleAutoIngestPRsModeOwnEmptyLogin(t *testing.T) {
 
 func TestEligibleAutoIngestPRsModeAll(t *testing.T) {
 	// All mode covers every section, any author, still excluding an already
-	// generated PR (#5) and the "Migrations & API changes" rows (#9, #10).
-	got := eligibleAutoIngestPRs(autoingestpref.ModeAll, "me", aiSections())
-	want := []int{1, 2, 3, 4, 6, 7, 8}
+	// generated PR (#5); includes the "Migrations & API changes" rows (#9, #10).
+	got := eligibleAutoIngestPRs(autoingestpref.ModeAll, "me", aiSections(), nil)
+	want := []int{1, 2, 3, 4, 6, 7, 8, 9, 10}
 	if !reflect.DeepEqual(sortedNumbers(got), want) {
 		t.Fatalf("ModeAll: got PRs %v, want %v", sortedNumbers(got), want)
+	}
+}
+
+func TestEligibleAutoIngestPRsModeAllSkipsIgnoredTouched(t *testing.T) {
+	ignored := map[prKey]bool{{canonRepo(""), 9}: true, {canonRepo(""), 2}: true}
+	got := eligibleAutoIngestPRs(autoingestpref.ModeAll, "me", aiSections(), ignored)
+	// #9 is ignored in M&A and dropped; #2 is ignored but not in M&A, so it stays.
+	want := []int{1, 2, 3, 4, 6, 7, 8, 10}
+	if !reflect.DeepEqual(sortedNumbers(got), want) {
+		t.Fatalf("got %v, want %v", sortedNumbers(got), want)
 	}
 }

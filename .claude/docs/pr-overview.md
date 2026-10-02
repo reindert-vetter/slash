@@ -827,9 +827,11 @@ that fit no other section but do change one of those.
   candidates' statuses. It keeps the ordinary popover ("Generate review tree")
   and keyboard nav, but it is a **summary list, not a work queue** (reviewer
   request), so three things differ from every other section:
-  - **Never auto-ingested**, in any `auto_ingest_pref` mode including "all":
-    `eligibleAutoIngestPRs` skips `touchedSectionTitle` outright
-    (`autoingest_pref_test.go`, rows #9/#10).
+  - **Auto-ingested only in `auto_ingest_pref` mode "all"** (not "own"), and
+    never when the PR is ignored ("Negeren"): `eligibleAutoIngestPRs` takes the
+    `prignore` set, read in `autoIngestOwnPRs` (`autoingest_pref_test.go`,
+    rows #9/#10). Originally never auto-ingested (summary list, not a work
+    queue); reversed for "all" only on request.
   - **Never part of a stack**: the client filters these rows out before
     `computeStacks`, so they always render in their own section.
   - **Compact row** (`compactPrRow`/`compactRowInner`, its own template so a

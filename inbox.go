@@ -1208,19 +1208,21 @@ const needsYourReviewTitle = "Needs your review"
 //     (e.g. "Needs your review"), so a tree is ready before the reviewer
 //     even opens it.
 //
-// A PR that already hasGraph is never returned, in any mode, and neither is a
-// "Migrations & API changes" row (touchedSectionTitle): that section is a
-// summary-only list of PRs that fit nowhere else, and the reviewer does not
-// want a tree generated for them automatically. An unknown mode
+// A PR that already hasGraph is never returned, in any mode. A "Migrations &
+// API changes" row (touchedSectionTitle) is only returned in ModeAll, and not
+// when the reviewer ignored it ("Negeren", the ignored set). An unknown mode
 // string is treated like ModeOff (nothing) rather than guessed at.
-func eligibleAutoIngestPRs(mode string, myLogin string, sections []inboxSection) []prKey {
+func eligibleAutoIngestPRs(mode string, myLogin string, sections []inboxSection, ignored map[prKey]bool) []prKey {
 	var out []prKey
 	for _, s := range sections {
-		if s.Title == touchedSectionTitle {
+		if s.Title == touchedSectionTitle && mode != autoingestpref.ModeAll {
 			continue
 		}
 		for _, pr := range s.PRs {
 			if pr.HasGraph {
+				continue
+			}
+			if s.Title == touchedSectionTitle && ignored[prKey{canonRepo(pr.Repo), pr.Number}] {
 				continue
 			}
 			switch mode {
