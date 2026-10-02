@@ -22,6 +22,8 @@ func aiSections() []inboxSection {
 		{Title: "Your drafts", PRs: []inboxRow{aiRow(6, "me", false)}},
 		{Title: "Needs your team's review", PRs: []inboxRow{aiRow(7, "other", false)}},
 		{Title: "Needs your review", PRs: []inboxRow{aiRow(8, "other", false)}},
+		// Never auto-ingested, in any mode: a summary-only section.
+		{Title: touchedSectionTitle, PRs: []inboxRow{aiRow(9, "other", false), aiRow(10, "me", false)}},
 	}
 }
 
@@ -63,7 +65,7 @@ func TestEligibleAutoIngestPRsModeOwnEmptyLogin(t *testing.T) {
 
 func TestEligibleAutoIngestPRsModeAll(t *testing.T) {
 	// All mode covers every section, any author, still excluding an already
-	// generated PR (#5).
+	// generated PR (#5) and the "Migrations & API changes" rows (#9, #10).
 	got := eligibleAutoIngestPRs(autoingestpref.ModeAll, "me", aiSections())
 	want := []int{1, 2, 3, 4, 6, 7, 8}
 	if !reflect.DeepEqual(sortedNumbers(got), want) {

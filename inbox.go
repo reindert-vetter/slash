@@ -73,6 +73,13 @@ type prStatus struct {
 	// inspected (statusesFor's files(first: 100)), so a huge PR can miss one.
 	MigrationFiles []string `json:"migrationFiles,omitempty"`
 	APIFiles       []string `json:"apiFiles,omitempty"`
+	// TouchSummary is the deterministic "what changed" summary of those
+	// migration/API files (summarizeTouched, inbox_touch_summary.go), only
+	// filled for the "Migrations & API changes" rows — the one section that
+	// shows it, in place of the full row.
+	TouchSummary *touchSummary `json:"touchSummary,omitempty"`
+	// headSHA keys touchSummaryCache; not serialized.
+	headSHA string
 }
 
 // inboxRow is one PR in the inbox. The status fields carry the heavy data and
@@ -245,6 +252,8 @@ type ghPRNode struct {
 	Additions    int    `json:"additions"`
 	Deletions    int    `json:"deletions"`
 	ChangedFiles int    `json:"changedFiles"`
+	// HeadRefOid (statusesFor only) keys the touch-summary cache per head SHA.
+	HeadRefOid string `json:"headRefOid"`
 	// Files is only requested by statusesFor (first 100 changed paths), for
 	// classifyTouched.
 	Files struct {
@@ -608,6 +617,7 @@ func statusFromNode(n ghPRNode, login string, fullyApprovedAt string) prStatus {
 		paths = append(paths, f.Path)
 	}
 	st.MigrationFiles, st.APIFiles = classifyTouched(paths)
+	st.headSHA = n.HeadRefOid
 	at, kind := myLastActivity(n, login)
 	at, kind = combineSinceMoment(at, kind, fullyApprovedAt)
 	if at != "" && afterRFC3339(n.UpdatedAt, at) {
@@ -995,7 +1005,7 @@ func statusesForChunk(ctx context.Context, keys []prKey, pm *prmeta.Module) (map
 			// this query otherwise skips) — myLastActivity/afterRFC3339 need it
 			// to decide whether anything happened since the reviewer's own last
 			// comment/review.
-			b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state updatedAt files(first: 100) { nodes { path } } %s }\n", num, num, heavyFields))
+			b.WriteString(fmt.Sprintf("  pr%d: pullRequest(number: %d) { number state updatedAt headRefOid files(first: 100) { nodes { path } } %s }\n", num, num, heavyFields))
 		}
 		b.WriteString(" }\n")
 	}
@@ -1149,6 +1159,7 @@ func buildInboxSnapshot(ctx context.Context, db *sql.DB, pm *prmeta.Module) (*sn
 		statuses = map[string]prStatus{}
 	}
 	sections = filterTouchedSection(sections, statuses)
+	addTouchSummaries(ctx, sections, statuses)
 	return &snapshotResult{
 		GeneratedFor: ghLogin(ctx),
 		Sections:     sections,
@@ -1185,11 +1196,17 @@ var autoIngestOwnSections = map[string]bool{
 //     (e.g. "Needs your review"), so a tree is ready before the reviewer
 //     even opens it.
 //
-// A PR that already hasGraph is never returned, in any mode. An unknown mode
+// A PR that already hasGraph is never returned, in any mode, and neither is a
+// "Migrations & API changes" row (touchedSectionTitle): that section is a
+// summary-only list of PRs that fit nowhere else, and the reviewer does not
+// want a tree generated for them automatically. An unknown mode
 // string is treated like ModeOff (nothing) rather than guessed at.
 func eligibleAutoIngestPRs(mode string, myLogin string, sections []inboxSection) []prKey {
 	var out []prKey
 	for _, s := range sections {
+		if s.Title == touchedSectionTitle {
+			continue
+		}
 		for _, pr := range s.PRs {
 			if pr.HasGraph {
 				continue

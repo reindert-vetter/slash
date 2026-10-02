@@ -821,11 +821,37 @@ that fit no other section but do change one of those.
   (`queryDef.limit`); the existing cross-section de-dupe drops the ones already
   listed, and `filterTouchedSection` (in `buildInboxSnapshot`, after the status
   fetch) keeps only candidates with a migration/API file and drops the other
-  candidates' statuses. Being an ordinary section, it gets the same popover
-  ("Generate review tree"), stacks and keyboard nav for free; auto-ingest just
-  follows the existing `auto_ingest_pref` ("all" includes it, "own" does not —
-  it is not in `autoIngestOwnSections`). The client renders it directly under
-  "Needs your review" and puts the Planning blocks after it, not between the two.
+  candidates' statuses. It keeps the ordinary popover ("Generate review tree")
+  and keyboard nav, but it is a **summary list, not a work queue** (reviewer
+  request), so three things differ from every other section:
+  - **Never auto-ingested**, in any `auto_ingest_pref` mode including "all":
+    `eligibleAutoIngestPRs` skips `touchedSectionTitle` outright
+    (`autoingest_pref_test.go`, rows #9/#10).
+  - **Never part of a stack**: the client filters these rows out before
+    `computeStacks`, so they always render in their own section.
+  - **Compact row** (`compactPrRow`/`compactRowInner`, its own template so a
+    pooled full-row chunk is never patched into a compact one): avatar + name,
+    title + DB/API badges, then at most two summary lines (`touchSummaryLines`,
+    `data-testid=touch-summary-db`/`-api`) and the chevron — no
+    reviewer/status/approval/comment/AI tracks.
+  The client renders it directly under "Needs your review" and puts the
+  Planning blocks after it, not between the two.
+- **The summary** (`prStatus.touchSummary`, `inbox_touch_summary.go`) is
+  deterministic — no Claude call. `addTouchSummaries` runs right after
+  `filterTouchedSection` inside the `pr_inbox` tracker's `refreshInbox`
+  Activity (so it is an Activity side effect and lands in the stored snapshot;
+  no new write path), fetches `gh api pulls/N/files` once per row in this
+  section only (max 4 in parallel), and `summarizeTouched` parses the patches
+  into structured items: DB `create`/`alter` (added/dropped/changed columns,
+  `down()` ignored)/`drop`/`rename`/`migration` (no `Schema::` call, e.g. a
+  data migration); API `routes` ("POST /path" added/removed), `resource`/
+  `request` (array keys added/removed), `controller` (changed/new). The
+  frontend phrases them via `t()` with `+`/`−`/`~` glyphs (legend in the
+  tooltip — glyphs, never colour). Cached in memory per
+  `repo#number@headRefOid` (`headRefOid` is in the status query), so the REST
+  call happens once per push; a failed fetch is not cached and the row falls
+  back to the bare file names. Lists are capped at 8 entries. Test:
+  `inbox_touch_summary_test.go`.
 
 ## The per-row popover
 

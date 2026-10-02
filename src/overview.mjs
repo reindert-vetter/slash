@@ -989,6 +989,106 @@ function touchBadges(pr) {
   return out
 }
 
+// ── "Migrations & API changes" compact rows ─────────────────────────────
+
+// TOUCHED_SECTION is touchedSectionTitle in inbox.go: PRs that fit no other
+// section but change a migration or an API file. That section is a summary
+// list, not a work queue — its rows are compact (compactRowInner), never
+// part of a stack (computeStacks skips them) and never auto-ingested
+// (eligibleAutoIngestPRs).
+const TOUCHED_SECTION = 'Migrations & API changes'
+
+// touchChanges joins a touchItem's column/key/route lists with a glyph per
+// direction — "+" added, "−" removed, "~" changed. The glyph carries the
+// meaning, never a colour (user_colorblind.md); the line's tooltip spells the
+// legend out.
+function touchChanges(it) {
+  return [...(it.add || []).map((v) => '+' + v), ...(it.del || []).map((v) => '−' + v), ...(it.chg || []).map((v) => '~' + v)].join(', ')
+}
+
+// touchItemText phrases one touchItem (summarizeTouched, inbox_touch_summary.go)
+// in the interface language.
+function touchItemText(it) {
+  const changes = touchChanges(it)
+  const name = it.new ? t('{name} (nieuw)', { name: it.name }) : it.name
+  switch (it.kind) {
+    case 'create':
+      return t('Nieuwe tabel {name}', { name: it.name })
+    case 'drop':
+      return t('Tabel {name} verwijderd', { name: it.name })
+    case 'rename':
+      return t('Tabel hernoemd: {name}', { name: it.name })
+    case 'migration':
+      return t('Migratie {name}', { name: it.name })
+    case 'alter':
+      return changes ? it.name + ': ' + changes : t('Tabel {name} aangepast', { name: it.name })
+    case 'routes':
+      return changes ? 'routes/' + it.name + ': ' + changes : t('{name} aangepast', { name: 'routes/' + it.name })
+    default:
+      // resource / request / controller
+      if (changes) return name + ': ' + changes
+      return it.new ? name : t('{name} aangepast', { name: it.name })
+  }
+}
+
+function fileBase(path) {
+  return path.split('/').pop().replace(/\.php$/, '')
+}
+
+// touchSummaryLines — the at most two summary lines under a compact row's
+// title: one for the database, one for the API. Falls back to the bare file
+// names while the summary is missing (status not backfilled yet, or the
+// patch fetch failed). Always a keyed array so the slot never flips
+// single↔array.
+function touchSummaryLines(pr) {
+  const st = statusFor(pr)
+  if (!st) return []
+  const sum = st.touchSummary || {}
+  const lines = []
+  const push = (prefix, items, files, testid) => {
+    let text = ''
+    // Deduped: two modules can each have a same-named class (UpsellController).
+    if (items && items.length) text = [...new Set(items.map(touchItemText))].join(' · ')
+    else if (files && files.length) text = files.map(fileBase).join(', ')
+    if (!text) return
+    lines.push(
+      html`<p
+        class="truncate text-[11.5px] text-slate-600 dark:text-zinc-400"
+        data-testid="${testid}"
+        title="${text + ' — ' + t('+ toegevoegd · − verwijderd · ~ gewijzigd')}"
+      >
+        <span class="font-semibold text-slate-700 dark:text-zinc-300">${prefix}</span> ${text}
+      </p>`.key(testid + ':' + text),
+    )
+  }
+  push('DB', sum.db, st.migrationFiles, 'touch-summary-db')
+  push('API', sum.api, st.apiFiles, 'touch-summary-api')
+  return lines
+}
+
+// compactRowInner — the row shape of the "Migrations & API changes" section:
+// who, what (title + DB/API badges) and the 1–2 line change summary, then the
+// chevron. No reviewers/status/approval/comments/AI tracks: the reviewer only
+// scans this list to know what changed in the schema/API, clicking still
+// opens the same popover as every other row.
+function compactRowInner(pr) {
+  return [
+    authorMark(pr),
+    html`
+      <div class="min-w-0 flex-1" data-testid="touch-summary">
+        <div class="flex items-center gap-2">
+          <h3 class="truncate text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 group-hover:text-black dark:group-hover:text-white">${pr.title}</h3>
+          <div class="contents">${() => touchBadges(pr)}</div>
+        </div>
+        <div class="mt-0.5">${() => touchSummaryLines(pr)}</div>
+      </div>
+    `,
+    html`<div class="flex shrink-0 justify-end">
+      ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
+    </div>`,
+  ]
+}
+
 function rowInner(pr, opts) {
   return [
     opts.depth ? connectorMark() : null,
@@ -2052,6 +2152,7 @@ function indentStyle(opts) {
 // regenerateButton for already-ingested rows, but "Open review-boom"/"Opnieuw
 // genereren" now live inside the same popover as every other row's actions.
 function prRow(pr, opts = {}) {
+  if (opts.compact) return compactPrRow(pr)
   return html`
     <div
       role="button"
@@ -2066,6 +2167,31 @@ function prRow(pr, opts = {}) {
       @dblclick="${() => openOrGenerate(pr)}"
     >
       ${rowInner(pr, opts)} ${() => (ui.openPopover === prUid(pr) ? popover(pr) : null)}
+    </div>
+  `.key('row:' + prUid(pr))
+}
+
+// compactPrRow — prRow for the "Migrations & API changes" section. Its own
+// template (not a ternary inside prRow's) so arrow.js never reuses a full
+// row's chunk for a compact one or vice versa — rowInner is a STATIC slot, and
+// a pooled chunk of one shape patched with the other would keep the wrong
+// tracks (see "A statically interpolated template↔string slot" in
+// .claude/rules/arrowjs-pitfalls.md). Same click/keyboard/popover contract.
+function compactPrRow(pr) {
+  return html`
+    <div
+      role="button"
+      tabindex="0"
+      data-testid="pr-row"
+      data-compact="true"
+      data-pr="${prUid(pr)}"
+      data-nav-row
+      data-nav-key="${'row:' + prUid(pr)}"
+      class="${'relative ' + ROW_CLASS}"
+      @click="${() => togglePopover(prUid(pr))}"
+      @dblclick="${() => openOrGenerate(pr)}"
+    >
+      ${compactRowInner(pr)} ${() => (ui.openPopover === prUid(pr) ? popover(pr) : null)}
     </div>
   `.key('row:' + prUid(pr))
 }
@@ -2214,7 +2340,7 @@ function sectionBlock(sec, filteredPrs) {
         <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${sec.title}</h2>
         ${refreshButton(() => ui.sectionsRefreshing, refreshSectionsNow, 'section-refresh')}
       </div>
-      ${listBox(filteredPrs.map((pr) => ({ pr })))}
+      ${listBox(filteredPrs.map((pr) => ({ pr, opts: { compact: sec.title === TOUCHED_SECTION } })))}
     </section>
   `.key('section:' + sec.title + ':' + filteredPrs.map(prUid).join(','))
 }
@@ -3053,7 +3179,9 @@ function mainContent() {
           })
         })
 
-        const chains = computeStacks(all)
+        // A "Migrations & API changes" row is summary-only: never lifted into
+        // a stack (it would lose its compact summary row there).
+        const chains = computeStacks(all.filter((pr) => sectionOf.get(prUid(pr)) !== TOUCHED_SECTION))
         const stacked = new Set()
         chains.forEach((nodes) => nodes.forEach(({ pr }) => stacked.add(prUid(pr))))
 
@@ -3079,7 +3207,7 @@ function mainContent() {
           // "Migrations & API changes" sits directly under "Needs your
           // review" (it follows it in the inbox order), so Planning goes
           // after it rather than between the two.
-          if (block && (sec.title === 'Needs your review' || (sec.title === 'Migrations & API changes' && issuesAt >= 0))) issuesAt = out.length
+          if (block && (sec.title === 'Needs your review' || (sec.title === TOUCHED_SECTION && issuesAt >= 0))) issuesAt = out.length
         })
         const issueBlocks = jiraIssueBlocks()
         if (issueBlocks.length) {
