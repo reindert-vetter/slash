@@ -879,9 +879,9 @@ second glyph `✓`/`⚠`/`✕` is prepended, never colour alone; for `caution`/`
 
 - **Trigger:** `autoStartTouchAI` from the `pr_inbox` tracker's `refreshInbox`
   Activity, fire-and-forget, gated by `runtimeReady`, `!ghDisabled()`, the
-  "Live AI assistent" toggle (autowarn) and — for now — the hardcoded
-  `touchAIAllowlist` (only `plug-and-pay/plug-and-pay#13989`, reviewer
-  request; drop the check to enable it for every row).
+  "Live AI assistent" toggle (autowarn). Runs for every row left in the
+  (already filtered) M&A section, except ignored PRs and PRs with an active
+  snooze (`touchAISkipper`, read-only; snooze rule mirrors `isSnoozeActive`).
 - **Run ID** `touchAIRunID(repo, pr, headSHA)`, so the per-minute poll never
   repeats the call and a push gets a fresh run. Activities: `generateTouchAI`
   (gh patches + Haiku; any failure records `status:"failed"`), `saveTouchAI`

@@ -1284,7 +1284,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		m.autoIngestOwnPRs(ctx, myLogin, snap.Sections)
 		// AI read of the "Migrations & API changes" rows (touch_ai.go) —
-		// fire-and-forget, allowlisted, gated by "Live AI assistent".
+		// fire-and-forget, ignored/snoozed skipped, gated by "Live AI assistent".
 		m.autoStartTouchAI(ctx, snap.Sections, snap.Statuses)
 
 		return json.Marshal(inboxRefreshResult{UpdatedAt: updatedAt, PRs: n})

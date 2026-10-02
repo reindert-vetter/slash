@@ -10,8 +10,8 @@
 //     route, key or class the row shows as its own chip.
 //
 // Started automatically from the pr_inbox tracker's refreshInbox Activity
-// (autoStartTouchAI), gated by the "Live AI assistent" toggle (autowarn) and,
-// for now, by a hardcoded allowlist (touchAIAllowlist). One Execution per PR
+// (autoStartTouchAI), gated by the "Live AI assistent" toggle (autowarn); ignored and
+// snoozed PRs are skipped. One Execution per PR
 // head commit, under a deterministic Run ID, so the per-minute inbox poll
 // never repeats the LLM call; a push gives a new head SHA and thus a new run.
 // The result lands in modules/touchai and is joined onto the status backfill
@@ -33,20 +33,12 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/claude"
 	"slash/modules/langpref"
+	"slash/modules/prsnooze"
 )
 
 // WorkflowTouchAI is the Workflow Type of the AI read of a PR's migration/API
 // changes. Completes when done (no signals).
 const WorkflowTouchAI = "touch_ai"
-
-// touchAIAllowlist limits the automatic touch_ai run to these PRs (statusKey
-// form) while the feature is being tried out — reviewer request: "doe ai
-// dingen enzo nu alleen voor" AUTH-667 (plug-and-pay/plug-and-pay #13989), later also BUG-5203 (#14005).
-// Remove the check in autoStartTouchAI to enable it for every row.
-var touchAIAllowlist = map[string]bool{
-	statusKey("", 13989): true,
-	statusKey("", 14005): true,
-}
 
 // maxTouchAIPatch clips one file's patch in the prompt; a migration/API
 // verdict needs the shape of the change, not every line of a huge file.
@@ -263,9 +255,10 @@ func (m *TaskManager) registerTouchAI(engine *tembed.Engine) {
 }
 
 // touchAIStarts lists the touch_ai runs refreshInbox should start for this
-// snapshot: allowlisted "Migrations & API changes" rows with a known head SHA
-// and at least one migration/API file. Pure, so it is unit-testable.
-func touchAIStarts(sections []inboxSection, statuses map[string]prStatus) []TouchAIInput {
+// snapshot: "Migrations & API changes" rows with a known head SHA and at least
+// one migration/API file, minus the rows skip reports (ignored / snoozed, the
+// same rows the overview hides). Pure, so it is unit-testable.
+func touchAIStarts(sections []inboxSection, statuses map[string]prStatus, skip func(inboxRow, prStatus) bool) []TouchAIInput {
 	var out []TouchAIInput
 	for _, s := range sections {
 		if s.Title != touchedSectionTitle {
@@ -274,7 +267,7 @@ func touchAIStarts(sections []inboxSection, statuses map[string]prStatus) []Touc
 		for _, r := range s.PRs {
 			key := rowKey(r)
 			st, ok := statuses[key]
-			if !ok || !touchAIAllowlist[key] || st.TouchSHA == "" {
+			if !ok || st.TouchSHA == "" || (skip != nil && skip(r, st)) {
 				continue
 			}
 			files := append(append([]string{}, st.MigrationFiles...), st.APIFiles...)
@@ -297,7 +290,7 @@ func (m *TaskManager) autoStartTouchAI(ctx context.Context, sections []inboxSect
 	if !m.runtimeReady || ghDisabled() {
 		return
 	}
-	starts := touchAIStarts(sections, statuses)
+	starts := touchAIStarts(sections, statuses, m.touchAISkipper(ctx))
 	if len(starts) == 0 {
 		return
 	}
@@ -321,6 +314,41 @@ func (m *TaskManager) autoStartTouchAI(ctx context.Context, sections []inboxSect
 				m.logf("touch_ai: auto-start pr=%d: %v", in.PR, err)
 			}
 		}(in, id)
+	}
+}
+
+// touchAISkipper reads the ignores and snoozes (read-only) and returns the
+// predicate for touchAIStarts. A snooze is active under the frontend's rule
+// (src/snooze.mjs isSnoozeActive): not yet due, and no updatedAt (row or
+// status) newer than when it was set. Read errors skip nothing.
+func (m *TaskManager) touchAISkipper(ctx context.Context) func(inboxRow, prStatus) bool {
+	ignored := map[prKey]bool{}
+	if igs, err := m.PrIgnores(ctx); err == nil {
+		for _, ig := range igs {
+			ignored[prKey{canonRepo(ig.Repo), ig.PR}] = true
+		}
+	}
+	snoozed := map[prKey]prsnooze.Snooze{}
+	if sns, err := m.PrSnoozes(ctx); err == nil {
+		for _, sn := range sns {
+			snoozed[prKey{canonRepo(sn.Repo), sn.PR}] = sn
+		}
+	}
+	return func(r inboxRow, st prStatus) bool {
+		k := prKey{canonRepo(r.Repo), r.Number}
+		if ignored[k] {
+			return true
+		}
+		sn, ok := snoozed[k]
+		if !ok {
+			return false
+		}
+		for _, u := range []string{r.UpdatedAt, st.UpdatedAt} {
+			if t, err := time.Parse(time.RFC3339, u); err == nil && t.After(sn.SnoozedAt) {
+				return false
+			}
+		}
+		return true
 	}
 }
 

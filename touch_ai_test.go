@@ -47,14 +47,16 @@ func TestParseTouchAI(t *testing.T) {
 	}
 }
 
-func TestTouchAIStartsAllowlistOnly(t *testing.T) {
-	sections := []inboxSection{{Title: touchedSectionTitle, PRs: []inboxRow{{Number: 13989}, {Number: 1}}}, {Title: "Other", PRs: []inboxRow{{Number: 13989}}}}
+func TestTouchAIStartsSkipsIgnoredAndSnoozed(t *testing.T) {
+	sections := []inboxSection{{Title: touchedSectionTitle, PRs: []inboxRow{{Number: 1}, {Number: 2}, {Number: 3}}}, {Title: "Other", PRs: []inboxRow{{Number: 4}}}}
 	statuses := map[string]prStatus{
-		"13989": {TouchSHA: "abc", MigrationFiles: []string{"db/migrations/x.php"}},
-		"1":     {TouchSHA: "def", APIFiles: []string{"routes/api.php"}},
+		"1": {TouchSHA: "abc", MigrationFiles: []string{"db/migrations/x.php"}},
+		"2": {TouchSHA: "def", APIFiles: []string{"routes/api.php"}},
+		"3": {TouchSHA: "ghi", APIFiles: []string{"routes/api.php"}},
+		"4": {TouchSHA: "jkl", APIFiles: []string{"routes/api.php"}},
 	}
-	got := touchAIStarts(sections, statuses)
-	if len(got) != 1 || got[0].PR != 13989 || got[0].HeadSHA != "abc" || len(got[0].Files) != 1 {
+	got := touchAIStarts(sections, statuses, func(r inboxRow, _ prStatus) bool { return r.Number == 2 })
+	if len(got) != 2 || got[0].PR != 1 || got[0].HeadSHA != "abc" || got[1].PR != 3 {
 		t.Fatalf("starts = %+v", got)
 	}
 }
