@@ -1654,6 +1654,13 @@ function ingestedActions(pr) {
     >
       ${icon('sparkles', 'h-3.5 w-3.5')} ${t('Open review-boom')}
     </button>
+  `
+}
+
+// regenerateAction — "Opnieuw genereren", always the LAST item of the popover
+// (reviewer request), so popover() renders it after everything else.
+function regenerateAction(pr) {
+  return html`
     <button
       type="button"
       data-testid="regenerate-page"
@@ -2387,6 +2394,7 @@ function popover(pr, compact) {
             ${() => (compact ? '' : snoozeAction(pr))}
             ${() => (canRemoveSelf(pr) ? removeReviewerAction(pr) : '')}
             ${() => (pr.isDraft ? [readyForReviewSection(pr).key('ready-section')] : [])}
+            ${() => (treeSupported(pr) && pr.hasGraph ? regenerateAction(pr) : '')}
           </div>`
         : html`<div class="contents">${githubLinkAction(pr)} ${repoUnavailableAction()}</div>`}
     </div>
