@@ -59,6 +59,9 @@ type prIgnoreSave struct {
 	At   time.Time `json:"at"`
 }
 
+// prIgnorePurgeTimeout bounds the background purge started by savePrIgnore.
+const prIgnorePurgeTimeout = 10 * time.Minute
+
 func (m *TaskManager) registerPrIgnoreActivities(engine *tembed.Engine) {
 	engine.RegisterActivity("savePrIgnore", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg prIgnoreSave
@@ -71,15 +74,26 @@ func (m *TaskManager) registerPrIgnoreActivities(engine *tembed.Engine) {
 		if err := m.prignore.Set(ctx, arg.Repo, arg.PR, arg.At); err != nil {
 			return nil, err
 		}
-		// "Negeren" also drops everything stored for the PR. Inside this
-		// EXISTING Activity (not a new step) so the tracker's recorded history
-		// keeps its shape. Safe for the tracker itself: its input carries no
-		// "pr", so deletePRWorkflowRuns never matches it. Primary repo only —
-		// purge does not carry a repo yet (see cleanupRepo).
+		// "Negeren" also drops everything stored for the PR — but in the
+		// BACKGROUND (started inside this existing Activity, history shape
+		// unchanged). The tracker handles Signals one at a time and runs
+		// Activities inline, so a purge that waits on a run lock or ingestMu
+		// would block every later ignore. A purge that dies half-way is picked
+		// up later by the cleanup sweep. Safe for the tracker itself: its input
+		// carries no "pr", so deletePRWorkflowRuns never matches it. Primary
+		// repo only — purge does not carry a repo yet (see cleanupRepo).
 		if canonRepo(arg.Repo) == cleanupRepo {
-			if _, err := m.purgePRAndForget(ctx, arg.PR); err != nil {
-				return nil, fmt.Errorf("purge ignored pr %d: %w", arg.PR, err)
+			parent := m.baseCtx
+			if parent == nil {
+				parent = context.Background()
 			}
+			go func(pr int) {
+				pctx, cancel := context.WithTimeout(parent, prIgnorePurgeTimeout)
+				defer cancel()
+				if _, err := m.purgePRAndForget(pctx, pr); err != nil {
+					m.logf("purge ignored pr %d: %v", pr, err)
+				}
+			}(arg.PR)
 		}
 		return nil, nil
 	})
