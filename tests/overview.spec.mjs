@@ -78,6 +78,9 @@ test.describe('PR Review Tree — PR inbox', () => {
     await expect(stack.locator('[data-testid="pr-row"]')).toHaveCount(2)
     await expect(stack.locator('[data-pr="12903"]')).toBeVisible()
     await expect(stack.locator('[data-pr="12904"]')).toBeVisible()
+    // Both PRs share one home section, so the stack sits inside that section
+    // (no top-level group) and drops the redundant per-row section badge.
+    await expect(page.locator('[data-testid="section"] [data-testid="stack"]')).toHaveCount(1)
   })
 
   test('an ingested PR opens a popover with "Open review-boom"', async ({ page }) => {

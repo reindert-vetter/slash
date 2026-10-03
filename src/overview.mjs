@@ -2593,11 +2593,11 @@ export function computeStacks(all) {
 // the framed list, each node indented by its own depth with a └ connector —
 // several sibling PRs sharing the same parent render at the same depth, one
 // after another, rather than each one step deeper than the last.
-function stackGroup(nodes, sectionOf) {
+function stackGroup(nodes, sectionOf, inSection) {
   const root = nodes[0].pr
   return html`
     <div data-testid="stack">
-      <div class="mb-2 mt-10 flex items-center gap-2 first:mt-0">
+      <div class="${inSection ? 'mb-2 mt-2 flex items-center gap-2' : 'mb-2 mt-10 flex items-center gap-2 first:mt-0'}">
         <span class="text-slate-500 dark:text-zinc-500">${icon('git-pull-request', 'h-3.5 w-3.5')}</span>
         <h2 class="text-[13px] font-semibold text-slate-700 dark:text-zinc-200">${t("Gestapelde PR's")}</h2>
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2 py-0.5 text-[11px] text-slate-500 dark:text-zinc-400">${nodes.length}</span>
@@ -2605,7 +2605,7 @@ function stackGroup(nodes, sectionOf) {
           >${t('bouwt op')} <span class="font-mono text-slate-500 dark:text-zinc-400">${root.baseRefName || '?'}</span> ${t('— merge van onder naar boven')}</span
         >
       </div>
-      ${listBox(nodes.map(({ pr, depth }) => ({ pr, opts: { depth, badge: sectionOf.get(prUid(pr)) } })))}
+      ${listBox(nodes.map(({ pr, depth }) => ({ pr, opts: { depth, badge: inSection ? null : sectionOf.get(prUid(pr)) } })))}
     </div>
   `.key('stack:' + root.number)
 }
@@ -2651,17 +2651,22 @@ function refreshButton(busy, onClick, testid) {
   >`
 }
 
-function sectionBlock(sec, filteredPrs) {
-  if (!filteredPrs.length) return null
+// `stacks` are whole stack trees whose PRs all live in this section (see the
+// render closure): they render at the top of the section, before the plain rows.
+function sectionBlock(sec, filteredPrs, stacks = [], sectionOf = new Map()) {
+  if (!filteredPrs.length && !stacks.length) return null
   return html`
     <section data-testid="section" data-title="${sec.title}">
       <div class="mb-3 mt-16 flex items-center gap-2 first:mt-6">
         <h2 class="text-[15px] font-semibold text-slate-900 dark:text-zinc-100">${sec.title}</h2>
         ${refreshButton(() => ui.sectionsRefreshing, refreshSectionsNow, 'section-refresh')}
       </div>
-      ${listBox(filteredPrs.map((pr) => ({ pr, opts: { compact: sec.title === TOUCHED_SECTION } })))}
+      ${stacks.map((chain) => stackGroup(chain, sectionOf, true))}
+      ${filteredPrs.length ? listBox(filteredPrs.map((pr) => ({ pr, opts: { compact: sec.title === TOUCHED_SECTION } }))) : ''}
     </section>
-  `.key('section:' + sec.title + ':' + filteredPrs.map(prUid).join(','))
+  `.key(
+    'section:' + sec.title + ':' + filteredPrs.map(prUid).join(',') + '|' + stacks.map((c) => c.map((n) => prUid(n.pr)).join('>')).join(';'),
+  )
 }
 
 function loadingSkeletonList() {
@@ -3512,8 +3517,19 @@ function mainContent() {
             ),
           )
         }
-        // Stacks render as their own group, above every section.
-        chains.forEach((chain) => out.push(stackGroup(chain, sectionOf)))
+        // A stack whose PRs all share one home section renders inside that
+        // section (top, before the plain rows); a mixed stack stays a
+        // top-level group above every section.
+        const stackHome = (chain) => {
+          const homes = new Set(chain.map(({ pr }) => sectionOf.get(prUid(pr))))
+          return homes.size === 1 ? [...homes][0] : null
+        }
+        const inSectionStacks = new Map()
+        chains.forEach((chain) => {
+          const home = stackHome(chain)
+          if (home) inSectionStacks.set(home, [...(inSectionStacks.get(home) || []), chain])
+          else out.push(stackGroup(chain, sectionOf, false))
+        })
         // Where the Jira issue section goes: directly after "Needs your
         // review", so the page reads as one pipeline (see jiraIssueBlocks).
         // If that section has no rows at all it is not rendered, and it falls
@@ -3521,7 +3537,7 @@ function mainContent() {
         let issuesAt = -1
         state.sections.forEach((sec) => {
           const filtered = sec.prs.filter((pr) => !stacked.has(prUid(pr)) && !leavesSection(pr, sec.title))
-          const block = sectionBlock(sec, filtered)
+          const block = sectionBlock(sec, filtered, inSectionStacks.get(sec.title) || [], sectionOf)
           if (block) out.push(block)
           // "Migrations & API changes" sits directly under "Needs your
           // review" (it follows it in the inbox order), so Planning goes

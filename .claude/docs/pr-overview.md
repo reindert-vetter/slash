@@ -1924,6 +1924,9 @@ section titles stay in English.
 
 ### Stacks are a TREE, not a linear chain
 
+
+**All-or-nothing placement:** a stack whose PRs all share one home section renders inside that section (top, before the plain rows, `sectionBlock`'s `stacks` argument; the per-row section badge is hidden, `stackGroup`'s `inSection`). A mixed stack stays a top-level group above all sections. "Migrations & API changes" rows never stack.
+
 `computeStacks` (exported purely for testability). A PR whose `baseRefName`
 equals an in-view PR's `headRefName` is stacked on it and lifts into an indented
 group at the top. One PR can be the direct base for **multiple** siblings at
