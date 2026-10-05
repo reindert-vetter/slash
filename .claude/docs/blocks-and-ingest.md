@@ -330,7 +330,10 @@ test file's preamble groups into its `test_class` row (`methodLabel` shows
 `classifyFile` surfaces it only when a changed line hits it, like any block.
 `scanBlocksRaw` (callresolve) never sees it; `matchMovedBlocks` and
 `scanTestCovers` skip it (near-identical `use` lists would invent moves; it is
-not a test). Test: `preamble_test.go`.
+not a test). Test: `preamble_test.go`. When a changed `use` line imports a
+name another changed block in the file uses, the block leaves the index and
+shows as Onderliggende code under that block instead (`resolveImports`, see
+`.claude/docs/workflows-analysis.md`).
 
 Tests: `phpscan_test.go` (`TestBladeTemplateIsOneWholeFileBlock`, which first
 asserts the premise that `scanPHP` *does* return decoy blocks, plus

@@ -5941,7 +5941,7 @@ function childrenOf(b) {
 // non-block-level treatment, findCallSites' own `class_ctor:`/`class_method:`
 // branch just matches the `Foo(` literal too in that case.
 function isBlockLevelCallKey(name) {
-  return /^(resource|migration_model|data_provider|trait_usage|class_member):/.test(name)
+  return /^(resource|migration_model|data_provider|trait_usage|class_member|import):/.test(name)
 }
 
 // findCallSites locates, in a block's aligned diff rows, every place method

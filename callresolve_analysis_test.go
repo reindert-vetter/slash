@@ -4108,3 +4108,130 @@ final class Invoice {
 		t.Error("class_method:Invoice should not be emitted next to an explicitly chained call")
 	}
 }
+
+// TestResolveImports: a newly added `use` line hangs the file's Imports block
+// under every changed block that uses the imported name; an unused added import
+// or a namespace-only change produces no entry (the block keeps its own row).
+func TestResolveImports(t *testing.T) {
+	dataDir := t.TempDir()
+	pr := 72
+	baseDir, headDir := worktreeDirs(dataDir, "", pr)
+	const file = "app/Http/Requests/V2/OrderUpdateRequestV2.php"
+	const nsOnly = "app/Other/Moved.php"
+
+	writeWorktreeFiles(t, baseDir, map[string]string{
+		file: `<?php
+
+namespace App\Http\Requests\V2;
+
+use App\Models\Order;
+use Closure;
+
+final class OrderUpdateRequestV2
+{
+    public function rules(): array
+    {
+        return ['country' => 'string'];
+    }
+
+    public function attributes(): array
+    {
+        return [];
+    }
+}
+`,
+		nsOnly: `<?php
+
+namespace App\Old;
+
+use App\Rules\CountryStateCode;
+
+class Moved
+{
+    public function run()
+    {
+        return new CountryStateCode('x');
+    }
+}
+`,
+	})
+	writeWorktreeFiles(t, headDir, map[string]string{
+		file: `<?php
+
+namespace App\Http\Requests\V2;
+
+use App\Models\Order;
+use App\Rules\CountryStateCode;
+use App\Rules\{Unused, Aliased as Alias};
+use Closure;
+
+final class OrderUpdateRequestV2
+{
+    public function rules(): array
+    {
+        return ['country' => [new CountryStateCode('x'), Alias::make()]];
+    }
+
+    public function attributes(): array
+    {
+        return ['note' => 'CountryStateCodeless'];
+    }
+}
+`,
+		nsOnly: `<?php
+
+namespace App\Other;
+
+use App\Rules\CountryStateCode;
+
+class Moved
+{
+    public function run()
+    {
+        return new CountryStateCode('y');
+    }
+}
+`,
+	})
+
+	cls := `App\Http\Requests\V2\OrderUpdateRequestV2`
+	hdr := Block{PR: pr, File: file, Class: cls, Name: fileHeaderSentinel, Side: SideNew, Status: StatusModified}
+	rules := Block{PR: pr, File: file, Class: cls, Name: "rules", Side: SideNew, Status: StatusModified}
+	attrs := Block{PR: pr, File: file, Class: cls, Name: "attributes", Side: SideNew, Status: StatusModified}
+	nsHdr := Block{PR: pr, File: nsOnly, Class: `App\Other\Moved`, Name: fileHeaderSentinel, Side: SideNew, Status: StatusModified}
+	nsRun := Block{PR: pr, File: nsOnly, Class: `App\Other\Moved`, Name: "run", Side: SideNew, Status: StatusModified}
+
+	// Use the scanner's own class name so the ids match what ingest stores.
+	for _, b := range ScanBlocks([]byte(mustRead(t, filepath.Join(headDir, file))), file) {
+		if b.Name == fileHeaderSentinel {
+			hdr.Class, rules.Class, attrs.Class = b.Class, b.Class, b.Class
+		}
+	}
+
+	entries := resolveImports(dataDir, pr, []Block{hdr, rules, attrs, nsHdr, nsRun})
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.CallerID+" "+e.CallKey] = true
+		if e.Kind != callresolve.KindImport || e.ChildMethod != fileHeaderSentinel || e.ChildFile != file {
+			t.Errorf("unexpected entry %+v", e)
+		}
+	}
+	want := []string{rules.ID() + " import:CountryStateCode", rules.ID() + " import:Alias"}
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("missing %q, got %v", w, got)
+		}
+	}
+	if len(entries) != len(want) {
+		t.Errorf("got %d entries, want %d: %v", len(entries), len(want), got)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

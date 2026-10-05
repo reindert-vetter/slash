@@ -712,6 +712,21 @@ unmappable case yields **silently nothing**, never `unresolved`, never a search:
   `config(...)` call — the env var name itself never appears in the caller's
   PHP source at all), and `resolvedCallTargetIds` skips both.
 
+- **Imports → the block that uses them (`resolveImports`).** Reviewer request:
+  "use ... moet als onderliggende code blok bestaan als dat kan". A changed
+  `<file-header>` ("Imports") block hangs under every changed block of the
+  **same file** whose head source uses a short name (last segment, or the `as`
+  alias; one-line `{A, B}` groups too) imported by one of the header's
+  **changed** `use` lines (`changedNewLines`). Kind `import`, key
+  `import:<Name>` (block-level, see `isBlockLevelCallKey`), child = the header
+  block itself, so `resolvedCallTargetIds` hides its index row and its rows
+  count in each user's pill (several users → under all of them, confirmed).
+  The **whole** header goes along, also its other changed lines (namespace, an
+  unused import) — confirmed; they stay approvable in the card. No changed
+  `use` line, or nothing using its name (a removed import, a namespace-only
+  move) → no entry, the Imports row stays top-level. Test:
+  `TestResolveImports`.
+
 All of these are **merged** into the one `UpsertGo`/`Prune` call in the
 `buildRelations` Activity (and in the headless `slash relations` twin), so they
 share the keep set and need no prune scope of their own.

@@ -9697,6 +9697,8 @@ const KIND_LABEL = {
   // A test's #[DataProvider('m')]/@dataProvider m → the provider method (see
   // .claude/docs/tembed-workflows.md, "PHPUnit data providers").
   data_provider: 'provider',
+  // A changed `use` import → the file's Imports preamble block (resolveImports).
+  import: 'import',
   // A class's `use TraitName;` → the trait as a whole (see
   // .claude/docs/tembed-workflows.md, "Resolving trait usage").
   trait_usage: 'trait',

@@ -2871,3 +2871,104 @@ func methodInAnonClass(idx *symbolIndex, file, method string) *Block {
 	}
 	return nil
 }
+
+// rePreambleUse matches one plain `use` import line of a PHP file preamble:
+// `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function Foo\bar;`. Group 1 is
+// the full name, group 2 the alias (if any).
+var rePreambleUse = regexp.MustCompile(`^\s*use\s+(?:function\s+|const\s+)?\\?([\\A-Za-z0-9_]+)(?:\s+as\s+([A-Za-z0-9_]+))?\s*;`)
+
+// reUseGroupImport matches a one-line group import: `use Foo\{Bar, Baz as Q};`.
+var reUseGroupImport = regexp.MustCompile(`^\s*use\s+(?:function\s+|const\s+)?\\?[\\A-Za-z0-9_]+\\\{([^}]*)\}\s*;`)
+
+// importedShortNames returns the names a single `use` line brings into scope
+// (the alias, or else the last namespace segment); nil for any other line.
+func importedShortNames(line string) []string {
+	if m := reUseGroupImport.FindStringSubmatch(line); m != nil {
+		var out []string
+		for _, part := range strings.Split(m[1], ",") {
+			f := strings.Fields(strings.TrimSpace(part))
+			switch {
+			case len(f) == 3 && strings.EqualFold(f[1], "as"):
+				out = append(out, f[2])
+			case len(f) >= 1:
+				out = append(out, shortName(f[0]))
+			}
+		}
+		return out
+	}
+	if m := rePreambleUse.FindStringSubmatch(line); m != nil {
+		if m[2] != "" {
+			return []string{m[2]}
+		}
+		return []string{shortName(m[1])}
+	}
+	return nil
+}
+
+// resolveImports hangs a changed PHP file preamble (the <file-header> block,
+// "Imports", see withFileHeader in phpscan.go) under every changed block of the
+// SAME file that uses a name one of the preamble's changed `use` lines imports
+// — so `use App\Rules\CountryStateCode;` shows as Onderliggende code of the
+// rules() method that uses it, instead of as a loose index row (the frontend
+// hides a PR block that is a resolved call target, resolvedCallTargetIds).
+// The whole preamble goes along, also when it holds other changed lines
+// (namespace, an unused import): those stay visible and approvable in the card.
+// No changed `use` line, or no changed block using one of its names (a removed
+// import, a namespace-only move), → no entry: the Imports block keeps its own
+// index row. Go-only, no LLM. The call key "import:"+name is block-level (see
+// isBlockLevelCallKey in home.mjs).
+func resolveImports(dataDir string, pr int, blocks []Block) []callresolve.Entry {
+	baseDir, headDir := worktreeDirs(dataDir, blocksRepo(blocks), pr)
+	var out []callresolve.Entry
+	for _, hdr := range blocks {
+		if hdr.Side == SideOld || hdr.Name != fileHeaderSentinel {
+			continue
+		}
+		head := extractBlockSource(filepath.Join(headDir, hdr.File), hdr.File, hdr.Class, hdr.Name)
+		if head.Text == "" {
+			continue
+		}
+		changed := changedNewLines(baseDir, headDir, hdr.File)
+		var names []string
+		seen := map[string]bool{}
+		for i, line := range strings.Split(head.Text, "\n") {
+			if changed.restrict && !changed.set[head.Start+i] {
+				continue
+			}
+			for _, n := range importedShortNames(line) {
+				if n != "" && !seen[n] {
+					seen[n] = true
+					names = append(names, n)
+				}
+			}
+		}
+		if len(names) == 0 {
+			continue
+		}
+		uses := make([]*regexp.Regexp, len(names))
+		for i, n := range names {
+			uses[i] = regexp.MustCompile(`(^|[^\\A-Za-z0-9_$])` + regexp.QuoteMeta(n) + `\b`)
+		}
+		for _, user := range blocks {
+			if user.Side == SideOld || user.File != hdr.File || user.Name == fileHeaderSentinel {
+				continue
+			}
+			src := extractBlockSource(filepath.Join(headDir, user.File), user.File, user.Class, user.Name)
+			if src.Text == "" {
+				continue
+			}
+			for i, n := range names {
+				if !uses[i].MatchString(src.Text) {
+					continue
+				}
+				out = append(out, callresolve.Entry{
+					PR: pr, CallerID: user.ID(), CallKey: "import:" + n,
+					Status: callresolve.StatusResolved, Kind: callresolve.KindImport,
+					ChildFile: hdr.File, ChildClass: hdr.Class, ChildMethod: hdr.Name,
+					ChildLine: head.Start, ChildCode: head.Text,
+				})
+			}
+		}
+	}
+	return out
+}
