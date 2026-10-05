@@ -4167,6 +4167,8 @@ async function ensureRecentPrs() {
   return state.recentPrs
 }
 
+let selectFirstRowPending = false
+
 async function trySelectPendingPr() {
   if (pendingSelectPr == null) return
   const uid = pendingSelectPr
@@ -4179,21 +4181,12 @@ async function trySelectPendingPr() {
     pendingSelectPr = null
     return
   }
-  const recent = await ensureRecentPrs()
+  // The PR is no longer in the inbox (e.g. just reviewed): land on the top row
+  // of the whole list instead of opening the "Recent gegenereerd" drawer.
   pendingSelectPr = null // one-shot regardless of outcome — never re-applied on a later reload
-  // The "Recent gegenereerd" drawer is fed by the blocks DB (GET /api/prs), so
-  // its rows carry a bare PR number of whichever repo they were ingested from.
-  // Match via matchesPrRef (row shaped as {repo, number}) so the SHORT repo
-  // NAME spelling the review tree's own overviewExitUrl sends
-  // (prUidHere() → "<repo-name>#<n>", see home.mjs) is accepted too, not just
-  // the full slug#n form recentUid builds — then reuse that row's OWN
-  // recentUid, never the possibly differently-spelled incoming `uid`, as the
-  // nav key so it always agrees with that row's own `.key()`/data-nav-key.
-  const recentMatch = recent.find((r) => matchesPrRef({ repo: r.repo, number: r.pr }, uid))
-  if (recentMatch) {
-    state.recentOpen = true
-    setSelKey('recent:' + recentUid(recentMatch))
-  }
+  selectFirstRowPending = true
+  hoverEnabled = false
+  scheduleRepaint()
 }
 
 async function kickOffStatuses(gen) {
@@ -4513,6 +4506,12 @@ function paintSelection() {
   // never take the ring away from a row the reviewer already picked; and only
   // when the row exists, so it keeps waiting for a list that is still loading
   // instead of being spent on a miss.
+  // ?pr= for a PR that left the inbox: take the first row actually rendered
+  // (stack groups reorder the data order, so the DOM is the truth).
+  if (selectFirstRowPending && selKey == null && rows.length) {
+    selectFirstRowPending = false
+    setSelKey(rows[0].dataset.navKey)
+  }
   if (selKey == null && pendingRestoreSelKey != null && rows.some((el) => el.dataset.navKey === pendingRestoreSelKey)) {
     setSelKey(pendingRestoreSelKey)
   }

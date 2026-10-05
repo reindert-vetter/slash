@@ -13,15 +13,14 @@ test.describe('PR overview — ?pr= auto-selects the row we came from', () => {
     await expect(page.locator('[data-testid="recent-item"]')).toHaveCount(0)
   })
 
-  test('a PR that only lives in "Recent gegenereerd" opens the drawer and selects it there', async ({ page }) => {
-    // PR 90 has blocks seeded (relations fixture) but isn't in the inbox.json
-    // sections fixture — it only shows up via GET /api/prs, i.e. the drawer.
+  test('a PR that is no longer in the inbox lands on the top row, drawer stays closed', async ({ page }) => {
+    // PR 90 is only in GET /api/prs (the Recent drawer), not in the sections.
     await page.goto('/pr-overview?pr=90')
     await appReady(page)
 
-    const item = page.locator('[data-testid="recent-item"][data-pr="90"]')
-    await expect(item).toBeVisible()
-    await expect.poll(() => item.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
+    const first = page.locator('[data-nav-row]').first()
+    await expect.poll(() => first.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
+    await expect(page.locator('[data-testid="recent-item"]')).toHaveCount(0)
   })
 
   // The review tree's own "back to overview" link (overviewExitUrl, home.mjs)
@@ -36,15 +35,5 @@ test.describe('PR overview — ?pr= auto-selects the row we came from', () => {
 
     const row = page.locator('[data-testid="pr-row"][data-pr="plug-and-pay/plug-and-pay-ops#12"]')
     await expect.poll(() => row.evaluate((el) => el.classList.contains('ring-indigo-500/50'))).toBe(true)
-  })
-
-  test('a PR that appears nowhere is a silent no-op', async ({ page }) => {
-    await page.goto('/pr-overview?pr=999999')
-    await appReady(page)
-
-    const anySelected = await page
-      .locator('[data-nav-row]')
-      .evaluateAll((els) => els.some((el) => el.classList.contains('ring-indigo-500/50')))
-    expect(anySelected).toBe(false)
   })
 })

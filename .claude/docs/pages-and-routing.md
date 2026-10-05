@@ -99,14 +99,11 @@ restore-then-clear pattern):
   same identity `paintSelection`/`reanchorSelection` use, see "Selection
   identity" in `.claude/docs/pr-overview.md`); the existing `sections.length`
   watch triggers the next `scheduleRepaint()`, which sets the ring + scrolls.
-- Otherwise the "Recently generated" drawer is checked: `ensureRecentPrs()`
-  (the shared `GET /api/prs` fetch, same `recentLoading` guard as
-  `toggleRecent()`); a hit sets `state.recentOpen = true` (the drawer opens on
-  its own) + `selKey = 'recent:' + pr`, and the existing
-  `recentOpen`/`recentPrs.length` watch triggers the repaint.
-- PR **nowhere** (merged/dropped out of the inbox query, or never ingested) → a
-  silent no-op, like a not-found `sel` restore on `/pr/<id>`.
-- `pendingSelectPr` is cleared **either way** after the recent check, so a later
+- Otherwise (the PR left the inbox, e.g. it was just reviewed) the **first row
+  actually rendered** gets selected (`selectFirstRowPending`, adopted in
+  `paintSelection` from the DOM since stack groups reorder the data order).
+  The "Recently generated" drawer is NOT opened or searched any more.
+- `pendingSelectPr` is cleared **either way**, so a later
   background `reloadSnapshot` (every 60s) can't force the selection again.
 - `hoverEnabled = false` is set alongside (like `move`/`moveTo` do) so a stray
   hover doesn't immediately override the auto-selection.
@@ -118,8 +115,7 @@ restore-then-clear pattern):
   a present `?pr=` (or `?approved=`) disables that restore outright, so the
   round trip is never fought by a remembered row.
 
-Test: `tests/overview-pr-select.spec.mjs` (in-sections, drawer-only, and the
-silent no-op).
+Test: `tests/overview-pr-select.spec.mjs` (in-sections, and the no-longer-in-inbox top-row fallback).
 
 ## `?approved=<id>` — the opposite of `?pr=`: hide the row, select the top one
 
