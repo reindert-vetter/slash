@@ -17,6 +17,27 @@ mirrored to GitHub, and `Done`/`/resolve` resolves the thread — which it can b
 brought back out of again, see "Resolve is reversible" below. Only a **delete**
 ends the Execution.
 
+### A failed root post is visible, and retried durably when transient
+
+`postGithubComment`/`postGithubIssueComment` stay best-effort (never a Go
+error), but a failure is no longer silent: `postResult` carries `Error` (one
+line, GitHub's support boilerplate cut off) and `Retryable`
+(`isRetryablePostError`: rate limit incl. secondary, 401/bad credentials,
+network, 5xx — **never** a 422, which means the line is not in the diff).
+`postRoot` (inside `taskCodeCommentWorkflow`, used for the initial post and for
+`publishThread`'s root) retries a retryable failure through `postRetryDelays`
+(2m, 10m, 30m, 1h, 3h, `w.Sleep`), recording each failure first via
+`saveCommentGithubID` (`error` + `retryInSec`) → `comments.post_error` /
+`post_retry_at` → `postError`/`postRetryAt` in `/api/comments`. A landed post
+clears both. The UI shows it as `postErrorBadge` (`comment-post-error`, words,
+not colour: "niet op GitHub geplaatst — nieuwe poging om HH:MM"; full reason in
+the tooltip). "Zet op GitHub" (Action `publish`) still retries by hand. Accepted
+trade-off: while the initial post sleeps on the ladder the reply loop has not
+started, so a reply/delete Signal is processed only afterwards. Replay-safe: a
+result recorded before these fields existed decodes as "no error, no retry".
+Before this, a rate-limited post (PR 13968) just logged "github post skipped"
+and looked exactly like a local note. Tests: `post_retry_test.go`.
+
 ### A `saveReaction` write retries a transient SQLite lock, durably
 
 `executeActivityWithLockRetry` (`workflows.go`) wraps both `saveReaction`

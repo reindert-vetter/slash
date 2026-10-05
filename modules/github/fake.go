@@ -44,6 +44,8 @@ type Fake struct {
 	viewed            map[string]bool      // "pr|path" -> viewed
 	markFileViewedErr error                // set by SetMarkFileViewedErr: MarkFileViewed fails instead of recording
 
+	postReviewErrs []error // set by SetPostReviewErrs: the next PostReviewComment calls fail with these, in order
+
 	lastStartLine int
 	lastEndLine   int
 	lastSide      string
@@ -66,9 +68,22 @@ type Fake struct {
 	usersErr       error           // set by SetUsersErr: UsersByLogin fails instead of resolving
 }
 
+// SetPostReviewErrs makes the next len(errs) PostReviewComment calls fail with
+// these errors, in order, before posting succeeds again (tests only).
+func (f *Fake) SetPostReviewErrs(errs ...error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.postReviewErrs = errs
+}
+
 func (f *Fake) PostReviewComment(_ context.Context, pr int, file string, startLine, endLine int, side, body string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.postReviewErrs) > 0 {
+		err := f.postReviewErrs[0]
+		f.postReviewErrs = f.postReviewErrs[1:]
+		return 0, err
+	}
 	f.nextID++
 	f.Posted = append(f.Posted, body)
 	if side == "" {

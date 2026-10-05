@@ -575,6 +575,68 @@ type ReactionSignal struct {
 // postResult carries the GitHub root comment ID (0 when GitHub is unavailable).
 type postResult struct {
 	RootID int64 `json:"rootId"`
+	// Error is why the post failed ("" on success or when nothing was posted);
+	// Retryable says whether that failure is transient (rate limit, auth,
+	// network — see isRetryablePostError) and worth another attempt via
+	// postRetryDelays. Both absent in history recorded before they existed,
+	// which replays as "no error, no retry" — exactly the old behaviour.
+	Error     string `json:"error,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+}
+
+// postRetryDelays is the durable backoff ladder for a comment's ROOT post to
+// GitHub that failed transiently (a rate limit, an expired gh login, a network
+// hiccup): len(postRetryDelays)+1 attempts in total. A permanent failure (e.g.
+// HTTP 422, the line is no longer in the diff) is never retried. A var, not a
+// const, so a test can shrink it. While the workflow sleeps here its reply loop
+// has not started yet, so a reply/delete Signal waits until after the ladder —
+// an accepted trade-off.
+var postRetryDelays = []time.Duration{
+	2 * time.Minute,
+	10 * time.Minute,
+	30 * time.Minute,
+	1 * time.Hour,
+	3 * time.Hour,
+}
+
+// isRetryablePostError reports whether a failed GitHub post is transient: a
+// (secondary) rate limit, an authentication problem the reviewer can fix by
+// logging in again, a network failure, or a GitHub-side 5xx. Anything else —
+// notably HTTP 422 (validation: the line is not part of the diff) — is
+// permanent and must not be retried.
+func isRetryablePostError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "http 422") {
+		return false
+	}
+	for _, s := range []string{
+		"rate limit", "abuse detection", "http 429",
+		"http 401", "bad credentials", "authentication", "gh auth login",
+		"http 500", "http 502", "http 503", "http 504",
+		"dial tcp", "no such host", "connection refused", "connection reset",
+		"timeout", "tls handshake", "network is unreachable", "eof",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// failedPost builds the postResult a best-effort post Activity returns on
+// failure: RootID 0 plus a one-line reason and its retry classification.
+func failedPost(err error) postResult {
+	msg := strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0])
+	if i := strings.Index(msg, " If you reach out to GitHub Support"); i > 0 {
+		msg = msg[:i]
+	}
+	if len(msg) > 300 {
+		msg = msg[:300] + "…"
+	}
+	return postResult{Error: msg, Retryable: isRetryablePostError(err)}
 }
 
 // PRStatusInput starts a pr_status Workflow Execution — one tracker per PR.
@@ -1307,11 +1369,20 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		var arg struct {
 			ID       string `json:"id"`
 			GithubID int64  `json:"githubId"`
+			// Error/RetryInSec: a failed root post's reason and, while the
+			// postRetryDelays ladder still has a rung left, the delay before the
+			// next attempt (0 = no further automatic attempt).
+			Error      string `json:"error,omitempty"`
+			RetryInSec int64  `json:"retryInSec,omitempty"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
-		return nil, cs.SetGithubID(ctx, arg.ID, arg.GithubID)
+		retryAt := ""
+		if arg.RetryInSec > 0 {
+			retryAt = time.Now().Add(time.Duration(arg.RetryInSec) * time.Second).Format(time.RFC3339)
+		}
+		return nil, cs.SetPostResult(ctx, arg.ID, arg.GithubID, arg.Error, retryAt)
 	})
 
 	// Activity: fill in the author's GitHub avatar URL on a comment imported
@@ -1373,7 +1444,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		id, err := m.ghFor(c.Repo).PostReviewComment(ctx, c.PR, c.File, start, end, side, body)
 		if err != nil {
 			m.logf("task_code_comment: github post skipped: %v", err)
-			return json.Marshal(postResult{RootID: 0})
+			return json.Marshal(failedPost(err))
 		}
 		return json.Marshal(postResult{RootID: id})
 	})
@@ -1652,7 +1723,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		id, err := m.ghFor(arg.Repo).PostIssueComment(ctx, arg.PR, arg.Body)
 		if err != nil {
 			m.logf("task_code_comment: github issue comment skipped: %v", err)
-			return json.Marshal(postResult{})
+			return json.Marshal(failedPost(err))
 		}
 		return json.Marshal(postResult{RootID: id})
 	})
@@ -5847,6 +5918,32 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	//     comment), so a GitHub hiccup here can't abort comment creation.
 	//   - Normal (a block-scoped comment): post it as a review comment and
 	//     record the new RootID.
+	// postRoot runs one of the two best-effort root-post Activities and, on a
+	// transient failure (postResult.Retryable), records the failure on the
+	// comment (so the UI shows it) and durably sleeps through postRetryDelays
+	// before trying again. The caller's own saveCommentGithubID afterwards
+	// records the final outcome. Deterministic: the loop bound and every branch
+	// follow only from recorded Activity results and the loop counter, and a
+	// result recorded before Retryable existed replays as "stop".
+	postRoot := func(name string, arg any, out *postResult) error {
+		for attempt := 0; ; attempt++ {
+			*out = postResult{}
+			if err := w.ExecuteActivity(name, arg, out); err != nil {
+				return err
+			}
+			if out.RootID != 0 || !out.Retryable || attempt >= len(postRetryDelays) {
+				return nil
+			}
+			delay := postRetryDelays[attempt]
+			if err := w.ExecuteActivity("saveCommentGithubID", map[string]any{
+				"id": runID, "githubId": 0, "error": out.Error, "retryInSec": int64(delay / time.Second),
+			}, nil); err != nil {
+				return err
+			}
+			w.Sleep(delay)
+		}
+	}
+
 	var posted postResult
 	switch {
 	case in.ImportedRootID != 0:
@@ -5858,13 +5955,13 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// (prDescriptionFile): that block is not a repo file, so there is no
 		// diff line for a review comment — it goes to the flat conversation
 		// with the commented line quoted above it (descriptionIssueBody).
-		if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
+		if err := postRoot("postGithubIssueComment", map[string]any{
 			"repo": in.Repo, "pr": in.PR, "body": descriptionIssueBody(in, in.Body),
 		}, &posted); err != nil {
 			return nil, fmt.Errorf("post github issue comment: %w", err)
 		}
 	default:
-		if err := w.ExecuteActivity("postGithubComment", in, &posted); err != nil {
+		if err := postRoot("postGithubComment", in, &posted); err != nil {
 			return nil, fmt.Errorf("post github comment: %w", err)
 		}
 	}
@@ -5877,7 +5974,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// posted.RootID's value — replay-deterministic; SetGithubID itself is the
 	// one that no-ops on 0.
 	if err := w.ExecuteActivity("saveCommentGithubID", map[string]any{
-		"id": runID, "githubId": posted.RootID,
+		"id": runID, "githubId": posted.RootID, "error": posted.Error,
 	}, nil); err != nil {
 		return nil, fmt.Errorf("save comment github id: %w", err)
 	}
@@ -5921,7 +6018,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	publishThread := func(rootBody string, rootIsOwnBody, history bool) error {
 		var pr postResult
 		if postsAsIssueComment(in) {
-			if err := w.ExecuteActivity("postGithubIssueComment", map[string]any{
+			if err := postRoot("postGithubIssueComment", map[string]any{
 				"repo": in.Repo, "pr": in.PR, "body": descriptionIssueBody(in, rootBody),
 			}, &pr); err != nil {
 				return err
@@ -5929,14 +6026,14 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		} else {
 			rooted := in
 			rooted.Body = rootBody
-			if err := w.ExecuteActivity("postGithubComment", rooted, &pr); err != nil {
+			if err := postRoot("postGithubComment", rooted, &pr); err != nil {
 				return err
 			}
 		}
 		posted.RootID = pr.RootID
 		rootPublished = rootIsOwnBody && pr.RootID != 0
 		if err := w.ExecuteActivity("saveCommentGithubID", map[string]any{
-			"id": runID, "githubId": pr.RootID,
+			"id": runID, "githubId": pr.RootID, "error": pr.Error,
 		}, nil); err != nil {
 			return err
 		}

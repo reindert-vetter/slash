@@ -512,6 +512,8 @@ export const EN = {
   'verouderd — code verdwenen': 'outdated — code gone',
   'verouderd — regel gewijzigd': 'outdated — line changed',
   'verzenden mislukt — probeer opnieuw': 'sending failed — try again',
+  'niet op GitHub geplaatst': 'not posted to GitHub',
+  'niet op GitHub geplaatst — nieuwe poging om {time}': 'not posted to GitHub — retrying at {time}',
   Opslaan: 'Save',
   Annuleer: 'Cancel',
   'Bewerk bericht': 'Edit message',

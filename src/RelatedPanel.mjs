@@ -8388,6 +8388,31 @@ function staleAnchorBadge(c) {
   >`
 }
 
+// postErrorBadge shows that this thread's root post to GitHub FAILED (the
+// backend's postError, see taskCodeCommentWorkflow's postRoot in workflows.go)
+// — without it a failed post looks exactly like a deliberately local note,
+// since both have githubId 0. Says in words whether an automatic retry is
+// scheduled (postRetryAt) or not; "Zet op GitHub" from the comment menu tries
+// again by hand either way. The full reason sits in the title tooltip.
+function postErrorBadge(c) {
+  if (!c || !c.postError || c.githubId) return ''
+  let text = t('niet op GitHub geplaatst')
+  if (c.postRetryAt) {
+    const at = new Date(c.postRetryAt)
+    if (!isNaN(at)) {
+      const hhmm = String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0')
+      text = t('niet op GitHub geplaatst — nieuwe poging om {time}', { time: hhmm })
+    }
+  }
+  const tip = c.postError
+  return html`<span
+    class="inline-flex shrink-0 items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+    data-testid="comment-post-error"
+    title="${tip}"
+    >${text}</span
+  >`
+}
+
 // markSendFailed/clearSendFailed — write cs.sendFailed (see its own doc
 // comment above, next to cs's declaration). Reassigned wholesale so the
 // reactive read re-triggers, same convention as state.ignoredComments.
@@ -9141,7 +9166,7 @@ function expandedConversation(c, openCommentMenu, readOnly) {
     >
       <div class="flex items-center justify-end gap-2" data-testid="comment-meta-line">
         ${() => sourceBadge(c)} ${() => aiWarningBadge(c)} ${() => blockWideBadge(c)} ${() => staleAnchorBadge(c)}
-        ${() => sendFailedBadge('reply:' + c.id)}
+        ${() => sendFailedBadge('reply:' + c.id)} ${() => postErrorBadge(c)}
         ${() => commentStatusMark(c)}
       </div>
       <div class="relative min-h-0">
