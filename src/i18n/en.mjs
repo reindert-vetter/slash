@@ -436,6 +436,7 @@ export const EN = {
   ' · voor {name}': ' · for {name}',
   '{n} actief': '{n} active',
   '{n} bezig': '{n} busy',
+  '{n} comments': '{n} comments',
   "Zoek in alle PR's van {repo}… (titel, nummer of auteur; gesloten onderaan)":
     'Search all PRs in {repo}… (title, number or author; closed at the bottom)',
   'Geen resultaten voor “{query}”.': 'No results for “{query}”.',

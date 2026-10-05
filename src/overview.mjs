@@ -720,10 +720,11 @@ function openOnGithub(pr) {
 // element/null) so the backfill flip from "nothing" → pill can't hit the
 // arrow.js single↔array slot pitfall (see .claude/rules/conventions.md).
 function approvalPill(pr) {
-  const a = pr.hasGraph ? state.approvals[prUid(pr)] : null
-  if (!a || !a.total) return []
+  const a0 = pr.hasGraph ? state.approvals[prUid(pr)] : null
+  const hasData = !!(a0 && a0.total)
+  const a = hasData ? a0 : { done: 0, total: 0 }
   const done = a.done || 0
-  const full = done >= a.total
+  const full = hasData && done >= a.total
   // Never round an unfinished PR to 0% or 100%: min 1%, max 99% until really done.
   const pct = full ? 100 : done <= 0 ? 0 : Math.min(99, Math.max(1, Math.round((done / a.total) * 100)))
   // grey = 0, amber = in progress, green = done. Colour is decoration only: the
@@ -739,17 +740,37 @@ function approvalPill(pr) {
   const track = '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" opacity="0.25"/>'
   const arc = `<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 9 9)"/>`
   const disc = '<circle cx="9" cy="9" r="8" fill="currentColor"/>'
-  const ring = `<svg viewBox="0 0 18 18" class="h-5 w-5" aria-hidden="true">${pct === 100 ? disc : pct > 0 ? track + arc : track}</svg>`
+  // The open (unresolved) comment count sits INSIDE the ring as a number; 0
+  // leaves the ring empty. Smaller digits for 2+ digits so the ring keeps its size.
+  const n = Number(pr.comments) || 0
+  const fs = String(n).length >= 3 ? 6 : String(n).length === 2 ? 7.5 : 9.5
+  const numCls = pct === 100 ? 'fill-white dark:fill-zinc-900' : 'fill-slate-600 dark:fill-zinc-300'
+  const num = n
+    ? `<text x="9" y="9" text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="600" class="${numCls}" data-testid="row-comment-count">${n}</text>`
+    : ''
+  const ring = `<svg viewBox="0 0 18 18" class="h-6 w-6" aria-hidden="true">${pct === 100 ? disc : pct > 0 ? track + arc : track}${num}</svg>`
+  if (!hasData)
+    return [
+      html`<span
+        class="${'inline-flex shrink-0 ' + cls}"
+        data-testid="progress-ring-empty"
+        role="img"
+        title="${t('{n} comments', { n })}"
+        aria-label="${t('{n} comments', { n })}"
+        .innerHTML="${ring}"
+      ></span>`.key('ring-empty:' + n),
+    ]
   return [
     html`<span
       class="${'inline-flex shrink-0 ' + cls}"
       data-testid="approval-badge"
       data-pct="${String(pct)}"
+      data-comments="${String(n)}"
       role="img"
       title="${done + '/' + a.total}"
       aria-label="${pct + '% (' + done + '/' + a.total + ')'}"
       .innerHTML="${ring}"
-    ></span>`.key('approval:' + pct + ':' + done + '/' + a.total),
+    ></span>`.key('approval:' + pct + ':' + done + '/' + a.total + ':' + n),
   ]
 }
 
@@ -806,13 +827,6 @@ function checkoutPill(pr) {
       'checkout:' + c.dirName,
     ),
   ]
-}
-
-function commentsBit(pr) {
-  if (!pr.comments) return null
-  return html`<span class="inline-flex items-center gap-1 text-[12px] text-slate-500 dark:text-zinc-500"
-    >${icon('message', 'h-3.5 w-3.5')}${pr.comments}</span
-  >`
 }
 
 // ── rows ─────────────────────────────────────────────────────────────────
@@ -1297,13 +1311,12 @@ function rowInner(pr, opts) {
       </div>
     `,
     html`
-      <div class="grid shrink-0 grid-cols-[7rem_10rem_9rem_2.5rem_2.5rem_1.25rem] items-center gap-3">
+      <div class="grid shrink-0 grid-cols-[7rem_10rem_9rem_2.5rem_1.25rem] items-center gap-3">
         ${reviewersArea(pr)}
         ${statusArea(pr)}
         <div class="flex flex-col items-end gap-1">
           ${() => busyPill(pr)} ${() => checkoutPill(pr)} ${() => unpushedPill(pr)} ${() => approvalPill(pr)}
         </div>
-        <div class="flex justify-end">${commentsBit(pr)}</div>
         <div class="flex justify-end">${() => graphChip(pr)}</div>
         <div class="flex justify-end">${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}</div>
       </div>
