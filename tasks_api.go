@@ -1808,6 +1808,8 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				}
 			case "blankRows":
 				// A plain boolean; nothing to validate (nil = default shown).
+			case "touchedSection":
+				// A plain boolean; nothing to validate (nil = default off).
 			case "jiraCreds":
 				// The Jira notification feed needs an e-mail address AND a
 				// token; a half-filled form would only produce a failing

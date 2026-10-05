@@ -11,6 +11,7 @@ import { reactive, html, watch } from './vendor/arrow.js'
 import { bindUrlState } from './urlState.mjs'
 import { initTheme, themeToggleButton, cycleTheme } from './theme.mjs'
 import { blankRowsToggleButton, toggleBlankRows } from './blankRows.mjs'
+import { touchedSectionToggleButton, toggleTouchedSection } from './touchedSection.mjs'
 import { ensureAutoWarn, autoWarnToggleButton, toggleAutoWarn } from './autowarn.mjs'
 import { keyboardHintsToggleButton, toggleKeyboardHints } from './keyboardHints.mjs'
 import { ensureAutoIngestPref, autoIngestPrefToggleButton, cycleAutoIngestPref } from './autoingestpref.mjs'
@@ -120,7 +121,7 @@ watch(
 // checkout dir, GitHub identity, Jira notification noise). See
 // .claude/docs/settings-page.md for the full table.
 const TAB_DEFS = [
-  { id: 'display', label: 'Weergave', rows: ['theme', 'keyboardhints', 'blankrows', 'debug'] },
+  { id: 'display', label: 'Weergave', rows: ['theme', 'keyboardhints', 'blankrows', 'touchedsection', 'debug'] },
   { id: 'language', label: 'Taal', rows: ['langui', 'langexplain', 'langreply', 'langcommit'] },
   { id: 'assistant', label: 'AI-assistent', rows: ['autowarn', 'autoingestpref', 'praisewords'] },
   { id: 'account', label: 'Account & Jira', rows: ['auth', 'checkout', 'aliases', 'notifyfilters'] },
@@ -368,6 +369,8 @@ function activateRow(row) {
     toggleKeyboardHints()
   } else if (row === 'blankrows') {
     toggleBlankRows()
+  } else if (row === 'touchedsection') {
+    toggleTouchedSection()
   } else if (row === 'autowarn') {
     toggleAutoWarn()
   } else if (row === 'autoingestpref') {
@@ -546,6 +549,16 @@ function blankRowsRow() {
       t('Lege regels in een diff selecteerbaar maken en meetellen bij het goedkeuren, aan/uit — standaard aan.'),
     )}
     ${blankRowsToggleButton()}
+  </div>`
+}
+
+function touchedSectionRow() {
+  return html`<div data-testid="settings-row-touchedsection" class="${() => rowCls('touchedsection')}" @click="${() => selectRow('touchedsection')}">
+    ${rowLabel(
+      t('Lijst met migraties & API-wijzigingen'),
+      t('De sectie "Migrations & API changes" op het PR-overzicht tonen, aan/uit — standaard uit. Uit: de lijst wordt niet opgebouwd en er worden geen review-trees voor gegenereerd.'),
+    )}
+    ${touchedSectionToggleButton()}
   </div>`
 }
 
@@ -1061,7 +1074,7 @@ function App() {
       <div class="flex-1 overflow-auto px-6 py-5">
         <div class="mx-auto max-w-xl" data-testid="settings-rows">
           ${tabBar()}
-          ${tabPanel('display', 'settings-tab-panel-display', [themeRow(), keyboardHintsRow(), blankRowsRow(), debugRow()])}
+          ${tabPanel('display', 'settings-tab-panel-display', [themeRow(), keyboardHintsRow(), blankRowsRow(), touchedSectionRow(), debugRow()])}
           ${tabPanel('language', 'settings-tab-panel-language', [
             langRow(
               'langui',

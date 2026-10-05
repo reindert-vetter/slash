@@ -759,6 +759,13 @@ export const EN = {
     'Whitespace lines: {state} — blank lines in a diff are selectable and count (click to toggle)',
   'Witregels aan': 'Whitespace lines on',
   'Witregels uit': 'Whitespace lines off',
+  'Lijst met migraties & API-wijzigingen': 'List of migration & API changes',
+  'De sectie "Migrations & API changes" op het PR-overzicht tonen, aan/uit — standaard uit. Uit: de lijst wordt niet opgebouwd en er worden geen review-trees voor gegenereerd.':
+    'Show the "Migrations & API changes" section on the PR overview, on/off — off by default. Off: the list is not built and no review trees are generated for it.',
+  'Migraties & API-lijst: {state} — de sectie "Migrations & API changes" op het PR-overzicht (klik om te wisselen)':
+    'Migrations & API list: {state} — the "Migrations & API changes" section on the PR overview (click to toggle)',
+  'Lijst aan': 'List on',
+  'Lijst uit': 'List off',
   'Keyboard hints aan': 'Keyboard hints on',
   'Keyboard hints uit': 'Keyboard hints off',
   'Systeem / licht / donker — opgeslagen in deze browser.': 'System / light / dark — stored in this browser.',

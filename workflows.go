@@ -812,6 +812,9 @@ type AppSettingsSignal struct {
 	// ShowBlankRows carries the "show whitespace lines" display setting (Kind
 	// "blankRows"); nil means the default (shown). See blankrows.go.
 	ShowBlankRows *bool `json:"showBlankRows,omitempty"`
+	// ShowTouchedSection carries the "Migrations & API changes" section setting
+	// (Kind "touchedSection"); nil means the default (off). See touchedsection.go.
+	ShowTouchedSection *bool `json:"showTouchedSection,omitempty"`
 	// JiraCreds carries the Atlassian notification-feed credentials of the
 	// settings page's auth row (Kind "jiraCreds"). They land in the gitignored
 	// .env, NOT in settings.json — that file is served verbatim to the browser
@@ -2727,6 +2730,17 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, saveBlankRowsFile(m.appDataDirOrDefault(), show)
 	})
 
+	// Activity: persist the "Migrations & API changes" section setting into
+	// touched-section.json — saveTouchedSectionFile (touchedsection.go) is the
+	// only writer of that file.
+	engine.RegisterActivity("saveTouchedSection", func(ctx context.Context, in []byte) ([]byte, error) {
+		var show bool
+		if err := json.Unmarshal(in, &show); err != nil {
+			return nil, err
+		}
+		return nil, saveTouchedSectionFile(m.appDataDirOrDefault(), show)
+	})
+
 	// Activity: persist the settings page's Jira-credential edit into the
 	// gitignored .env (write, workflow-driven) — saveEnvValues (env.go) is that
 	// file's only programmatic writer. Deliberately .env and not settings.json:
@@ -4007,6 +4021,7 @@ func (m *TaskManager) SetRuntime(ctx context.Context, ready bool) {
 func (m *TaskManager) SetAppDataDir(dir string) {
 	m.appDataDir = dir
 	loadBlankRowsFile(dir)
+	loadTouchedSectionFile(dir)
 }
 
 // appDataDirOrDefault resolves the settings.json/praise-words.json directory
@@ -4992,6 +5007,11 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			show := sig.ShowBlankRows == nil || *sig.ShowBlankRows
 			if err := w.ExecuteActivity("saveBlankRows", show, nil); err != nil {
 				return nil, fmt.Errorf("save blank rows: %w", err)
+			}
+		case "touchedSection":
+			show := sig.ShowTouchedSection != nil && *sig.ShowTouchedSection
+			if err := w.ExecuteActivity("saveTouchedSection", show, nil); err != nil {
+				return nil, fmt.Errorf("save touched section: %w", err)
 			}
 		case "jiraCreds":
 			if err := w.ExecuteActivity("saveJiraCredentials", sig.JiraCreds, nil); err != nil {
@@ -7161,6 +7181,10 @@ func (m *TaskManager) autoIngestOwnPRs(ctx context.Context, myLogin string, sect
 		for _, ig := range igs {
 			ignored[prKey{canonRepo(ig.Repo), ig.PR}] = true
 		}
+	}
+	if !touchedSectionShown() {
+		// "Migrations & API changes" switched off: no tree for its rows either.
+		sections = withoutTouchedSection(sections)
 	}
 	for _, key := range eligibleAutoIngestPRs(mode, myLogin, sections, ignored) {
 		m.mu.Lock()

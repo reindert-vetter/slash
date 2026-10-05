@@ -852,6 +852,7 @@ that fit no other section but do change one of those.
   tooltip naming the files. They read the status backfill
   (`statusFor`), so only inbox-section rows get them: search hits and the
   recent drawer carry no file lists (confirmed, avoids a per-PR fetch).
+- **Switchable, default OFF** (settings page, Weergave tab, `touchedsection.go`): while off, `buildInbox` skips the section's candidate query (so no statuses, summaries or `touch_ai` runs), `autoIngestOwnPRs` drops it before `eligibleAutoIngestPRs` (no trees generated for its rows), and `handleInbox` filters it out of a stored snapshot. The Playwright harness turns it on (`tests/_setup.mjs` writes `touched-section.json`). See `.claude/docs/settings-page.md`.
 - **The section** is a regular `inboxSections` entry, last in the list:
   candidates are the 100 most recently updated open PRs, drafts included
   (`queryDef.limit`); the existing cross-section de-dupe drops the ones already

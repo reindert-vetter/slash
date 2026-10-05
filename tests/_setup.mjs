@@ -67,6 +67,9 @@ export default function globalSetup() {
   materializeDupTargetWorktrees()
   materializeBlockMoveWorktrees()
   materializeSettings()
+  // The "Migrations & API changes" section is OFF by default
+  // (touchedsection.go); the shared inbox fixture's M&A specs need it on.
+  writeFileSync(`${TEST_DATA_DIR}/touched-section.json`, JSON.stringify({ show: true }))
   materializeOpsRepoWorktrees()
   materializeAdditionsOnlyWorktrees()
   materializeStaleAnchorWorktrees()

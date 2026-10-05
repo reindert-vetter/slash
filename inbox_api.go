@@ -49,6 +49,11 @@ func (s *server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sections := snap.Sections
+	if !touchedSectionShown() && len(sections) > 0 {
+		// Drop it from an already stored snapshot too, so switching the
+		// setting off takes effect without waiting for the next poll.
+		sections = filterTouchedSectionRaw(sections)
+	}
 	if len(sections) == 0 {
 		sections = json.RawMessage("[]")
 	}

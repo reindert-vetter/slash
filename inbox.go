@@ -879,6 +879,9 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 	type qref struct{ sec, q int }
 	var refs []qref
 	for si, s := range inboxSections {
+		if s.title == touchedSectionTitle && !touchedSectionShown() {
+			continue // section switched off: no candidate query (touchedsection.go)
+		}
 		for qi := range s.queries {
 			refs = append(refs, qref{si, qi})
 		}
@@ -935,6 +938,9 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 	}
 	sections := make([]inboxSection, 0, len(inboxSections))
 	for si, sdef := range inboxSections {
+		if sdef.title == touchedSectionTitle && !touchedSectionShown() {
+			continue
+		}
 		var rows []inboxRow
 		local := map[string]bool{}
 		for qi := range sdef.queries {
