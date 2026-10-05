@@ -480,6 +480,12 @@ test.describe('Settings — the speech model download', () => {
     await page.getByTestId('settings-tab-account').click()
     await expect(page.getByTestId('settings-whisper-download')).toHaveCount(0)
     await expect(page.getByTestId('settings-auth-checks')).toContainText('brew install whisper.cpp')
+    // The fix command is copyable: the button swaps its word to "Gekopieerd!".
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    const copy = page.getByTestId('auth-fix-copy')
+    await copy.click()
+    await expect(copy).toHaveText('Gekopieerd!')
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('brew install whisper.cpp')
   })
 
   // Regression for the "Niet ingesteld" badge stuck next to a "Klaar voor

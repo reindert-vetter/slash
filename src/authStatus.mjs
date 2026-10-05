@@ -21,6 +21,7 @@
 //
 // Colourblind rule: every state carries a WORD plus a glyph; the colour is
 // decoration only (.claude/rules/conventions.md).
+import { copyCodeToClipboard } from './codeCopy.mjs'
 import { reactive, html } from './vendor/arrow.js'
 import { t } from './i18n.mjs'
 
@@ -206,6 +207,19 @@ export function authCheckRow(check) {
                   <code class="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-800 dark:bg-zinc-800 dark:text-zinc-200"
                     >${check.fixCommand}</code
                   >
+                  <button
+                    type="button"
+                    data-testid="auth-fix-copy"
+                    data-copy-label="${t('Kopieer')}"
+                    class="ml-1 rounded border border-slate-300 px-1.5 py-0.5 text-[11px] text-slate-700 hover:bg-slate-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    @click="${(e) => {
+                      if (!e) return
+                      e.stopPropagation()
+                      copyCodeToClipboard(e.currentTarget, check.fixCommand)
+                    }}"
+                  >
+                    ${t('Kopieer')}
+                  </button>
                 </p>`.key('fixcmd')
               : ''}
         </div>
