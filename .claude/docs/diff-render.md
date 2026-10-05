@@ -918,3 +918,10 @@ nothing readable to fall back to. Tests: `tests/image-preview.spec.mjs`
 PNGs so the browser really decodes them) and, on the Go side,
 `image_asset_test.go` (one changed row per changed image, the endpoint's happy
 paths and every refusal, and the classify rescue).
+
+## A blank source line renders as `&nbsp;` (not tied to the "Witregels" setting)
+
+`rowCellHTML` gives a row with `text === ''` (an empty line, as well as a `null`
+filler) an `&nbsp;` body. Without it the row div is empty and collapses to height
+0, so blank lines between code lines vanished. The `blankrows` setting only
+decides selectability/approve counts (`rowHasContent`), never visibility.

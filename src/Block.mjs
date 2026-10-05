@@ -3271,7 +3271,7 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
   // it for free through those two closures.
   const dotsForRender = segDots && segDots.size ? segDots : hoverSegMarks
   let body
-  if (text === null) body = '&nbsp;'
+  if (text === null || text === '') body = '&nbsp;' // '' = blank source line: an empty row would collapse to height 0
   else if (paired) body = highlightChanges(r, sideKey, ws, underline, dotsForRender, callSegs, lang)
   else if ((underline && underline.size) || (segDots && segDots.size) || callSegs)
     // A one-sided change (pure add / remove): its whole line is the single
