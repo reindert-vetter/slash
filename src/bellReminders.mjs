@@ -211,9 +211,7 @@ export function createBellReminders(actions, getSnoozed) {
       <div class="min-w-0 flex-1">
         <h3
           class="${'whitespace-pre-wrap break-words text-[13.5px] text-slate-900 dark:text-zinc-100 ' + (n.unread ? 'font-semibold' : 'font-normal')}"
-        >
-          ${n.title}
-        </h3>
+        >${n.title}</h3>
         <p class="mt-0.5 text-xs text-slate-500 dark:text-zinc-500">
           ${t('Herinnering') + ' · ' + relativeTime(n.at)}
           ${() =>
