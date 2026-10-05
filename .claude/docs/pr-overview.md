@@ -1692,7 +1692,7 @@ the pills. `hasGraph` is overlaid from the `blocks` table (`ingestedSet`).
 deterministically. `mergeReviewers` and `statusesFor` (one aliased call) as
 before.
 
-**The "💬 n" comment badge** (`commentsBit`) reads `row.comments`, which is
+**The comment count** no longer has its own icon/column: it is the number inside the progress ring (`approvalPill`, full number, smaller font from 2 digits; 0 = empty ring, no digit). The ring is always present — without approval data an empty `progress-ring-empty` ring is rendered. It reads `row.comments`, which is
 **not** GitHub's raw `PullRequest.comments.totalCount` (issue-conversation
 comments, a different category): the `refreshInbox` Activity overwrites it per
 row with the count of slash's own open, **GitHub-imported** comments —
