@@ -539,6 +539,16 @@ func repoSearchScope() string {
 // (unchanged), "<slug>#<n>" for any other. Used for de-duplication and as the
 // key of the statuses map — see statusKey, which is the same function for a
 // (repo, number) pair the caller has separately.
+// isReleaseToMaster reports whether r is a release PR (head branch exactly
+// "release", base exactly "master"). The reviewer never reviews those, so
+// buildInbox drops them from every section, in every repo — and because every
+// automatic step (statuses, touch summaries, auto-ingest, touch_ai) only sees
+// buildInbox's rows, none of them runs for such a PR. A manual search or a
+// direct /pr/<n> still works.
+func isReleaseToMaster(r inboxRow) bool {
+	return r.HeadRefName == "release" && r.BaseRefName == "master"
+}
+
 func rowKey(r inboxRow) string { return statusKey(r.Repo, r.Number) }
 
 // statusKey is the statuses-map key for one PR: the bare number for the primary
@@ -945,6 +955,9 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 		local := map[string]bool{}
 		for qi := range sdef.queries {
 			for _, r := range byRef[qref{si, qi}] {
+				if isReleaseToMaster(r) {
+					continue // never reviewed: no row, so no status/tree/AI either
+				}
 				k := rowKey(r)
 				if seen[k] || local[k] {
 					continue

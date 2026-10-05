@@ -777,6 +777,17 @@ not command rows, and it keeps its own focus-based keyboard model — the
 look-only-sharing note below still stands unchanged. Test:
 `tests/overview-command-menu.spec.mjs`.
 
+## Release PRs (`release` → `master`) never enter the inbox
+
+Reindert does not review release PRs. `buildInbox` (`inbox.go`) drops every
+row whose head is exactly `release` and base exactly `master`
+(`isReleaseToMaster`), in every section and every repo — a fixed rule, not a
+setting. Because statuses, touch summaries, auto-ingest and `touch_ai` all
+only see `buildInbox`'s rows, none of them runs for such a PR either. Search,
+the filter drawer, a direct `/pr/<n>` and a manual generate still work; an
+already-stored snapshot loses the row on the next poll (no raw filter in
+`handleInbox`, deliberately). Test: `inbox_release_test.go`.
+
 ## A row's right side is a fixed-width grid, one track per element kind
 
 Reviewer report + screenshot (`data/review-shots/task-overview-right-side-messy.png`):

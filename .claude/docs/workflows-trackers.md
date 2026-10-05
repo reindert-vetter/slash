@@ -350,6 +350,10 @@ run **before** the relations rebuild.
 
 ## `pr_inbox` (per repo)
 
+Release PRs (head `release` → base `master`) are dropped in `buildInbox`,
+so they are never auto-ingested or AI-read — see "Release PRs" in
+`.claude/docs/pr-overview.md`.
+
 The **only** workflow that reads GitHub for the overview: a `refresh` Signal
 (from the UI on load and from `pollInbox` on the heartbeat cadence) drives the
 `refreshInbox` Activity, which fetches the inbox and writes it into the `inbox`
