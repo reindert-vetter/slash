@@ -193,8 +193,8 @@ func TestSelfUpdateApplyRefusesWhenMainMoved(t *testing.T) {
 	ctx := context.Background()
 	g := &fakeSUGit{head: "Z", origin: "B"}
 	u, renamed := newFakeUpdater(t, g, "A")
-	if _, err := u.apply(ctx, selfUpdateBuilt{Target: "B", Base: "A"}); err == nil {
-		t.Fatal("apply must refuse when HEAD moved since the check")
+	if r, err := u.apply(ctx, selfUpdateBuilt{Target: "B", Base: "A"}); err != nil || r.Outcome != "moved" {
+		t.Fatalf("apply must report moved (no error) when HEAD moved since the check, got %+v %v", r, err)
 	}
 	if len(*renamed) != 0 {
 		t.Fatal("binary must not be swapped")

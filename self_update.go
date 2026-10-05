@@ -193,7 +193,7 @@ type selfUpdateBuilt struct {
 
 // selfUpdateResult is the workflow's result.
 type selfUpdateResult struct {
-	Outcome string `json:"outcome"` // uptodate | skipped | stale | applied
+	Outcome string `json:"outcome"` // uptodate | skipped | stale | moved | applied
 	Target  string `json:"target,omitempty"`
 }
 
@@ -338,7 +338,10 @@ func (u *selfUpdater) apply(ctx context.Context, b selfUpdateBuilt) (selfUpdateR
 		return selfUpdateResult{}, fmt.Errorf("git rev-parse HEAD: %v: %s", err, head)
 	}
 	if head != b.Base {
-		return selfUpdateResult{}, fmt.Errorf("main is veranderd tijdens het wachten (nieuwe lokale commit); update niet toegepast, de volgende controle probeert het opnieuw")
+		// Expected, not a failure: commits landing on main while we waited. The
+		// built binary no longer matches HEAD, so drop it; the next check retries.
+		_ = os.Remove(u.env.ExePath + ".new")
+		return selfUpdateResult{Outcome: "moved", Target: b.Target}, nil
 	}
 	if branch, err := u.git(ctx, dir, "symbolic-ref", "--short", "HEAD"); err != nil || branch != selfUpdateBranch {
 		return selfUpdateResult{}, fmt.Errorf("de werkmap staat niet meer op %s; update niet toegepast", selfUpdateBranch)

@@ -854,7 +854,9 @@ commit only. Backend `self_update.go`, frontend `src/selfUpdate.mjs`.
   5. `selfUpdateApply` — refuses if `HEAD` moved or the tree got dirty since
      the check, then `git reset --keep <target>` (a fast-forward, or onto the
      rebased commits; `--keep` itself refuses to drop local changes) and
-     renames `slash.new` over `slash`.
+     renames `slash.new` over `slash`. A `HEAD` that merely moved (a new local
+     commit while waiting) is not a failure: the run completes with outcome
+     `moved`, `slash.new` is removed, and the next check retries.
 - **The restart happens after the run completed**, never inside an Activity
   (an exec there would replay into another exec on recovery). The supervisor
   sees a completed `applied` run whose `target` differs from the running
