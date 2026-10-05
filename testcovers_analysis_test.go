@@ -130,7 +130,7 @@ func testCoversBlocks(t *testing.T, dataDir string, pr int, relFile string) []Bl
 		t.Fatal(err)
 	}
 	var out []Block
-	for _, b := range ScanBlocks(src, relFile) {
+	for _, b := range withoutFileHeader(ScanBlocks(src, relFile)) {
 		b.PR = pr
 		b.Category = "TEST"
 		b.Side = SideNew

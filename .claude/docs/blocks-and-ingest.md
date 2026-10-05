@@ -317,13 +317,20 @@ a net would add a whole-file block to every PR that merely touches an import,
 which is a much bigger, noisier behaviour change than the one real gap this
 closes.
 
-**Known, accepted residual gap:** a change in a real `.php` file's **preamble**
-— above the class body, i.e. `namespace`/`use` imports — still belongs to no
-block and stays invisible (the class-header sentinel starts at the class's
-opening brace). Measured on PR 13255 this was exactly **one** changed line out
-of the whole PR (`use Tests\Support\Temporal\HasWorkerDatabase;`), against 25/25
-for the Blade case — hence narrow over general. Recorded here so it doesn't get
-re-investigated as a new bug.
+**The PHP file preamble is its own block: `<file-header>`, labelled "Imports".**
+This was once an "accepted residual gap" (PR 13255: one changed `use` line).
+PR 14017 — a namespace move — refuted that: ~107 of its 141 files changed
+ONLY `namespace`/`use` lines and silently vanished from the tree.
+`withFileHeader` (`phpscan.go`, last step of `ScanBlocks`' PHP path) prepends
+one block spanning line 1 up to the line before the first block — `<?php`,
+`declare`, `namespace`, `use`, class docblock/attributes and the `class … {`
+line — when that region is non-blank. `Class` is the first block's class, so a
+test file's preamble groups into its `test_class` row (`methodLabel` shows
+"Imports" there too); the label itself comes from `makeLabel` (`model.go`).
+`classifyFile` surfaces it only when a changed line hits it, like any block.
+`scanBlocksRaw` (callresolve) never sees it; `matchMovedBlocks` and
+`scanTestCovers` skip it (near-identical `use` lists would invent moves; it is
+not a test). Test: `preamble_test.go`.
 
 Tests: `phpscan_test.go` (`TestBladeTemplateIsOneWholeFileBlock`, which first
 asserts the premise that `scanPHP` *does* return decoy blocks, plus
@@ -1321,6 +1328,15 @@ removed+added. Scope: only the **full ingest** — the delta refresh
 (`refreshIngestDelta`, `parseFiles(… nil …)`) keeps its deliberate `--no-renames`
 split (`changedFileNames`), so a rename appearing mid-refresh stays removed+added
 until a full re-ingest.
+
+**A pure move (identical content) gets one `<renamed-file>` row.** Without a
+changed line `classifyFile` emitted nothing, while GitHub lists the file as
+"renamed without changes". Now, when nothing else was emitted for a renamed
+file and both sources are byte-identical, it emits one `modified` block named
+`renamedFileSentinel` (label: the file's basename). `extractBlockSource`
+returns the PATH as that block's source, so `/api/code` and blockstats see the
+old path vs the new path — exactly one changed row, so it is approvable through
+the ordinary machinery (no zero-row dead checkbox, see `approval.md`).
 
 Tests: `classify_test.go` (`TestRenamePairsBlocks`), `blockstats_test.go`
 (`TestBlockChangedRowCountReadsRenamedOldPath`), `tests/rename-file.spec.mjs` (PR

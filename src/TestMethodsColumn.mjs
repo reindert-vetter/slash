@@ -45,7 +45,9 @@ function methodApproveCount(state, m) {
 // in the same idiom as the rest of the app's mixed Dutch/English UI text).
 // Every other method just shows its bare name (no `Class::` prefix — the
 // class is already named in this column's own header).
+// The file-preamble block (fileHeaderSentinel, phpscan.go) reads "Imports".
 function methodLabel(m) {
+  if (m.name === '<file-header>') return 'Imports'
   return m.name === '<class-header>' ? 'Class-header' : m.name
 }
 

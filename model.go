@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 )
 
 // Status of a block relative to the PR.
@@ -173,5 +174,12 @@ func (b Block) symbol() string {
 
 // makeLabel fills Label based on class/name.
 func (b *Block) makeLabel() {
-	b.Label = b.symbol()
+	switch b.Name {
+	case fileHeaderSentinel:
+		b.Label = "Imports"
+	case renamedFileSentinel:
+		b.Label = filepath.Base(b.File)
+	default:
+		b.Label = b.symbol()
+	}
 }

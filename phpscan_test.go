@@ -31,7 +31,7 @@ class Foo {
     }
 }
 `
-	got := ScanBlocks([]byte(src), "app/Foo.php")
+	got := withoutFileHeader(ScanBlocks([]byte(src), "app/Foo.php"))
 	if !hasSymbol(got, "Foo::bar") || !hasSymbol(got, "Foo::baz") {
 		t.Fatalf("expected Foo::bar and Foo::baz, got %v", symbols(got))
 	}
@@ -50,7 +50,7 @@ class Svc {
     }
 }
 `
-	got := ScanBlocks([]byte(src), "app/Services/Svc.php")
+	got := withoutFileHeader(ScanBlocks([]byte(src), "app/Services/Svc.php"))
 	if len(got) != 1 || got[0].symbol() != "Svc::run" {
 		t.Fatalf("closures/arrow-fn must not spawn blocks; got %v", symbols(got))
 	}
@@ -81,7 +81,7 @@ return new class extends Migration {
 
 func TestHeredocWithBracesIgnored(t *testing.T) {
 	src := "<?php\nclass H {\n    public function tpl() {\n        $s = <<<SQL\n        SELECT * FROM t WHERE j = '{\"a\":1}' -- } not a brace\n        SQL;\n        return $s;\n    }\n}\n"
-	got := ScanBlocks([]byte(src), "app/H.php")
+	got := withoutFileHeader(ScanBlocks([]byte(src), "app/H.php"))
 	if len(got) != 1 || got[0].symbol() != "H::tpl" {
 		t.Fatalf("heredoc braces must be ignored; got %v", symbols(got))
 	}
@@ -425,7 +425,7 @@ final class ProductGroup extends Model
     }
 }
 `
-	got := ScanBlocks([]byte(src), "app/Models/ProductGroup.php")
+	got := withoutFileHeader(ScanBlocks([]byte(src), "app/Models/ProductGroup.php"))
 	if !hasSymbol(got, "ProductGroup::<class-header>") {
 		t.Fatalf("expected a class-header block, got %v", symbols(got))
 	}
@@ -477,7 +477,7 @@ class Config
     const VERSION = 1;
 }
 `
-	got := ScanBlocks([]byte(src), "app/Models/Config.php")
+	got := withoutFileHeader(ScanBlocks([]byte(src), "app/Models/Config.php"))
 	// The class never gets a method, so the header region is the whole body —
 	// but VERSION is split out of it into its own block, leaving the header
 	// with just the `use SomeTrait;` line above it.
@@ -643,7 +643,7 @@ class S {
     }
 }
 `
-	got := ScanBlocks([]byte(src), "app/S.php")
+	got := withoutFileHeader(ScanBlocks([]byte(src), "app/S.php"))
 	if len(got) != 1 || got[0].symbol() != "S::f" {
 		t.Fatalf("keywords/braces inside strings must be ignored; got %v", symbols(got))
 	}
@@ -1068,4 +1068,16 @@ class BladeCompiler {
 	if _, ok := blockByName(got, "BladeCompiler::compile"); !ok {
 		t.Fatalf("expected BladeCompiler::compile, got %v", symbols(got))
 	}
+}
+
+// withoutFileHeader drops the <file-header> (Imports) block, for the scan tests
+// that are about the class body and predate it.
+func withoutFileHeader(blocks []Block) []Block {
+	var out []Block
+	for _, b := range blocks {
+		if b.Name != fileHeaderSentinel {
+			out = append(out, b)
+		}
+	}
+	return out
 }

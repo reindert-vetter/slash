@@ -71,6 +71,11 @@ type moveCandidate struct {
 func matchMovedBlocks(blocks []Block, baseDir, headDir string) []Block {
 	var oldIdx, newIdx []int
 	for i, b := range blocks {
+		// A file preamble is near-identical boilerplate across files (the same
+		// `use` lists), so pairing two of them would invent moves.
+		if b.Name == fileHeaderSentinel {
+			continue
+		}
 		switch b.Status {
 		case StatusRemoved:
 			oldIdx = append(oldIdx, i)

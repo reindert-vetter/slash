@@ -55,7 +55,7 @@ func mustParse(t *testing.T, paths []string, baseDir, headDir string) []Block {
 func realBlocks(blocks []Block) []Block {
 	var out []Block
 	for _, b := range blocks {
-		if !strings.Contains(b.Name, "class-header") {
+		if !strings.Contains(b.Name, "class-header") && b.Name != fileHeaderSentinel {
 			out = append(out, b)
 		}
 	}

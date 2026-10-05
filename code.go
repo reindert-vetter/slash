@@ -29,6 +29,15 @@ func extractBlockSource(path, relFile, class, name string) codeSide {
 	if isImagePath(relFile) {
 		return imagePlaceholderSide(path)
 	}
+	// A pure-rename row (classifyFile) has no code of its own: its "source" is
+	// the path, so the old side reads the old path and the new side the new one
+	// — one changed row, like GitHub's "renamed without changes".
+	if name == renamedFileSentinel && class == "" {
+		if _, err := os.Stat(path); err != nil {
+			return codeSide{}
+		}
+		return codeSide{Start: 1, End: 1, Text: relFile}
+	}
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return codeSide{}

@@ -302,6 +302,25 @@ func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd
 		}
 	}
 
+	// A pure move (git rename, byte-identical content) has no changed line, so
+	// nothing above emitted a block and the file vanished from the review tree,
+	// while GitHub lists it as "renamed without changes". Give it one row of its
+	// own; its source is the path (extractBlockSource), so the old↔new path is
+	// the diff and the row is approvable. See renamedFileSentinel.
+	if len(out) == 0 && oldFile != "" && oldFile != path && !fileAdded && !fileDeleted && oldSrc == newSrc {
+		out = append(out, Block{
+			PR:       pr,
+			File:     path,
+			Name:     renamedFileSentinel,
+			Line:     1,
+			EndLine:  1,
+			Category: category,
+			Status:   StatusModified,
+			Side:     SideNew,
+			OldFile:  oldFile,
+		})
+	}
+
 	return out
 }
 

@@ -84,8 +84,9 @@ func TestFileDeletedFlag(t *testing.T) {
 		}
 	}
 
-	if len(deletedBlocks) != 2 {
-		t.Fatalf("deleted file: want 2 blocks, got %d", len(deletedBlocks))
+	// Two methods plus the file's own <file-header> (Imports) block.
+	if len(deletedBlocks) != 3 {
+		t.Fatalf("deleted file: want 3 blocks, got %d", len(deletedBlocks))
 	}
 	for _, b := range deletedBlocks {
 		if b.Status != StatusRemoved {

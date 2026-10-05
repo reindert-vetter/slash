@@ -148,7 +148,7 @@ func scanTestCovers(dataDir string, pr int, blocks []Block, rels []relations.Rel
 
 	var out []testcovers.Entry
 	for _, b := range blocks {
-		if b.Side == SideOld || b.Category != "TEST" {
+		if b.Side == SideOld || b.Category != "TEST" || b.Name == fileHeaderSentinel || b.Name == renamedFileSentinel {
 			continue
 		}
 		fi, cached := cache[b.File]

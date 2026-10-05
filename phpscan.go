@@ -22,7 +22,7 @@ func ScanBlocks(src []byte, filename string) []Block {
 			return []Block{wholeFileBlock(src, filename)}
 		}
 		blocks := scanBlocksRaw(src, filename)
-		return splitClassHeaderMembers(blocks, src)
+		return withFileHeader(splitClassHeaderMembers(blocks, src), src, filename)
 	case ".ts":
 		return scanTS(src, filename)
 	default:
@@ -209,6 +209,50 @@ func wholeFileBlock(src []byte, filename string) Block {
 		EndLine: lines,
 	}
 }
+
+// fileHeaderSentinel is the synthetic name for a PHP file's preamble: every line
+// above its first block — `<?php`, `declare`, `namespace`, `use` imports, the
+// class docblock/attributes and the `class … {` line itself. Shown as "Imports"
+// (makeLabel). Without it a change there belonged to no block and the file
+// vanished from the review tree; PR 14017 (a namespace move) lost ~107 of its
+// 141 files that way. See .claude/docs/blocks-and-ingest.md.
+const fileHeaderSentinel = "<file-header>"
+
+// withFileHeader prepends the fileHeaderSentinel block (lines 1 .. first block
+// line - 1) when that region holds anything but whitespace. Its Class is the
+// first block's class, so a test file's preamble groups into its test-class
+// row. A whole-file fallback block starts at line 1, so it never gets one.
+func withFileHeader(blocks []Block, src []byte, filename string) []Block {
+	first := -1
+	for i, b := range blocks {
+		if first < 0 || b.Line < blocks[first].Line {
+			first = i
+		}
+	}
+	if first < 0 || blocks[first].Line <= 1 {
+		return blocks
+	}
+	end := blocks[first].Line - 1
+	if strings.TrimSpace(sliceLines(src, 1, end).Text) == "" {
+		return blocks
+	}
+	hdr := Block{
+		File:    filename,
+		Class:   blocks[first].Class,
+		Name:    fileHeaderSentinel,
+		Line:    1,
+		EndLine: end,
+		IsTrait: blocks[first].IsTrait,
+	}
+	return append([]Block{hdr}, blocks...)
+}
+
+// renamedFileSentinel is the synthetic name of the one block a file the PR only
+// MOVED (git rename, identical content) gets, so it still shows up as a row with
+// its old and new path. Its "source" is the path itself (extractBlockSource),
+// which gives exactly one changed row — so it is approvable like any other
+// block. Emitted by classifyFile; never produced by a scan.
+const renamedFileSentinel = "<renamed-file>"
 
 // classHeaderSentinel is the synthetic method name for a class's "header"
 // region: everything between the class/trait/enum's opening brace and its
