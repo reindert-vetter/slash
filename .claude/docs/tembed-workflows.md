@@ -77,7 +77,7 @@ about PRs, blocks, or gh; keep it that way.
   second fails the run has no input; a repeat `StartWorkflowID` with the same
   (deterministic) ID now truncates that history and rewrites the start event
   instead of reusing it. `advanceLoaded` fails such a run with "has no start
-  input" (never nil input -> JSON error), and retry reports the same reason.
+  input" (never nil input -> JSON error), and retry reports the same reason. The start event write itself is retried (`appendStartEvent`, 4 attempts) so a transient SQLITE_BUSY no longer creates such an orphan.
 - Tests: `tembed/*_test.go`.
 
 ## Recovery priority (don't let slow LLM work block startup)

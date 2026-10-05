@@ -237,7 +237,7 @@ func (e *Engine) startWorkflowID(id, name string, input any, deferLow bool, pare
 			return "", err
 		}
 		now := e.now()
-		if err := e.store.AppendEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
+		if err := e.appendStartEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
 			l.Unlock()
 			return "", err
 		}
@@ -249,7 +249,7 @@ func (e *Engine) startWorkflowID(id, name string, input any, deferLow bool, pare
 			l.Unlock()
 			return "", err
 		}
-		if err := e.store.AppendEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
+		if err := e.appendStartEvent(id, Event{Seq: 0, Type: EventWorkflowStarted, Payload: in, Time: now}); err != nil {
 			l.Unlock()
 			return "", err
 		}
@@ -429,6 +429,24 @@ func (e *Engine) advanceLoaded(runID string, rec RunRecord, hist []Event, deferL
 		e.propagateToParent(rec.ParentRunID, runID, nil, result)
 	}
 	return deferred
+}
+
+// appendStartEvent writes the WorkflowStarted event, retrying a few times: the
+// start is two non-transactional writes (CreateRun, then this), and a transient
+// failure of the second (SQLITE_BUSY, a JSONL hiccup) used to leave a run with
+// no start input that could never be driven or retried.
+func (e *Engine) appendStartEvent(id string, ev Event) error {
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
+		}
+		if err = e.store.AppendEvent(id, ev); err == nil || errors.Is(err, ErrDuplicateEvent) {
+			return nil
+		}
+		e.logf("tembed: run %s: write start event (attempt %d): %v", id, attempt+1, err)
+	}
+	return err
 }
 
 // failNoStartInput terminally fails a run whose history lacks its

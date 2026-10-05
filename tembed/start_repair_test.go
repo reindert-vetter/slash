@@ -2,6 +2,7 @@ package tembed
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -64,5 +65,32 @@ func TestRecoverFailsRunWithoutStartInputClearly(t *testing.T) {
 	rec, hist, _ := store.LoadRun("r3")
 	if rec.Status != StatusFailed || len(hist) != 1 || !strings.Contains(hist[0].Error, "no start input") {
 		t.Fatalf("status=%s hist=%+v", rec.Status, hist)
+	}
+}
+
+// flakyStartStore fails the first n WorkflowStarted appends, like a transient
+// SQLITE_BUSY on the second of the start's two writes.
+type flakyStartStore struct {
+	Store
+	failures int
+}
+
+func (f *flakyStartStore) AppendEvent(runID string, e Event) error {
+	if e.Type == EventWorkflowStarted && f.failures > 0 {
+		f.failures--
+		return errors.New("database is locked")
+	}
+	return f.Store.AppendEvent(runID, e)
+}
+
+func TestStartWorkflowIDRetriesTransientStartEventFailure(t *testing.T) {
+	store := &flakyStartStore{Store: NewMemoryStore(), failures: 2}
+	e := echoEngine(store)
+	if _, err := e.StartWorkflowID("r4", "echo", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	if err := e.Result("r4", &out); err != nil || out != "hi" {
+		t.Fatalf("result = %q, %v", out, err)
 	}
 }
