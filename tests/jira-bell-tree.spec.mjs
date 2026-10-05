@@ -8,8 +8,8 @@ import { test, expect, seededPr, appReady } from './_fixtures.mjs'
 // generalization of an earlier, narrower ask that only showed the bell while
 // stop 1 (the PR-info card) was in view. Only regression-sensitive bit tested
 // here: the bell survives navigating away from stop 1 (proving it isn't
-// nested inside prInfoCard any more), and still only appears when there are
-// notifications.
+// nested inside prInfoCard any more), and — since reminders can be added from
+// every bell — is shown even without notifications.
 test.describe('/pr/<id> — Jira bell, fixed top-right corner', () => {
   function stubNotifications(page, items) {
     return page.route('**/api/jira/notifications', async (route) => {
@@ -111,13 +111,46 @@ test.describe('/pr/<id> — Jira bell, fixed top-right corner', () => {
     await expect.poll(() => signals.map((s) => s.kind)).toEqual(['read', 'unread'])
   })
 
-  test('renders nothing when there are no notifications', async ({ page }, testInfo) => {
+  // Reminders can be created from every bell (bellReminders.mjs, "algemene
+  // reminders, dus overal"), so the bell no longer hides without notifications.
+  // The feed stub is stateful so the reload after each Signal sees the result.
+  test('shows without notifications, adds a reminder and snoozes it', async ({ page }, testInfo) => {
     const pr = seededPr(testInfo)
-    await stubNotifications(page, [])
+    const feed = { items: [], snoozed: [] }
+    await page.route('**/api/jira/notifications', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, runId: 'fake-run', ...feed }) }),
+    )
+    const signals = []
+    await page.route('**/api/workflows/jira_inbox', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, runId: 'fake-run' }) }),
+    )
+    await page.route('**/signals/jira_notify', async (route) => {
+      const sig = JSON.parse(route.request().postData() || '{}')
+      signals.push(sig)
+      if (sig.kind === 'reminder_add') {
+        feed.items = [{ id: 'rem:1', kind: 'reminder', at: new Date().toISOString(), title: sig.text, unread: true }]
+      } else if (sig.kind === 'snooze') {
+        feed.snoozed = feed.items.map((it) => ({ ...it, snoozedUntil: new Date(Date.now() + 86400000).toISOString() }))
+        feed.items = []
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
+    })
     await page.goto('/pr/' + pr)
     await appReady(page)
 
-    await expect(page.locator('[data-testid="jira-bell-button"]')).toHaveCount(0)
-    await expect(page.locator('[data-testid="jira-bell-absent"]')).toHaveCount(1)
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    await page.locator('[data-testid="reminder-add"]').click()
+    await page.locator('[data-testid="reminder-text"]').fill('deploy checken')
+    await page.locator('[data-testid="reminder-option"][data-option="now"]').click()
+    await expect(page.locator('[data-testid="reminder-row"]')).toContainText('deploy checken')
+    await expect(page.locator('[data-testid="jira-bell-dot"]')).toBeVisible()
+
+    await page.locator('[data-testid="reminder-row"] [data-testid="notify-snooze"]').click()
+    await page.locator('[data-testid="notify-snooze-option"][data-option="tomorrow_8"]').click()
+    await expect(page.locator('[data-testid="reminder-row"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="notify-snoozed-toggle"]')).toContainText('1')
+    await page.locator('[data-testid="notify-snoozed-toggle"]').click()
+    await expect(page.locator('[data-testid="notify-snoozed-row"]')).toContainText('deploy checken')
+    expect(signals.map((s) => s.kind + ':' + (s.option || ''))).toEqual(['reminder_add:now', 'snooze:tomorrow_8'])
   })
 })

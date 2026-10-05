@@ -19,6 +19,7 @@ import { assigneeMark, avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureN
 import { relativeTime } from './relativeTime.mjs'
 import { SNOOZE_OPTIONS, snoozePreviewUntil, formatSnoozeMoment, isSnoozeActive, snoozeMarkText } from './snooze.mjs'
 import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
+import { createBellReminders } from './bellReminders.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 import { initSelfUpdate, selfUpdateNeedsAttention, selfUpdateSection } from './selfUpdate.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
@@ -56,6 +57,9 @@ const state = reactive({
   jira: [],
   // Notifications the reviewer's filter list hid from the response above.
   jiraHidden: 0,
+  // Snoozed notifications + reminders still waiting for their moment
+  // (bellReminders.mjs), from the same GET /api/jira/notifications.
+  jiraSnoozed: [],
   jiraUnreadOnly: true, // mirrors Jira's own "Only show unread" toggle, on by default
   jiraRunId: '', // jira_inbox Run ID — target for the "read" signal
   // jiraBellOpen — whether the header bell's own dropdown is open, badge-dotted
@@ -2951,6 +2955,7 @@ async function loadJiraNotifications() {
     // already the visible set — this is only there to SAY so, in words, rather
     // than leaving rows to vanish unexplained.
     state.jiraHidden = Number(body.hidden) || 0
+    state.jiraSnoozed = Array.isArray(body.snoozed) ? body.snoozed : []
     // Drop stray grace-period entries for notifications that dropped out of
     // the read-model entirely (purged) — see pruneJiraRespite.
     pruneJiraRespite(state.jira)
@@ -2986,20 +2991,24 @@ function jiraUnreadCount() {
 // implementation (src/jiraNotifyActions.mjs), used by both bells. markJiraRead
 // has two callers here (opening the row, and the per-row tick), markJiraUnread
 // is its mirror behind the right-click menu, markAllJiraRead the bulk action.
-const {
-  markRead: markJiraRead,
-  markUnread: markJiraUnread,
-  markAllRead: markAllJiraRead,
-} = createJiraNotifyActions({
+const jiraNotifyActions = createJiraNotifyActions({
   getItems: () => state.jira,
   setItems: (list) => {
     state.jira = list
+  },
+  getSnoozed: () => state.jiraSnoozed,
+  setSnoozed: (list) => {
+    state.jiraSnoozed = list
   },
   getRunId: () => state.jiraRunId,
   setRunId: (id) => {
     state.jiraRunId = id
   },
+  reload: () => loadJiraNotifications(),
 })
+const { markRead: markJiraRead, markUnread: markJiraUnread, markAllRead: markAllJiraRead } = jiraNotifyActions
+// Reminders + snoozing — one shared rendering with jiraBell.mjs's bell.
+const bellReminders = createBellReminders(jiraNotifyActions, () => state.jiraSnoozed)
 
 // jiraUnreadMark — the unread signal, on the RIGHT edge of the row (mirroring
 // Jira's own layout — the dot sits there, not next to the avatar). Per the
@@ -3068,6 +3077,7 @@ function jiraAvatarMark(n) {
 // this app never writes into Jira (see the file header), so only the
 // read-only preview is shown, not the write affordances around it.
 function jiraRow(n) {
+  if (n.kind === 'reminder') return bellReminders.reminderRow(n)
   const icon = n.issueIconUrl
     ? html`<img src="${n.issueIconUrl}" alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0" />`.key('icon')
     : ''
@@ -3140,9 +3150,11 @@ function jiraRow(n) {
         </p>
         <div class="contents">${() => groupNote}</div>
         <div class="contents">${() => preview}</div>
+        ${bellReminders.snoozeOptions(n)}
       </div>
       <div class="flex shrink-0 items-center gap-2 self-start pt-0.5">
         <div class="contents">${() => (n.unread ? jiraMarkReadButton(n) : '')}</div>
+        ${bellReminders.snoozeButton(n)}
         ${() => jiraUnreadMark(n)}
         ${chevronFilled('h-4 w-4 text-slate-400 dark:text-zinc-600 group-hover:text-slate-600 dark:group-hover:text-zinc-300')}
       </div>
@@ -3248,7 +3260,9 @@ function jiraBellPanel() {
         >
         ${jiraUnreadToggle()}
         ${jiraMarkAllReadButton()}
+        ${bellReminders.addButton()}
       </div>
+      ${bellReminders.composer()}
       ${jiraHiddenNote()}
       <div class="max-h-96 overflow-y-auto">
         ${() =>
@@ -3258,6 +3272,7 @@ function jiraBellPanel() {
                 ${() => (state.jira.length ? t('Alles gelezen.') : t('Geen notificaties.'))}
               </p>`.key('jira-bell:empty')}
       </div>
+      ${bellReminders.snoozedSection()}
     </div>
   `.key('jira-bell:' + (state.jiraUnreadOnly ? 'unread' : 'all') + ':' + rows.map((n) => n.id + (n.unread ? '!' : '')).join(','))
 }
@@ -4710,6 +4725,15 @@ function jiraNotificationCommands(n) {
     list.push({ id: 'jira-mark-unread', label: t('Markeer als ongelezen'), hint: 'ongelezen', run: () => markJiraUnread(n) })
   }
   list.push({ id: 'jira-mark-all-read', label: t('Alles gelezen maken'), hint: 'alles', run: () => markAllJiraRead() })
+  // Snooze, the same three moments as the row's own clock (bellReminders.mjs).
+  for (const o of SNOOZE_OPTIONS) {
+    list.push({
+      id: 'jira-snooze-' + o.key,
+      label: t('Snooze') + ': ' + t(o.label),
+      hint: 'snooze',
+      run: () => jiraNotifyActions.snooze(n, o.key),
+    })
+  }
   return list
 }
 

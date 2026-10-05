@@ -219,3 +219,86 @@ func TestMarkAllReadClearsAForcedUnreadRow(t *testing.T) {
 		t.Error("MarkAllRead must clear a forced-unread row")
 	}
 }
+
+// A snoozed notification keeps its snooze across a feed refresh, comes back
+// unread, and "Alles gelezen maken" leaves it alone while it is hidden.
+func TestSnoozeSurvivesRefreshAndReturnsUnread(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	item := Item{ID: "n1", At: "2026-09-03T10:00:00Z", Title: "commented", Unread: false}
+	if err := m.Upsert(ctx, []Item{item}); err != nil {
+		t.Fatal(err)
+	}
+	until := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	if err := m.Snooze(ctx, "n1", until); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Upsert(ctx, []Item{item}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MarkAllRead(ctx, "2026-09-03T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := m.List(ctx, 10)
+	if len(list) != 1 || list[0].SnoozedUntil != "2026-09-04T08:00:00Z" || !list[0].Unread {
+		t.Fatalf("snoozed row = %+v, want snoozed until 08:00 and unread", list)
+	}
+	if err := m.Unsnooze(ctx, "n1", until); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = m.List(ctx, 10)
+	if list[0].SnoozedUntil != "" {
+		t.Fatalf("unsnooze left %q", list[0].SnoozedUntil)
+	}
+}
+
+// A reminder: added, hidden until its moment, read/unread like a notification,
+// snoozed again, deleted, and purged by the same 30-day rule.
+func TestReminderLifecycle(t *testing.T) {
+	m := openTest(t)
+	ctx := context.Background()
+	created := time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)
+	visible := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	if err := m.AddReminder(ctx, "1", "bel Dennis", created, visible); err != nil {
+		t.Fatal(err)
+	}
+	// Replay-safe: same id again is a no-op.
+	if err := m.AddReminder(ctx, "1", "other", created, visible); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Reminders(ctx, created)
+	if len(got) != 1 || got[0].ID != "rem:1" || got[0].Title != "bel Dennis" || got[0].SnoozedUntil == "" || !got[0].Unread {
+		t.Fatalf("before its moment = %+v", got)
+	}
+	got, _ = m.Reminders(ctx, visible.Add(time.Minute))
+	if got[0].SnoozedUntil != "" {
+		t.Fatalf("after its moment still snoozed: %+v", got[0])
+	}
+	if err := m.MarkRead(ctx, "rem:1", "2026-09-04T09:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = m.Reminders(ctx, visible.Add(time.Hour))
+	if got[0].Unread {
+		t.Fatal("reminder should be read")
+	}
+	later := time.Date(2026, 9, 7, 8, 0, 0, 0, time.UTC)
+	if err := m.Snooze(ctx, "rem:1", later); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = m.Reminders(ctx, visible.Add(time.Hour))
+	if got[0].SnoozedUntil != "2026-09-07T08:00:00Z" || !got[0].Unread {
+		t.Fatalf("snoozed reminder = %+v, want hidden and unread", got[0])
+	}
+	if n, _ := m.Purge(ctx, later.Add(24*time.Hour)); n != 1 {
+		t.Fatalf("purge removed %d, want the reminder", n)
+	}
+	if err := m.AddReminder(ctx, "2", "x", created, created); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.DeleteReminder(ctx, "rem:2"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = m.Reminders(ctx, later); len(got) != 0 {
+		t.Fatalf("after delete = %+v", got)
+	}
+}

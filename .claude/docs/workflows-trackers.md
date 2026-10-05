@@ -473,6 +473,20 @@ notification has no PR at all.
   state into Jira: without them every row the reviewer opened would come back
   unread on the very next poll, and every row marked unread here would come
   back read.
+- **Reminders and snooze** (the bell's own, see "Reminders and snooze in the
+  bell" in `.claude/docs/pr-overview.md`) ride on the same Signal:
+  `{"kind":"snooze","id","option"}` (`tomorrow_8`/`next_monday_8`/`days_7`,
+  or `clear`), `{"kind":"reminder_add","text","option"}` (those three or
+  `now`) and `{"kind":"reminder_delete","id"}`. The workflow reads `w.Now()`
+  once, computes the moment with `pr_snooze.go`'s pure `snoozeUntil`, and
+  runs exactly one Activity (`snoozeJiraNotification`/`addReminder`/
+  `deleteReminder`); a reminder's id is `now.UnixNano()` of that recorded
+  clock, so replay rebuilds it. Storage: a third local column
+  `snoozed_until` on `jira_notifications` (a snooze also raises
+  `forced_unread`, so it returns unread) and a `reminders` table in the same
+  DB; ids prefixed `rem:` route read/unread/snooze to it inside the
+  Activity. `validJiraNotifySignal` is the forwarder's allow-list. Tests:
+  `jira_reminders_test.go`, `modules/jiranotify/jiranotify_test.go`.
 
 ## `jira_issues` (one per process)
 

@@ -337,6 +337,39 @@ the ONLY place this feed is shown) moved into the bell's own dropdown.
   `.claude/docs/workflows-trackers.md`. The page itself only reads
   `GET /api/jira/notifications`, exactly like every other list here.
 
+### Reminders and snooze in the bell (`src/bellReminders.mjs`)
+
+Reindert: "ik wil onder notifications ook een notification kunnen toevoegen
+als reminder … zo wil ik notifications ook kunnen snoozen (zowel bij het
+aanmaken als dat het al bestaat, ook bij jira ticket notifications)", and
+"het zijn algemene reminders, dus overal" — so ONE shared module renders it
+in every bell (`overview.mjs`'s and `jiraBell.mjs`'s), bound to that bell's
+own `createJiraNotifyActions` (which gained `snooze`/`addReminder`/
+`deleteReminder`).
+
+- **Reminder**: "+ Herinnering" in the panel header opens a text field plus
+  four moments — "Nu" and the three PR-snooze moments (`snooze.mjs`, 08:00
+  local). Picking a moment creates it, Enter means "Nu". No free date/time.
+  It is a row in the same list (`kind:"reminder"`, id `rem:<n>`, the word
+  "Herinnering" + a clock glyph, not a link): unread once visible (dot +
+  count), a click/tick marks it read, after which it behaves like a read Jira
+  item (incl. the 30-day purge, counted from when it became visible), plus a
+  delete ✕.
+- **Snooze**: a clock button on every row (Jira or reminder) expands the three
+  moments inline; `/pr-overview`'s right-click menu has them too. A snoozed
+  row leaves the list for the collapsed **"Gesnoozed (N)"** block at the
+  bottom of the panel ("gesnoozed tot …" + "Snooze opheffen") and comes back
+  **unread** at its moment. "Alles gelezen maken" skips snoozed rows.
+- **Waking up is read-side only**: `GET /api/jira/notifications` splits the
+  stored rows into `items` and `snoozed` by comparing the stored moment with
+  now (`splitBellItems`, `jira_notifications.go`) — no timer, no write.
+  Reminders are never hit by the noise filter.
+- **Write path**: the `jira_inbox` tracker's `jira_notify` Signal, new kinds
+  `snooze`/`reminder_add`/`reminder_delete` — see `jira_inbox` in
+  `.claude/docs/workflows-trackers.md`.
+- Tests: `tests/jira-bell-tree.spec.mjs` ("adds a reminder and snoozes it"),
+  `jira_reminders_test.go`, `modules/jiranotify/jiranotify_test.go`.
+
 ### The slash self-update row, at the top of both bells
 
 Both bells (this page's own and `src/jiraBell.mjs`) mount
@@ -370,11 +403,11 @@ store via `createJiraNotifyActions({getItems, setItems, getRunId, setRunId})`
 write still goes the sanctioned way: start-or-reuse the `jira_inbox` Execution,
 then Signal it.
 
-- **Gate: hidden unless `jira.length > 0`**, confirmed with Reindert as "at
-  least one notification exists, read or unread" — not "at least one unread".
-  `overview.mjs`'s own bell has no such gate (it always shows, even empty, and
-  says "Geen notificaties." when opened); the two smaller placements hide the
-  icon entirely instead, since there is nothing to click there.
+- **Always shown now.** It used to be hidden unless `jira.length > 0`
+  ("alleen als er iets te klikken is"); since every bell can create a
+  reminder (next section) there is always something to click. (Note: the
+  `/plan/<KEY>` placement is currently not mounted at all — `plan.mjs` lost its
+  import in a later rewrite; only `/pr/<id>` uses `jiraBell.mjs`.)
 - **Marking a row unread again works here too** (Reindert: "laat meldingen ook
   ongelezen kunnen zetten"), but as an explicit per-row button
   (`jiraMarkUnreadButton`, `data-testid=jira-mark-unread`, an undo glyph where

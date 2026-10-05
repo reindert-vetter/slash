@@ -15,6 +15,8 @@
 // `forced_unread` override precisely so a poll cannot undo it — see
 // modules/jiranotify.
 
+import { snoozePreviewUntil } from './snooze.mjs'
+
 // A just-read notification stays visible for a short grace period instead of
 // vanishing the instant "Alleen ongelezen" is on (Reindert: "met alleen
 // ongelezen aan verdwijnt een item nu meteen zodra het gelezen is — ook door
@@ -65,7 +67,9 @@ export function pruneJiraRespite(items) {
 // createJiraNotifyActions binds the three writes to one page's own store. The
 // store is a tiny adapter over whatever reactive object that page already has
 // (overview.mjs's `state`, jiraBell.mjs's `bell`): getItems/setItems for the
-// notification list, getRunId/setRunId for the cached jira_inbox Run ID.
+// notification list, getRunId/setRunId for the cached jira_inbox Run ID,
+// getSnoozed/setSnoozed for the snoozed rows and reload() to re-read the feed
+// after a snooze/reminder write.
 export function createJiraNotifyActions(store) {
   // ensureRunId starts (or reuses) the single jira_inbox Execution and returns
   // its Run ID — the write target every jira_notify Signal needs. One place
@@ -130,5 +134,46 @@ export function createJiraNotifyActions(store) {
     await signal({ kind: 'read_all' })
   }
 
-  return { ensureRunId, markRead, markUnread, markAllRead }
+  // snooze hides one notification or reminder until the chosen moment (the
+  // three PR-snooze options, see snooze.mjs), or lifts it with 'clear'. The
+  // moment itself is computed in the workflow; here only optimistically: the
+  // row moves between the visible list and `snoozed` at once, and comes back
+  // unread (Reindert: a snoozed notification returns as unread).
+  async function snooze(n, option) {
+    if (!n) return
+    const items = store.getItems()
+    const snoozed = store.getSnoozed ? store.getSnoozed() : []
+    if (option === 'clear') {
+      store.setSnoozed(snoozed.filter((it) => it.id !== n.id))
+      store.setItems([{ ...n, snoozedUntil: '' }, ...items.filter((it) => it.id !== n.id)])
+    } else {
+      jiraReadRespite.delete(n.id)
+      const until = snoozePreviewUntil(option)
+      store.setItems(items.filter((it) => it.id !== n.id))
+      store.setSnoozed([...snoozed.filter((it) => it.id !== n.id), { ...n, unread: true, snoozedUntil: until ? until.toISOString() : '' }])
+    }
+    await signal({ kind: 'snooze', id: n.id, option })
+    store.reload && store.reload()
+  }
+
+  // addReminder creates one free-text reminder, visible 'now' or at one of
+  // the three snooze moments. Its id is minted by the workflow, so there is no
+  // optimistic row — the list is re-read right after the Signal.
+  async function addReminder(text, option) {
+    const body = String(text || '').trim()
+    if (!body) return
+    await signal({ kind: 'reminder_add', text: body, option })
+    store.reload && store.reload()
+  }
+
+  // deleteReminder removes a reminder for good (from either list).
+  async function deleteReminder(n) {
+    if (!n) return
+    store.setItems(store.getItems().filter((it) => it.id !== n.id))
+    if (store.getSnoozed) store.setSnoozed(store.getSnoozed().filter((it) => it.id !== n.id))
+    await signal({ kind: 'reminder_delete', id: n.id })
+    store.reload && store.reload()
+  }
+
+  return { ensureRunId, markRead, markUnread, markAllRead, snooze, addReminder, deleteReminder }
 }

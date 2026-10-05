@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -61,6 +62,20 @@ func migrate(db *sql.DB) {
 	// so the feed keeps reporting its own read state and the next Upsert would
 	// otherwise flip the row straight back to read.
 	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN forced_unread INTEGER NOT NULL DEFAULT 0`)
+	// snoozed_until backs "snooze" on a notification: hidden from the bell
+	// until that moment (RFC3339 UTC, '' = not snoozed), then back as unread.
+	// Local like read_at, so Upsert leaves it alone.
+	_, _ = db.Exec(`ALTER TABLE jira_notifications ADD COLUMN snoozed_until TEXT NOT NULL DEFAULT ''`)
+	// reminders — the reviewer's own free-text reminders in the same bell
+	// (Reindert: "algemene reminders, dus overal"). visible_at is when it
+	// shows up (and is moved forward by a snooze); read_at '' = unread.
+	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS reminders (
+	  id         TEXT PRIMARY KEY,
+	  text       TEXT NOT NULL,
+	  created_at TEXT NOT NULL,
+	  visible_at TEXT NOT NULL,
+	  read_at    TEXT NOT NULL DEFAULT ''
+	)`)
 }
 
 // Item is one stored notification. Unread is the effective state the UI
@@ -83,7 +98,21 @@ type Item struct {
 	GroupSize      int    `json:"groupSize"`
 	OtherActor     string `json:"otherActor,omitempty"`
 	CommentPreview string `json:"commentPreview,omitempty"`
+	// SnoozedUntil is set while the row is snoozed (RFC3339 UTC); the read
+	// endpoint hides it until then. Kind is "reminder" for a reminder row
+	// (ID prefixed ReminderPrefix), "" for a Jira notification.
+	SnoozedUntil string `json:"snoozedUntil,omitempty"`
+	Kind         string `json:"kind,omitempty"`
 }
+
+// ReminderPrefix marks a reminder's id in the shared item list, so the
+// read/unread/snooze Activities can route an id to the right table.
+const ReminderPrefix = "rem:"
+
+// IsReminderID reports whether id names a reminder rather than a notification.
+func IsReminderID(id string) bool { return strings.HasPrefix(id, ReminderPrefix) }
+
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 // Module is the notification read-model service.
 type Module struct{ db *sql.DB }
@@ -155,8 +184,13 @@ func (m *Module) MarkRead(ctx context.Context, id, at string) error {
 	if at == "" {
 		at = time.Now().UTC().Format(time.RFC3339)
 	}
+	if IsReminderID(id) {
+		_, err := m.db.ExecContext(ctx,
+			`UPDATE reminders SET read_at = ? WHERE id = ? AND read_at = ''`, at, strings.TrimPrefix(id, ReminderPrefix))
+		return err
+	}
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE jira_notifications SET read_at = ?, forced_unread = 0 WHERE id = ? AND read_at = ''`, at, id)
+		`UPDATE jira_notifications SET read_at = ?, forced_unread = 0 WHERE id = ? AND (read_at = '' OR forced_unread = 1)`, at, id)
 	return err
 }
 
@@ -170,6 +204,10 @@ func (m *Module) MarkRead(ctx context.Context, id, at string) error {
 func (m *Module) MarkUnread(ctx context.Context, id string) error {
 	if id == "" {
 		return nil
+	}
+	if IsReminderID(id) {
+		_, err := m.db.ExecContext(ctx, `UPDATE reminders SET read_at = '' WHERE id = ?`, strings.TrimPrefix(id, ReminderPrefix))
+		return err
 	}
 	_, err := m.db.ExecContext(ctx,
 		`UPDATE jira_notifications SET read_at = '', forced_unread = 1 WHERE id = ?`, id)
@@ -186,8 +224,95 @@ func (m *Module) MarkAllRead(ctx context.Context, at string) error {
 		at = time.Now().UTC().Format(time.RFC3339)
 	}
 	_, err := m.db.ExecContext(ctx,
-		`UPDATE jira_notifications SET read_at = ?, forced_unread = 0 WHERE read_at = ''`, at)
+		`UPDATE jira_notifications SET read_at = ?, forced_unread = 0
+		 WHERE (read_at = '' OR forced_unread = 1) AND (snoozed_until = '' OR snoozed_until <= ?)`, at, at)
+	if err != nil {
+		return err
+	}
+	// Visible reminders too; a snoozed one (visible_at in the future) is not
+	// on screen, so it keeps waiting.
+	_, err = m.db.ExecContext(ctx,
+		`UPDATE reminders SET read_at = ? WHERE read_at = '' AND visible_at <= ?`, at, at)
 	return err
+}
+
+// Snooze hides one notification until `until`. It comes back UNREAD
+// (Reindert: a snoozed notification returns as unread), so the override is
+// raised right away — it is hidden meanwhile, so it counts nowhere.
+// Idempotent. WRITE — workflow-driven only.
+func (m *Module) Snooze(ctx context.Context, id string, until time.Time) error {
+	if id == "" {
+		return nil
+	}
+	if IsReminderID(id) {
+		_, err := m.db.ExecContext(ctx,
+			`UPDATE reminders SET visible_at = ?, read_at = '' WHERE id = ?`, stamp(until), strings.TrimPrefix(id, ReminderPrefix))
+		return err
+	}
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE jira_notifications SET snoozed_until = ?, read_at = '', forced_unread = 1 WHERE id = ?`, stamp(until), id)
+	return err
+}
+
+// Unsnooze lifts a snooze now ("Snooze opheffen"). For a reminder that means
+// "visible from now". WRITE — workflow-driven only.
+func (m *Module) Unsnooze(ctx context.Context, id string, now time.Time) error {
+	if id == "" {
+		return nil
+	}
+	if IsReminderID(id) {
+		_, err := m.db.ExecContext(ctx,
+			`UPDATE reminders SET visible_at = ? WHERE id = ? AND visible_at > ?`, stamp(now), strings.TrimPrefix(id, ReminderPrefix), stamp(now))
+		return err
+	}
+	_, err := m.db.ExecContext(ctx, `UPDATE jira_notifications SET snoozed_until = '' WHERE id = ?`, id)
+	return err
+}
+
+// AddReminder stores a new reminder (id without the prefix), visible from
+// visibleAt. INSERT OR IGNORE, so a replayed Activity is a no-op.
+// WRITE — workflow-driven only.
+func (m *Module) AddReminder(ctx context.Context, id, text string, createdAt, visibleAt time.Time) error {
+	id = strings.TrimPrefix(id, ReminderPrefix)
+	if id == "" || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO reminders (id, text, created_at, visible_at) VALUES (?,?,?,?)`,
+		id, text, stamp(createdAt), stamp(visibleAt))
+	return err
+}
+
+// DeleteReminder removes a reminder. WRITE — workflow-driven only.
+func (m *Module) DeleteReminder(ctx context.Context, id string) error {
+	_, err := m.db.ExecContext(ctx, `DELETE FROM reminders WHERE id = ?`, strings.TrimPrefix(id, ReminderPrefix))
+	return err
+}
+
+// Reminders returns every reminder as an Item (Kind "reminder", At = its
+// visible_at, SnoozedUntil = visible_at while that is still in the future),
+// newest visible first. READ — safe for the UI.
+func (m *Module) Reminders(ctx context.Context, now time.Time) ([]Item, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT id, text, visible_at, read_at FROM reminders ORDER BY visible_at DESC, id DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	n := stamp(now)
+	for rows.Next() {
+		var id, text, visibleAt, readAt string
+		if err := rows.Scan(&id, &text, &visibleAt, &readAt); err != nil {
+			return nil, err
+		}
+		it := Item{ID: ReminderPrefix + id, At: visibleAt, Title: text, Kind: "reminder", Unread: readAt == "", GroupSize: 1}
+		if visibleAt > n {
+			it.SnoozedUntil = visibleAt
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }
 
 // List returns the newest limit notifications, unread ones included. READ —
@@ -199,7 +324,7 @@ func (m *Module) List(ctx context.Context, limit int) ([]Item, error) {
 	rows, err := m.db.QueryContext(ctx,
 		`SELECT id, at, title, issue_key, actor, avatar_url, url, feed_unread, read_at,
 		        issue_title, issue_status, issue_icon_url, group_size, other_actor, comment_preview,
-		        forced_unread
+		        forced_unread, snoozed_until
 		 FROM jira_notifications ORDER BY at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -213,7 +338,7 @@ func (m *Module) List(ctx context.Context, limit int) ([]Item, error) {
 		var forcedUnread int
 		if err := rows.Scan(&it.ID, &it.At, &it.Title, &it.IssueKey, &it.Actor, &it.AvatarURL, &it.URL, &feedUnread, &readAt,
 			&it.IssueTitle, &it.IssueStatus, &it.IssueIconURL, &it.GroupSize, &it.OtherActor, &it.CommentPreview,
-			&forcedUnread); err != nil {
+			&forcedUnread, &it.SnoozedUntil); err != nil {
 			return nil, err
 		}
 		it.Unread = forcedUnread == 1 || (feedUnread == 1 && readAt == "")
@@ -232,5 +357,15 @@ func (m *Module) Purge(ctx context.Context, before time.Time) (int, error) {
 		return 0, err
 	}
 	n, err := res.RowsAffected()
-	return int(n), err
+	if err != nil {
+		return int(n), err
+	}
+	// Reminders follow the same 30-day rule, counted from when they became
+	// visible (their `at` in the bell). A snoozed one has a future visible_at.
+	res, err = m.db.ExecContext(ctx, `DELETE FROM reminders WHERE visible_at < ?`, before.UTC().Format(time.RFC3339))
+	if err != nil {
+		return int(n), err
+	}
+	r, err := res.RowsAffected()
+	return int(n + r), err
 }

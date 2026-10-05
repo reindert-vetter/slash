@@ -1645,25 +1645,21 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 		// notification feed: "read" marks one notification read (an open, or
 		// an explicit per-row tick), "unread" is its mirror (the right-click
 		// "Markeer als ongelezen"), "read_all" marks every unread row read in
-		// one go — the only writes this page does — anything else is a plain
-		// refresh. Only these four kinds are forwarded, and a per-row kind
-		// without an id is rejected — the same "whatever the body says, only
-		// what the UI may do is passed on" restriction the pr_status branch
-		// above applies.
+		// one go, plus snooze/reminder_add/reminder_delete (reminders and
+		// snoozing in the bell) — anything else is a plain refresh. Validated
+		// by validJiraNotifySignal (jira_notifications.go): the same "whatever
+		// the body says, only what the UI may do is passed on" restriction the
+		// pr_status branch above applies.
 		if parts[2] == SignalJiraNotify {
 			var body JiraNotifySignal
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid jira signal", http.StatusBadRequest)
 				return
 			}
-			perRow := body.Kind == "read" || body.Kind == "unread"
-			if perRow && strings.TrimSpace(body.ID) == "" {
+			body, ok := validJiraNotifySignal(body)
+			if !ok {
 				http.Error(w, "invalid jira signal", http.StatusBadRequest)
 				return
-			} else if body.Kind == "read_all" {
-				body = JiraNotifySignal{Kind: "read_all"}
-			} else if !perRow {
-				body = JiraNotifySignal{Kind: "refresh"}
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalJiraNotify, body); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
@@ -2600,12 +2596,20 @@ func (s *server) handleJiraNotifications(w http.ResponseWriter, r *http.Request)
 		}
 		kept = append(kept, it)
 	}
-	items = kept
+	// Reminders join the same list (never filtered: they are the reviewer's
+	// own words), and snoozed rows move to `snoozed` until their moment.
+	reminders, err := s.tasks.manager.ListReminders(r.Context(), time.Now())
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	items, snoozed := splitBellItems(kept, reminders, time.Now())
 	st := s.tasks.manager.JiraNotifyStatus()
 	out := map[string]any{
 		"ok":         true,
 		"configured": st.Configured,
 		"items":      items,
+		"snoozed":    snoozed,
 		"hidden":     hidden,
 		"runId":      s.tasks.manager.JiraInboxRunID(),
 	}

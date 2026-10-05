@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/reindert-vetter/tembed"
@@ -26,6 +28,15 @@ import (
 //	{"kind":"read","id":"…"}    — the reviewer opened (or explicitly ticked) one notification
 //	{"kind":"read_all"}         — the reviewer's "Alles gelezen maken" bulk action
 //	{"kind":"unread","id":"…"}  — the reviewer marked one notification unread again
+//	{"kind":"snooze","id":"…","option":"…"} — hide one notification/reminder until
+//	                              tomorrow_8/next_monday_8/days_7, or "clear" to lift it
+//	{"kind":"reminder_add","text":"…","option":"…"} — a new reminder, visible
+//	                              "now" or at one of the three snooze moments
+//	{"kind":"reminder_delete","id":"…"} — remove a reminder
+//
+// A reminder lives in the same read-model and the same bell, its id prefixed
+// "rem:" (jiranotify.ReminderPrefix); read/unread/snooze route on that prefix
+// inside their Activity, so the workflow branches only on `kind`.
 //
 // One Signal name rather than two because tembed's WaitSignal takes exactly one
 // name; branching on a payload that comes straight out of the recorded history
@@ -63,8 +74,33 @@ type JiraNotifyInput struct{}
 // ID required), "read_all" (every currently unread row, no ID) or "unread"
 // (one notification back to unread, ID required).
 type JiraNotifySignal struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Option string `json:"option,omitempty"`
+	Text   string `json:"text,omitempty"`
+}
+
+// ReminderNow is reminder_add's extra option on top of the three snooze
+// moments: visible straight away.
+const ReminderNow = "now"
+
+// reminderTextMax caps a reminder's text (validated in the signal forwarder).
+const reminderTextMax = 500
+
+// jiraSnoozeArg is snoozeJiraNotification's input: Until zero = lift it.
+type jiraSnoozeArg struct {
+	ID    string    `json:"id"`
+	Until time.Time `json:"until"`
+	Now   time.Time `json:"now"`
+}
+
+// reminderAddArg is addReminder's input. ID comes from the recorded clock
+// (w.Now()), so replay rebuilds the same id.
+type reminderAddArg struct {
+	ID        string    `json:"id"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"createdAt"`
+	VisibleAt time.Time `json:"visibleAt"`
 }
 
 // jiraNotifyResult is the small summary the refresh Activity returns, so the
@@ -108,6 +144,43 @@ func jiraInboxWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 			continue
 		}
+		if sig.Kind == "snooze" {
+			now := w.Now()
+			arg := jiraSnoozeArg{ID: sig.ID, Now: now}
+			if sig.Option != SnoozeClear {
+				until, ok := snoozeUntil(now.In(time.Local), sig.Option)
+				if !ok {
+					continue
+				}
+				arg.Until = until
+			}
+			if err := w.ExecuteActivity("snoozeJiraNotification", arg, nil); err != nil {
+				return nil, fmt.Errorf("snooze jira notification: %w", err)
+			}
+			continue
+		}
+		if sig.Kind == "reminder_add" {
+			now := w.Now()
+			visible := now
+			if sig.Option != ReminderNow {
+				until, ok := snoozeUntil(now.In(time.Local), sig.Option)
+				if !ok {
+					continue
+				}
+				visible = until
+			}
+			arg := reminderAddArg{ID: fmt.Sprintf("%d", now.UnixNano()), Text: sig.Text, CreatedAt: now, VisibleAt: visible}
+			if err := w.ExecuteActivity("addReminder", arg, nil); err != nil {
+				return nil, fmt.Errorf("add reminder: %w", err)
+			}
+			continue
+		}
+		if sig.Kind == "reminder_delete" {
+			if err := w.ExecuteActivity("deleteReminder", sig, nil); err != nil {
+				return nil, fmt.Errorf("delete reminder: %w", err)
+			}
+			continue
+		}
 		if sig.Kind == "read_all" {
 			if err := w.ExecuteActivity("markAllJiraNotificationsRead", sig, nil); err != nil {
 				return nil, fmt.Errorf("mark all jira notifications read: %w", err)
@@ -147,6 +220,39 @@ func (m *TaskManager) registerJiraNotifyActivities(engine *tembed.Engine) {
 			return nil, nil
 		}
 		return nil, m.jiranotify.MarkUnread(ctx, sig.ID)
+	})
+	engine.RegisterActivity("snoozeJiraNotification", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg jiraSnoozeArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.jiranotify == nil || arg.ID == "" {
+			return nil, nil
+		}
+		if arg.Until.IsZero() {
+			return nil, m.jiranotify.Unsnooze(ctx, arg.ID, arg.Now)
+		}
+		return nil, m.jiranotify.Snooze(ctx, arg.ID, arg.Until)
+	})
+	engine.RegisterActivity("addReminder", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg reminderAddArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.jiranotify == nil {
+			return nil, nil
+		}
+		return nil, m.jiranotify.AddReminder(ctx, arg.ID, arg.Text, arg.CreatedAt, arg.VisibleAt)
+	})
+	engine.RegisterActivity("deleteReminder", func(ctx context.Context, in []byte) ([]byte, error) {
+		var sig JiraNotifySignal
+		if err := json.Unmarshal(in, &sig); err != nil {
+			return nil, err
+		}
+		if m.jiranotify == nil || !jiranotify.IsReminderID(sig.ID) {
+			return nil, nil
+		}
+		return nil, m.jiranotify.DeleteReminder(ctx, sig.ID)
 	})
 	engine.RegisterActivity("markAllJiraNotificationsRead", func(ctx context.Context, in []byte) ([]byte, error) {
 		if m.jiranotify == nil {
@@ -216,6 +322,58 @@ func (m *TaskManager) ListJiraNotifications(ctx context.Context, limit int) ([]j
 		return nil, nil
 	}
 	return m.jiranotify.List(ctx, limit)
+}
+
+// ListReminders returns every reminder as a bell item. READ-only.
+func (m *TaskManager) ListReminders(ctx context.Context, now time.Time) ([]jiranotify.Item, error) {
+	if m.jiranotify == nil {
+		return nil, nil
+	}
+	return m.jiranotify.Reminders(ctx, now)
+}
+
+// splitBellItems merges the notifications and reminders into what the bell
+// shows now (newest first) and what is snoozed (soonest wake-up first).
+// Waking up is this read-side check only — no write. Pure, for the test.
+func splitBellItems(notes, reminders []jiranotify.Item, now time.Time) (visible, snoozed []jiranotify.Item) {
+	n := now.UTC().Format(time.RFC3339)
+	visible, snoozed = []jiranotify.Item{}, []jiranotify.Item{}
+	for _, list := range [][]jiranotify.Item{notes, reminders} {
+		for _, it := range list {
+			if it.SnoozedUntil != "" && it.SnoozedUntil > n {
+				snoozed = append(snoozed, it)
+				continue
+			}
+			it.SnoozedUntil = ""
+			visible = append(visible, it)
+		}
+	}
+	sort.SliceStable(visible, func(i, j int) bool { return visible[i].At > visible[j].At })
+	sort.SliceStable(snoozed, func(i, j int) bool { return snoozed[i].SnoozedUntil < snoozed[j].SnoozedUntil })
+	return visible, snoozed
+}
+
+// validJiraNotifySignal normalises/validates a jira_notify body from the UI:
+// only what the bell may do is passed on. ok=false → 400.
+func validJiraNotifySignal(body JiraNotifySignal) (JiraNotifySignal, bool) {
+	id := strings.TrimSpace(body.ID)
+	switch body.Kind {
+	case "read", "unread":
+		return JiraNotifySignal{Kind: body.Kind, ID: id}, id != ""
+	case "read_all":
+		return JiraNotifySignal{Kind: "read_all"}, true
+	case "snooze":
+		ok := id != "" && validSnoozeOption(body.Option)
+		return JiraNotifySignal{Kind: "snooze", ID: id, Option: body.Option}, ok
+	case "reminder_add":
+		text := strings.TrimSpace(body.Text)
+		ok := text != "" && len(text) <= reminderTextMax && body.Option != SnoozeClear &&
+			(body.Option == ReminderNow || validSnoozeOption(body.Option))
+		return JiraNotifySignal{Kind: "reminder_add", Text: text, Option: body.Option}, ok
+	case "reminder_delete":
+		return JiraNotifySignal{Kind: "reminder_delete", ID: id}, jiranotify.IsReminderID(id)
+	}
+	return JiraNotifySignal{Kind: "refresh"}, true
 }
 
 // EnsureJiraInbox starts (or reuses) the single jira_inbox Execution and, once

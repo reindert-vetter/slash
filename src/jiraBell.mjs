@@ -18,11 +18,9 @@
 // just-read grace period live in src/jiraNotifyActions.mjs, which both bells
 // import (Reindert: "gebruik die van de rest. laat het 1 code zijn .mjs ofzo").
 //
-// The ONE new rule for this rollout, which overview.mjs's own bell does NOT
-// have: the icon renders NOTHING at all while there are zero notifications —
-// `jira.length > 0` gates it, regardless of read/unread — so a reviewer who
-// has never had a Jira notification never sees a dead bell that only opens
-// to "Geen notificaties." on these two pages. Confirmed with Reindert.
+// The icon used to render nothing while there were zero notifications; since
+// reminders (bellReminders.mjs) can be created from every bell, it is now
+// always shown — see jiraBellButton.
 //
 // Marking a row unread again IS available here (Reindert: "laat meldingen ook
 // ongelezen kunnen zetten"), but as an explicit per-row button next to the
@@ -34,13 +32,15 @@ import { t } from './i18n.mjs'
 import { avatarHTML } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
-import { initSelfUpdate, selfUpdateNeedsAttention, selfUpdateHasSomething, selfUpdateSection } from './selfUpdate.mjs'
+import { createBellReminders } from './bellReminders.mjs'
+import { initSelfUpdate, selfUpdateNeedsAttention, selfUpdateSection } from './selfUpdate.mjs'
 
 // bell — this module's own small reactive store, independent of whichever
 // page's `state`/`ui` mounts it.
 const bell = reactive({
   jira: [],
   jiraHidden: 0,
+  snoozed: [], // snoozed notifications + pending reminders (bellReminders.mjs)
   jiraRunId: '',
   jiraUnreadOnly: true,
   open: false,
@@ -69,6 +69,7 @@ async function loadJiraNotifications() {
     bell.jiraRunId = body.runId || ''
     bell.jira = Array.isArray(body.items) ? body.items : []
     bell.jiraHidden = Number(body.hidden) || 0
+    bell.snoozed = Array.isArray(body.snoozed) ? body.snoozed : []
     pruneJiraRespite(bell.jira)
   } catch (err) {
     // Keep whatever was already shown — a transient failure must never blank
@@ -78,20 +79,24 @@ async function loadJiraNotifications() {
 
 // The three writes this bell does, bound to its own `bell` store — one shared
 // implementation (src/jiraNotifyActions.mjs), identical to the overview bell's.
-const {
-  markRead: markJiraRead,
-  markUnread: markJiraUnread,
-  markAllRead: markAllJiraRead,
-} = createJiraNotifyActions({
+const notifyActions = createJiraNotifyActions({
   getItems: () => bell.jira,
   setItems: (list) => {
     bell.jira = list
+  },
+  getSnoozed: () => bell.snoozed,
+  setSnoozed: (list) => {
+    bell.snoozed = list
   },
   getRunId: () => bell.jiraRunId,
   setRunId: (id) => {
     bell.jiraRunId = id
   },
+  reload: () => loadJiraNotifications(),
 })
+const { markRead: markJiraRead, markUnread: markJiraUnread, markAllRead: markAllJiraRead } = notifyActions
+// Reminders + snoozing — the same shared rendering as overview.mjs's bell.
+const reminders = createBellReminders(notifyActions, () => bell.snoozed)
 
 function closeJiraBell() {
   bell.open = false
@@ -175,6 +180,7 @@ function jiraAvatarMark(n) {
 }
 
 function jiraRow(n) {
+  if (n.kind === 'reminder') return reminders.reminderRow(n)
   const icon = n.issueIconUrl ? html`<img src="${n.issueIconUrl}" alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0" />`.key('icon') : ''
   const groupNote =
     n.groupSize > 1 && n.otherActor
@@ -223,9 +229,11 @@ function jiraRow(n) {
         <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-zinc-500">${(n.issueKey ? n.issueKey + ' • ' : '') + (n.issueStatus || n.actor)}</p>
         <div class="contents">${() => groupNote}</div>
         <div class="contents">${() => preview}</div>
+        ${reminders.snoozeOptions(n)}
       </div>
       <div class="flex shrink-0 items-center gap-2 self-start pt-0.5">
         <div class="contents">${() => (n.unread ? jiraMarkReadButton(n) : jiraMarkUnreadButton(n))}</div>
+        ${reminders.snoozeButton(n)}
         ${() => jiraUnreadMark(n)}
       </div>
     </a>
@@ -280,8 +288,9 @@ function jiraBellPanel() {
         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-400"
           >${() => jiraUnreadCount() + ' ' + t('ongelezen')}</span
         >
-        ${jiraUnreadToggle()} ${jiraMarkAllReadButton()}
+        ${jiraUnreadToggle()} ${jiraMarkAllReadButton()} ${reminders.addButton()}
       </div>
+      ${reminders.composer()}
       ${jiraHiddenNote()}
       <div class="max-h-96 overflow-y-auto">
         ${() =>
@@ -291,19 +300,17 @@ function jiraBellPanel() {
                 ${() => (bell.jira.length ? t('Alles gelezen.') : t('Geen notificaties.'))}
               </p>`.key('jira-bell:empty')}
       </div>
+      ${reminders.snoozedSection()}
     </div>
   `.key('jira-bell:' + (bell.jiraUnreadOnly ? 'unread' : 'all') + ':' + rows.map((n) => n.id + (n.unread ? '!' : '')).join(','))
 }
 
-// jiraBellButton — the header icon. Renders NOTHING (an empty, keyless
-// wrapper) while `bell.jira` is empty — see this file's own header comment
-// for why: "alleen als er iets te klikken is", confirmed as "at least one
-// notification exists, read or unread" rather than "at least one unread".
+// jiraBellButton — the header icon. ALWAYS rendered now: it used to hide
+// while `bell.jira` was empty ("alleen als er iets te klikken is"), but every
+// bell can now create a reminder (bellReminders.mjs, "algemene reminders, dus
+// overal"), so there is always something to click.
 export function jiraBellButton(cls = 'h-7 w-7') {
-  return html`<div class="contents">
-    ${() =>
-      bell.jira.length || selfUpdateHasSomething()
-        ? html`<div class="relative" data-testid="jira-bell-wrapper">
+  return html`<div class="relative" data-testid="jira-bell-wrapper">
             <button
               type="button"
               data-testid="jira-bell-button"
@@ -328,8 +335,6 @@ export function jiraBellButton(cls = 'h-7 w-7') {
               ${() => jiraBellDot()}
             </button>
             <div class="contents">${() => (bell.open ? jiraBellPanel() : '')}</div>
-          </div>`.key('jira-bell:present')
-        : html`<span class="hidden" data-testid="jira-bell-absent"></span>`.key('jira-bell:absent')}
   </div>`
 }
 
