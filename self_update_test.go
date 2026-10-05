@@ -265,3 +265,12 @@ func TestSelfUpdateWorkflowEndToEnd(t *testing.T) {
 		t.Fatalf("same state after skip must be skipped without a build, got %+v %v", res, err)
 	}
 }
+
+func TestShouldExecRestart(t *testing.T) {
+	if shouldExecRestart("A", "A") || shouldExecRestart("", "A") {
+		t.Fatal("same or unknown disk revision must not exec (restart loop)")
+	}
+	if !shouldExecRestart("B", "A") {
+		t.Fatal("a different disk revision must exec")
+	}
+}

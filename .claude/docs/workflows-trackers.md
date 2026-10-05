@@ -863,6 +863,12 @@ commit only. Backend `self_update.go`, frontend `src/selfUpdate.mjs`.
   closed by the exec and the new process binds 8765 again. The small window
   between the idle check and the exec is accepted — a run that starts in it is
   replayed by tembed after the restart like after any crash.
+- **No restart loop:** `syscall.Exec` resets the in-memory `execd` flag, and an
+  `applied` run stays `applied` forever, so the tick also requires
+  `shouldExecRestart(binaryRevision(exe), RunningRev)`: exec only when the
+  binary ON DISK carries a different `vcs.revision` than the running one. A
+  manual `go build` (revision never equals the old target) or a finished
+  self-update therefore cannot re-exec every ~56s.
 - **Status is derived, not stored:** `GET /api/update/status`
   (`deriveSelfUpdateStatus`) reads the latest `self_update` run's status and
   history — `checking`/`building`/`notice`/`waiting`/`restarting`/`failed`/

@@ -22,6 +22,7 @@ package main
 
 import (
 	"context"
+	"debug/buildinfo"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -763,6 +764,12 @@ func (m *TaskManager) selfUpdateTick(now time.Time) {
 		if _, err := os.Stat(u.env.ExePath); err != nil {
 			return
 		}
+		// exec resets execd (same PID, fresh process), so the applied run alone
+		// would loop forever: only restart while the binary on disk really is
+		// another build than the one running (never after a manual go build).
+		if !shouldExecRestart(binaryRevision(u.env.ExePath), u.env.RunningRev) {
+			return
+		}
 		if !c.execd.CompareAndSwap(false, true) {
 			return
 		}
@@ -775,6 +782,27 @@ func (m *TaskManager) selfUpdateTick(now time.Time) {
 			c.execd.Store(false)
 		}
 	}
+}
+
+// binaryRevision returns the vcs.revision stamped into the binary at path
+// ("" when unreadable or unstamped).
+func binaryRevision(path string) string {
+	bi, err := buildinfo.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, s := range bi.Settings {
+		if s.Key == "vcs.revision" {
+			return s.Value
+		}
+	}
+	return ""
+}
+
+// shouldExecRestart: restart only into a binary whose revision is known and
+// differs from the running one.
+func shouldExecRestart(diskRev, runningRev string) bool {
+	return diskRev != "" && diskRev != runningRev
 }
 
 func shortSHA(s string) string {
