@@ -701,23 +701,19 @@ comment about a file no longer in the PR ("verouderd — code verdwenen", see
 an unrelated PHP test diff — its row hidden because a comment item scores
 "resolved == approved" (`blockApproveCount`), the card previewed anyway.
 
-**Product decision (explicit): the preview stays equal to the `↓` target even
-when that target is a comment-index item.** So the card below the diff always
-means "this is the next stop", never "the next diff" — the alternative
-(previewing only real diff blocks) was rejected precisely because it would make
-the two disagree again, deliberately this time. Test:
-`tests/preview-next-visible-row.spec.mjs`.
-
-**A comment preview gives up height, the diff above it does not.** A block's
-own look-ahead preview collapses to its header (`diff-card.md`), but a comment
-item's `commentDetailCard` preview renders its whole thread. It used to be
-`shrink-0`, so a long thread kept its full height and squeezed the selected
-diff card down to its `min-h` floor, or to nothing at all on a short viewport.
-Reviewer report: "laat het dan niet beperkt worden door de blok eronder". As a
-non-merged preview it is now `min-h-0 shrink-[9999] overflow-hidden`: it
-absorbs the whole shortfall of `block-column` (clipped at its bottom edge)
-before the diff card gives up a single row. Test:
-`tests/comment-preview-yields-height.spec.mjs`.
+**Product decision (explicit, reversed): a comment-index item is never a
+look-ahead preview.** The preview used to stay equal to the `↓` target even
+when that was a comment item. Reviewer report (PR 14078): under a TEST block a
+big comment card about a *different* file showed up, read as "comments under
+this block". So `previewIndexAfter` returns `null` when the next visible row is
+`kind:'comment'` — no preview at all, deliberately NOT a skip to the next code
+block (that would again make the preview differ from the `↓` target). `↓` still
+lands on the comment row. The `commentDetailCard` preview branch in `home.mjs`
+and its `shrink-[9999]` height-yield styling are now unreachable for a preview
+(the selected comment item renders in the merged comment row instead); the old
+"A comment preview gives up height" behaviour no longer applies. Tests:
+`tests/preview-next-visible-row.spec.mjs`,
+`tests/comment-preview-yields-height.spec.mjs` (now asserts no preview).
 
 **Directly next to it** (not at the right screen edge) sits the **Underlying
 code** card (`RelatedPanel.mjs`'s default export, `data-testid=related-code`,

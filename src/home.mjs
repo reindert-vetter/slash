@@ -4310,10 +4310,15 @@ function stepVisibleFrom(from, dir) {
 // which case there is nothing to preview. Product decision (explicit): the
 // preview stays equal to the ↓ target even when that target is a comment-index
 // item, so the card below the diff always means "this is the next stop" rather
-// than "the next diff".
+// than "the next diff" — superseded: a comment-index item is never previewed.
 function previewIndexAfter(sel) {
   const next = stepVisibleFrom(sel, 1)
-  return next === sel ? null : next
+  if (next === sel) return null
+  // Never preview a comment-index item under a diff (reviewer decision, see
+  // detail-layout.md): no preview at all, NOT a skip to the next code block.
+  // ↓ still lands on that comment row.
+  if (state.blocks[next] && state.blocks[next].kind === 'comment') return null
+  return next
 }
 
 // lastVisibleIndex is the mirror-image scan of stepVisibleSelected: the last
