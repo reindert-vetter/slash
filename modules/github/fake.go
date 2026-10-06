@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Fake is an in-memory Client for tests and local (no-gh) runs. It records
@@ -50,9 +51,11 @@ type Fake struct {
 	lastEndLine   int
 	lastSide      string
 
-	lastReviewEvent string
-	lastReviewBody  string
-	reviewSubmitted int
+	lastReviewEvent  string
+	lastReviewBody   string
+	reviewSubmitted  int
+	submitReviewErrs []submitReviewErr // set by SetSubmitReviewErrs
+	reviewLanded     bool              // a review counts as landed on GitHub (OwnReviewSince answers true)
 
 	collaborators    []Collaborator
 	currentUser      Collaborator // returned by CurrentUser (SetCurrentUser seeds it)
@@ -495,12 +498,57 @@ func (f *Fake) MarkFileViewed(_ context.Context, pr int, path string, viewed boo
 	return nil
 }
 
+// submitReviewErr is one scripted SubmitReview failure; landed says whether
+// the review should nevertheless count as having reached GitHub (a lost
+// answer to a POST that succeeded).
+type submitReviewErr struct {
+	err    error
+	landed bool
+}
+
+// SetSubmitReviewErrs makes the next len(errs) SubmitReview calls fail with
+// these errors, in order (tests only). The review does not land.
+func (f *Fake) SetSubmitReviewErrs(errs ...error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range errs {
+		f.submitReviewErrs = append(f.submitReviewErrs, submitReviewErr{err: e})
+	}
+}
+
+// SetSubmitReviewErrLanded makes the next SubmitReview call return err even
+// though the review did land on GitHub (tests only).
+func (f *Fake) SetSubmitReviewErrLanded(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.submitReviewErrs = append(f.submitReviewErrs, submitReviewErr{err: err, landed: true})
+}
+
+// OwnReviewSince reports whether a scripted SubmitReview call landed (either a
+// success or a SetSubmitReviewErrLanded failure).
+func (f *Fake) OwnReviewSince(_ context.Context, _ int, _ string, _ time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reviewLanded, nil
+}
+
 func (f *Fake) SubmitReview(_ context.Context, pr int, event, body string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reviewSubmitted++
+	if len(f.submitReviewErrs) > 0 {
+		e := f.submitReviewErrs[0]
+		f.submitReviewErrs = f.submitReviewErrs[1:]
+		if e.landed {
+			f.reviewLanded = true
+			f.lastReviewEvent = event
+			f.lastReviewBody = body
+		}
+		return e.err
+	}
+	f.reviewLanded = true
 	f.lastReviewEvent = event
 	f.lastReviewBody = body
-	f.reviewSubmitted++
 	return nil
 }
 
@@ -518,7 +566,8 @@ func (f *Fake) LastReviewBody() string {
 	return f.lastReviewBody
 }
 
-// ReviewSubmittedCount returns how many reviews have been submitted.
+// ReviewSubmittedCount returns how many SubmitReview calls were made (failed
+// attempts scripted via SetSubmitReviewErrs included).
 func (f *Fake) ReviewSubmittedCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

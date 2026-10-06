@@ -694,6 +694,12 @@ request.
 - **No best-effort swallow** here, unlike `postGithubComment`: a failed submit
   must reach the reviewer, so Activity failures propagate and
   `StartSubmitReview` turns a failed run into an error.
+- **Short in-Activity retry** (`submitReviewWithRetry`, 2 extra attempts after
+  2s/5s): a transient failure — including gh's `unexpected end of JSON input`,
+  GitHub answering an error status with an empty body (PR 14046) — is retried,
+  but only after `OwnReviewSince` (read-only) confirms the review did NOT land
+  anyway, so a lost answer never becomes a double approval. Kept out of
+  `isRetryablePostError`, whose comment ladder has no such landed-check.
 - Tests: `submit_review_test.go`.
 
 ## Draft → ready for review + reviewer picker (`ready_for_review` + `modules/reviewerusage`)

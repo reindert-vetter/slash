@@ -178,6 +178,12 @@ type Client interface {
 	// REQUEST_CHANGES is enforced by the caller (GitHub itself rejects a
 	// bodyless request-changes review), not by this method.
 	SubmitReview(ctx context.Context, pr int, event, body string) error
+	// OwnReviewSince reports whether the authenticated user has a review on
+	// pr in the given state ("APPROVED" or "CHANGES_REQUESTED") submitted at
+	// or after since. Read-only; the submit_review Activity uses it to tell
+	// "the POST failed" apart from "the POST landed but its answer got lost"
+	// before it retries, so a retry can never double-submit a review.
+	OwnReviewSince(ctx context.Context, pr int, state string, since time.Time) (bool, error)
 	// ListCollaborators returns the repo's collaborators (candidate reviewers).
 	ListCollaborators(ctx context.Context) ([]Collaborator, error)
 	// MarkReadyForReview flips a draft PR to "ready for review".
@@ -885,6 +891,31 @@ func (m *Module) SubmitReview(ctx context.Context, pr int, event, body string) e
 		args...,
 	)
 	return err
+}
+
+// OwnReviewSince implements the Client method of the same name.
+func (m *Module) OwnReviewSince(ctx context.Context, pr int, state string, since time.Time) (bool, error) {
+	me, err := m.CurrentUser(ctx)
+	if err != nil {
+		return false, err
+	}
+	var reviews []struct {
+		User        ghUser `json:"user"`
+		State       string `json:"state"`
+		SubmittedAt string `json:"submitted_at"`
+	}
+	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/pulls/%d/reviews", m.repo, pr), &reviews); err != nil {
+		return false, err
+	}
+	for _, r := range reviews {
+		if !strings.EqualFold(r.User.Login, me.Login) || r.State != state {
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339, r.SubmittedAt); err == nil && !at.Before(since) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // reReviewerLogin restricts a reviewer login to GitHub's allowed username

@@ -2888,7 +2888,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.gh == nil {
 			return nil, fmt.Errorf("submit review: no github client")
 		}
-		return nil, m.ghFor(arg.Repo).SubmitReview(ctx, arg.PR, arg.Event, arg.Body)
+		return nil, submitReviewWithRetry(ctx, m.ghFor(arg.Repo), arg)
 	})
 
 	// Activities for ready_for_review (write, workflow-driven): flip a draft PR
@@ -4427,6 +4427,65 @@ func submitReviewWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		return nil, fmt.Errorf("submit review: %w", err)
 	}
 	return json.Marshal(map[string]any{"pr": in.PR, "event": in.Event})
+}
+
+// submitReviewRetryDelays is the short, in-Activity backoff for a review
+// submission that failed transiently: len+1 attempts in total. Deliberately
+// seconds, not postRetryDelays' minutes — the reviewer is waiting on this
+// request in the UI. A var so a test can shrink it.
+var submitReviewRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// isRetryableReviewError reports whether a failed review submission is worth
+// another attempt. On top of isRetryablePostError's transient set it accepts
+// gh's "unexpected end of JSON input": GitHub answered an error status with an
+// empty body, which gh cannot parse (the status itself is lost). Seen on PR
+// 14046 for two POSTs a few minutes apart while GETs kept working. That error
+// is ambiguous — the write may or may not have happened — which is why
+// submitReviewWithRetry checks OwnReviewSince before every retry. It stays out
+// of isRetryablePostError on purpose: that one drives the comment-post ladder,
+// which has no such landed-check and could double-post.
+func isRetryableReviewError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isRetryablePostError(err) ||
+		strings.Contains(strings.ToLower(err.Error()), "unexpected end of json input")
+}
+
+// submitReviewWithRetry submits the review and, on a transient failure,
+// retries through submitReviewRetryDelays — but first asks GitHub (read-only)
+// whether the review landed anyway, so a lost answer never becomes a second
+// approval. Runs inside the submitGithubReview Activity, so the clock and the
+// sleeps do not touch workflow determinism.
+func submitReviewWithRetry(ctx context.Context, gh github.Client, arg SubmitReviewInput) error {
+	state := map[string]string{"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED"}[arg.Event]
+	since := time.Now().Add(-time.Minute) // margin for clock skew with GitHub
+	var err error
+	for attempt := 0; ; attempt++ {
+		if err = gh.SubmitReview(ctx, arg.PR, arg.Event, arg.Body); err == nil {
+			return nil
+		}
+		if !isRetryableReviewError(err) {
+			return err
+		}
+		if state != "" {
+			if landed, lerr := gh.OwnReviewSince(ctx, arg.PR, state, since); lerr == nil && landed {
+				return nil
+			}
+		}
+		if attempt >= len(submitReviewRetryDelays) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(submitReviewRetryDelays[attempt]):
+		}
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "unexpected end of json input") {
+		return fmt.Errorf("GitHub answered with an error but no explanation (empty response body), %d attempts; the review was not placed — probably a temporary GitHub problem, retrying is safe: %w", len(submitReviewRetryDelays)+1, err)
+	}
+	return err
 }
 
 // rejectSelfReview reports an error when the PR's own author and the
