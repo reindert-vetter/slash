@@ -3226,8 +3226,11 @@ function jiraBellDot() {
   return html`<span
     data-testid="jira-bell-dot"
     title="${() => (selfUpdateNeedsAttention() ? t('Nieuwe versie van slash') + ' · ' : '') + jiraUnreadCount() + ' ' + t('ongelezen')}"
-    class="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-indigo-500 ring-2 ring-white dark:bg-indigo-400 dark:ring-zinc-950"
-  ></span>`
+    class="absolute -right-1.5 -top-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-semibold leading-none text-white ring-2 ring-white dark:bg-indigo-500 dark:ring-zinc-950"
+  >${() => {
+    const n = jiraUnreadCount() + (selfUpdateNeedsAttention() ? 1 : 0)
+    return n > 99 ? '99+' : String(n)
+  }}</span>`
 }
 
 // jiraMarkAllReadButton — the "in 1 keer" bulk action (Reindert: "ik wil ook

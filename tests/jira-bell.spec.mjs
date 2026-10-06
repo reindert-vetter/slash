@@ -48,6 +48,7 @@ test.describe('PR overview — Jira bell', () => {
     const bell = page.locator('[data-testid="jira-bell-button"]')
     await expect(bell).toBeVisible()
     await expect(page.locator('[data-testid="jira-bell-dot"]')).toBeVisible()
+    await expect(page.locator('[data-testid="jira-bell-dot"]')).toHaveText('2')
 
     // Closed by default.
     await expect(page.locator('[data-testid="jira-bell-panel"]')).toHaveCount(0)
