@@ -419,7 +419,7 @@ test.describe('PR Review Tree — command palette', () => {
     expect(r.allDone).toEqual({ approved: true, partly: false })
   })
 
-  test('Open GitHub opens a submenu of two targets; Esc backs out to the root', async ({
+  test('Open GitHub opens a submenu with the PR page; Esc backs out to the root', async ({
     page,
   }) => {
     await page.goto('/pr/12903')
@@ -432,17 +432,18 @@ test.describe('PR Review Tree — command palette', () => {
 
     // Choosing "Open GitHub" swaps the list to its two children (the menu stays open).
     await page.getByTestId('command-input').fill('github')
-    await expect(rows).toHaveCount(1)
-    await expect(rows.first()).toContainText('Open GitHub')
-    await page.keyboard.press('Enter')
+    // The direct "Open regel op GitHub" item sits next to the submenu parent.
+    await expect(rows).toHaveCount(2)
+    await expect(rows.first()).toContainText('Open regel op GitHub')
+    await rows.nth(1).click()
 
     await expect(page.getByTestId('command-menu')).toBeVisible()
     // The submenu has its own pinned "Sluit menu" first (withClose), same as
     // the root list.
     await expect(rows).toHaveCount(3)
     await expect(rows.nth(0)).toContainText('Sluit menu')
-    await expect(rows.nth(1)).toContainText('Regel in Files changed')
-    await expect(rows.nth(2)).toContainText('PR-pagina')
+    await expect(rows.nth(1)).toContainText('PR-pagina')
+    await expect(rows.nth(2)).toContainText('Kopieer GitHub-link')
     // The submenu clears the query and re-focuses the input.
     await expect(page.getByTestId('command-input')).toHaveValue('')
     await expect(page.getByTestId('command-input')).toBeFocused()

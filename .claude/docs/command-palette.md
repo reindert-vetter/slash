@@ -838,10 +838,11 @@ this block" (list), "Approve these lines" (group), "Approve this line" (line),
 "Approve this call" (call), and "Retract approval of …" when already approved.
 See `.claude/docs/approval.md`.
 
-**Open GitHub** has two children: *Line in Files changed* (`openGithubLine` —
-the anchor `#diff-<sha256(path)><R|L><line>`, line = the `start` of the code
-side plus the active unit's offset; new side `R`, removed block `L`) and *PR
-page*.
+**Open regel op GitHub** is a direct item (no submenu) right after "Kopieer
+deze regel": `openGithubLine` — the anchor `#diff-<sha256(path)><R|L><line>`, line = the `start` of the code
+side plus the active unit's offset; new side `R`, removed block `L`. The
+**Open GitHub** submenu after it holds *PR page* and *Kopieer GitHub-link* (copies the same line URL,
+`githubLineUrl`, via `copyReviewSummary`).
 
 ## A multi-row selection replaces the block palette (`rangeCommandsFor`)
 

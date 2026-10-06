@@ -14310,6 +14310,15 @@ const COMMANDS = withClose([
     run: () => copySelectedCode(),
   },
   {
+    // Direct pick (no submenu): the PR's Files-changed tab on the active line.
+    id: 'github-line',
+    label: t('Open regel op GitHub'),
+    hint: 'github',
+    run: () => openGithubLine(),
+    // The description block is not in Files changed.
+    when: () => !isPrDescriptionBlock(focusedBlock()),
+  },
+  {
     id: 'github',
     label: t('Open GitHub'),
     hint: 'github',
@@ -14318,18 +14327,19 @@ const COMMANDS = withClose([
     // there too (withClose), same as every other submenu.
     children: withClose([
       {
-        id: 'github-line',
-        label: t('Regel in Files changed'),
-        hint: 'github',
-        run: () => openGithubLine(),
-        // The description block is not in Files changed.
-        when: () => !isPrDescriptionBlock(focusedBlock()),
-      },
-      {
         id: 'github-pr',
         label: t('PR-pagina'),
         hint: 'github',
         run: () => window.open(state.prUrl || GITHUB_PR, '_blank'),
+      },
+      {
+        id: 'github-copy-link',
+        label: t('Kopieer GitHub-link'),
+        hint: 'github copy kopieer link',
+        // Same URL "Open regel op GitHub" opens; same clipboard mechanism and
+        // word feedback as "Kopieer deze regel".
+        run: async () => copyReviewSummary(await githubLineUrl()),
+        when: () => !isPrDescriptionBlock(focusedBlock()),
       },
     ]),
   },
@@ -14557,6 +14567,14 @@ function githubFileLine() {
 // user gesture instead of being blocked as a late async open.
 async function openGithubLine() {
   const w = window.open('about:blank', '_blank')
+  const url = await githubLineUrl()
+  if (w) w.location = url
+  else window.open(url, '_blank')
+}
+
+// githubLineUrl — the Files-changed URL openGithubLine opens, also what
+// "Kopieer GitHub-link" copies.
+async function githubLineUrl() {
   const repo = 'plug-and-pay/plug-and-pay'
   const t = githubFileLine()
   let anchor = ''
@@ -14565,9 +14583,7 @@ async function openGithubLine() {
     const hex = [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('')
     anchor = `#diff-${hex}${t.side}${t.line}`
   }
-  const url = `https://github.com/${repo}/pull/${state.pr}/files${anchor}`
-  if (w) w.location = url
-  else window.open(url, '_blank')
+  return `https://github.com/${repo}/pull/${state.pr}/files${anchor}`
 }
 
 // rootCommandsFor returns the *raw* (function-labelled) command list for a
