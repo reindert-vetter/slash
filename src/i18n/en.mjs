@@ -117,6 +117,7 @@ export const EN = {
 
   // ── src/CommandMenu.mjs ─────────────────────────────────────────────────
   'Kies wat er met je comment gebeurt…': 'Choose what happens with your comment…',
+  'Je bent geen reviewer op deze PR…': "You're not a reviewer on this PR…",
   'Typ de reden voor afwijzing (verplicht)…': 'Type the reason for rejection (required)…',
   'Zoek een commando of schrijf direct een comment…': 'Search a command or write a comment directly…',
   "Geen commando's.": 'No commands.',
@@ -629,6 +630,8 @@ export const EN = {
   'Comment hiervan maken': 'Turn this into a comment',
   'Ignore ongedaan maken': 'Undo ignore',
   'Plaats comment': 'Post comment',
+  'Plaats toch inline (je wordt reviewer)': 'Post inline anyway (makes you a reviewer)',
+  'Plaats als algemene comment (geen reviewer)': 'Post as a general comment (not a reviewer)',
   'Claude commando': 'Claude command',
   'Laat Claude dit implementeren ({noun})': 'Let Claude implement this ({noun})',
   Jira: 'Jira',
@@ -642,6 +645,8 @@ export const EN = {
   'Zonder {earlier}': 'Without {earlier}',
   'Met {earlier}': 'With {earlier}',
   'Alleen mijn antwoord op GitHub': 'Only my reply on GitHub',
+  '{label} (je wordt reviewer)': '{label} (makes you a reviewer)',
+  'Alleen mijn antwoord als algemene comment (geen reviewer)': 'Only my reply as a general comment (not a reviewer)',
   'Ga terug': 'Go back',
   'Ga door': 'Continue',
   'Goedkeuren en ga naar overzicht': 'Approve and go to overview',

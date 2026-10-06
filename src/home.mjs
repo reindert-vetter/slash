@@ -147,6 +147,9 @@ import RelatedPanel, {
   claudeChatShadowWarning,
   sendPendingReply,
   pendingPublishInfo,
+  composeNeedsReviewerChoice,
+  pendingPublishNeedsReviewerChoice,
+  sendPendingAsPrWide,
   setReplyPublishMenuOpener,
   setCommentSelectRequest,
   needsPublishChoice,
@@ -9599,8 +9602,19 @@ function toggleIgnoreComment(c) {
 // skips the menu outright for an ordinary (non-conversion) composer. Keeping
 // this as a single function is what makes "a click runs the same function a
 // key runs" hold here too (see .claude/docs/mouse-navigation.md).
-async function runComposePost() {
-  await placeComment(state, commentTarget)
+//
+// `opts.reviewerChoiceMade` is set by the 'notReviewer' menu's own items: on a
+// PR where the reviewer is not a reviewer yet (composeNeedsReviewerChoice,
+// RelatedPanel.mjs), a new inline comment would put them in GitHub's Reviewers
+// sidebar for good, so the post is held and that menu asks first — inline
+// anyway (the default) or PR-wide (`opts.asPrWide`). See
+// NOT_REVIEWER_COMMANDS.
+async function runComposePost(opts = {}) {
+  if (!opts.reviewerChoiceMade && composeNeedsReviewerChoice(commentTarget)) {
+    openMenu('notReviewer')
+    return
+  }
+  await placeComment(state, commentTarget, { asPrWide: !!opts.asPrWide })
   pollWorkflows()
   // placeComment (RelatedPanel.mjs) already handed the keyboard back to
   // the diff (exitRelated) — re-align <main> on it, mirroring the same
@@ -9641,6 +9655,30 @@ const COMPOSE_COMMANDS = withClose([
       { id: 'compose-jira-subtask', label: t('Subtaak aanmaken'), hint: 'todo', run: () => {} },
       { id: 'compose-jira-task', label: t('Nieuwe taak aanmaken'), hint: 'todo', run: () => {} },
     ]),
+  },
+])
+
+// NOT_REVIEWER_COMMANDS — the question runComposePost asks before a NEW inline
+// comment reaches GitHub on a PR where the reviewer is not a reviewer yet:
+// GitHub turns an inline comment into a COMMENTED review, which lists its
+// author under Reviewers and can never be undone. "Plaats toch inline" is the
+// default (2nd item, defaultSel) — reviewer decision — so "type, Enter, Enter"
+// still places an ordinary inline comment; the PR-wide item posts the same
+// text without an anchor (its file:line on top), see placeComment's
+// opts.asPrWide. CommandMenu has no title row, so the labels themselves carry
+// the consequence, and the menu input's placeholder names the reason.
+const NOT_REVIEWER_COMMANDS = withClose([
+  {
+    id: 'not-reviewer-inline',
+    label: t('Plaats toch inline (je wordt reviewer)'),
+    hint: 'inline',
+    run: () => runComposePost({ reviewerChoiceMade: true }),
+  },
+  {
+    id: 'not-reviewer-prwide',
+    label: t('Plaats als algemene comment (geen reviewer)'),
+    hint: 'hele PR',
+    run: () => runComposePost({ reviewerChoiceMade: true, asPrWide: true }),
   },
 ])
 
@@ -9728,8 +9766,23 @@ function replyPublishCommandsFor() {
   // than shown with a misleading label: see pendingPublishInfo's own doc
   // comment. The reviewer's reply is then the only thing this menu can ever
   // offer to publish.
-  const items = [historyChoice('reply-publish-reply', t('Alleen mijn antwoord op GitHub'), 'reply')]
-  if (!isChatAnchor) items.push(historyChoice('reply-publish-thread', rootLabel, 'thread'))
+  // Publishing a still-local INLINE thread creates a new inline comment on
+  // GitHub — on a PR the reviewer doesn't review, that lists them under
+  // Reviewers for good (see NOT_REVIEWER_COMMANDS). Then the inline items say
+  // so and one more item posts only the typed reply PR-wide instead; the
+  // inline reply stays the default (reviewer decision).
+  const notReviewer = pendingPublishNeedsReviewerChoice()
+  const asReviewer = (label) => (notReviewer ? t('{label} (je wordt reviewer)', { label }) : label)
+  const items = [historyChoice('reply-publish-reply', asReviewer(t('Alleen mijn antwoord op GitHub')), 'reply')]
+  if (!isChatAnchor) items.push(historyChoice('reply-publish-thread', asReviewer(rootLabel), 'thread'))
+  if (notReviewer) {
+    items.push({
+      id: 'reply-publish-prwide',
+      label: t('Alleen mijn antwoord als algemene comment (geen reviewer)'),
+      hint: 'hele PR',
+      run: () => sendPendingAsPrWide(),
+    })
+  }
   return withClose(items)
 }
 
@@ -14539,6 +14592,7 @@ function rootCommandsFor(mode) {
   if (mode === 'reviewReject') return []
   if (mode === 'pr') return PR_COMMANDS
   if (mode === 'compose') return COMPOSE_COMMANDS
+  if (mode === 'notReviewer') return NOT_REVIEWER_COMMANDS
   return blockCommands()
 }
 
@@ -14863,7 +14917,7 @@ function resolveCommandsInner(query) {
   // The comment-kind menu (Enter/button on a filled composer): choose Claude /
   // Git / private / Jira. The ms.sub check above already handles its Jira
   // submenu, so we only reach here at the root list.
-  if (ms.mode === 'compose') return filterCommands(ms.commands, query)
+  if (ms.mode === 'compose' || ms.mode === 'notReviewer') return filterCommands(ms.commands, query)
   const list = filterCommands(ms.commands, query)
   const q = (query || '').trim()
   if (list.length === 0 && q) {
@@ -16735,8 +16789,9 @@ function isDescriptionMenu() {
 }
 
 function menuAnchor() {
-  // The comment-kind menu ('compose') anchors under the composer textarea.
-  if (ms.mode === 'compose') {
+  // The comment-kind menu ('compose') anchors under the composer textarea, and
+  // so does the not-a-reviewer question asked from that same composer.
+  if (ms.mode === 'compose' || ms.mode === 'notReviewer') {
     return (
       document.querySelector('[data-testid="comment-compose"]') ||
       document.querySelector('[data-testid="inline-comments"]')
@@ -16873,8 +16928,9 @@ function menuRegion() {
   // The comment-kind menu ('compose') sits over the composer itself; the
   // comment-scoped menu ('comment') sits over the expanded thread pane.
   // Both fall back to the whole inline-comments block if their own element
-  // isn't there yet (e.g. still mid-transition).
-  if (ms.mode === 'compose') {
+  // isn't there yet (e.g. still mid-transition). 'notReviewer' is asked from
+  // the composer too.
+  if (ms.mode === 'compose' || ms.mode === 'notReviewer') {
     return (
       document.querySelector('[data-testid="comment-composer"]') ||
       document.querySelector('[data-testid="inline-comments"]')

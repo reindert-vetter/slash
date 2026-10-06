@@ -188,6 +188,12 @@ type Client interface {
 	// is not (or no longer) a requested reviewer is a no-op on GitHub's side,
 	// never an error worth surfacing.
 	RemoveReviewer(ctx context.Context, pr int, login string) error
+	// ReviewerFacts reads, live, what decides whether login already shows up
+	// in pr's Reviewers sidebar on GitHub: the PR author, a personal or team
+	// review request that includes login, and any review login submitted.
+	// Read-only. Used to warn before an inline comment (which GitHub turns
+	// into a COMMENTED review) would newly put login on a PR as a reviewer.
+	ReviewerFacts(ctx context.Context, pr int, login string) (ReviewerFacts, error)
 	// CurrentUser returns the authenticated GitHub user (the local reviewer):
 	// their login and profile picture. Used to show "who am I" on the comments
 	// and replies written in this app, which carry no GitHub author of their own.
@@ -1028,6 +1034,90 @@ func (m *Module) RemoveReviewer(ctx context.Context, pr int, login string) error
 		"-f", "reviewers[]="+login,
 	)
 	return err
+}
+
+// ReviewerFacts is the answer of Client.ReviewerFacts for one login.
+type ReviewerFacts struct {
+	// Author is the PR author's login.
+	Author string `json:"author"`
+	// Requested: login is a requested reviewer, personally or through a
+	// requested team it is a member of.
+	Requested bool `json:"requested"`
+	// Reviewed: login has submitted at least one review (any state, a
+	// COMMENTED one included) on the PR.
+	Reviewed bool `json:"reviewed"`
+}
+
+// ReviewerFacts reads author, review requests and login's own reviews in one
+// GraphQL call. A team request counts when login is one of the team's members
+// (Team.members filtered by login; the exact login is compared afterwards,
+// since that filter is a substring search). See the Client interface doc.
+func (m *Module) ReviewerFacts(ctx context.Context, pr int, login string) (ReviewerFacts, error) {
+	if !reReviewerLogin.MatchString(login) {
+		return ReviewerFacts{}, fmt.Errorf("invalid login %q", login)
+	}
+	owner, name, ok := strings.Cut(m.repo, "/")
+	if !ok {
+		return ReviewerFacts{}, fmt.Errorf("invalid repo slug %q", m.repo)
+	}
+	const query = `query($o:String!,$n:String!,$pr:Int!,$me:String!){repository(owner:$o,name:$n){pullRequest(number:$pr){author{login} reviewRequests(first:100){nodes{requestedReviewer{__typename ... on User{login} ... on Team{members(query:$me,first:20){nodes{login}}}}}} reviews(author:$me,first:1){totalCount}}}}`
+	ctx, cancel := context.WithTimeout(ctx, cliTimeout) // see cliTimeout doc
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "api", "graphql",
+		"-f", "query="+query,
+		"-F", "o="+owner,
+		"-F", "n="+name,
+		"-F", "pr="+strconv.Itoa(pr),
+		"-f", "me="+login,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return ReviewerFacts{}, fmt.Errorf("gh api graphql reviewer facts: %w", err)
+	}
+	var res struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					Author struct {
+						Login string `json:"login"`
+					} `json:"author"`
+					ReviewRequests struct {
+						Nodes []struct {
+							RequestedReviewer struct {
+								Typename string `json:"__typename"`
+								Login    string `json:"login"`
+								Members  struct {
+									Nodes []struct {
+										Login string `json:"login"`
+									} `json:"nodes"`
+								} `json:"members"`
+							} `json:"requestedReviewer"`
+						} `json:"nodes"`
+					} `json:"reviewRequests"`
+					Reviews struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		return ReviewerFacts{}, fmt.Errorf("parse reviewer facts: %w", err)
+	}
+	p := res.Data.Repository.PullRequest
+	facts := ReviewerFacts{Author: p.Author.Login, Reviewed: p.Reviews.TotalCount > 0}
+	for _, n := range p.ReviewRequests.Nodes {
+		rr := n.RequestedReviewer
+		if strings.EqualFold(rr.Login, login) {
+			facts.Requested = true
+		}
+		for _, mem := range rr.Members.Nodes {
+			if strings.EqualFold(mem.Login, login) {
+				facts.Requested = true
+			}
+		}
+	}
+	return facts, nil
 }
 
 // prNodeID fetches the GraphQL global node ID of a pull request.

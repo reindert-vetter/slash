@@ -57,10 +57,11 @@ type Fake struct {
 	collaborators    []Collaborator
 	currentUser      Collaborator // returned by CurrentUser (SetCurrentUser seeds it)
 	currentUserCalls int
-	readyPRs         []int             // PRs flipped to ready-for-review, in order
-	editedPRs        []EditedPR        // EditPullRequest calls, in order
-	requestedRevs    [][]string        // reviewer login sets requested, in order
-	removedRevs      []removedReviewer // reviewers dropped from a PR, in order
+	reviewerFacts    map[int]ReviewerFacts // returned by ReviewerFacts (SetReviewerFacts seeds it)
+	readyPRs         []int                 // PRs flipped to ready-for-review, in order
+	editedPRs        []EditedPR            // EditPullRequest calls, in order
+	requestedRevs    [][]string            // reviewer login sets requested, in order
+	removedRevs      []removedReviewer     // reviewers dropped from a PR, in order
 
 	users          map[string]User // seeded by SetUser, returned by UsersByLogin
 	userLookups    int             // how often UsersByLogin was called
@@ -667,6 +668,24 @@ func (f *Fake) RemoveReviewer(_ context.Context, pr int, login string) error {
 	defer f.mu.Unlock()
 	f.removedRevs = append(f.removedRevs, removedReviewer{PR: pr, Login: login})
 	return nil
+}
+
+// ReviewerFacts returns whatever SetReviewerFacts seeded for pr (the zero
+// value — "not a reviewer, author unknown" — otherwise).
+func (f *Fake) ReviewerFacts(_ context.Context, pr int, _ string) (ReviewerFacts, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reviewerFacts[pr], nil
+}
+
+// SetReviewerFacts seeds the ReviewerFacts answer for pr.
+func (f *Fake) SetReviewerFacts(pr int, facts ReviewerFacts) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reviewerFacts == nil {
+		f.reviewerFacts = map[int]ReviewerFacts{}
+	}
+	f.reviewerFacts[pr] = facts
 }
 
 // removedReviewer is one recorded RemoveReviewer call (see LastRemovedReviewer).

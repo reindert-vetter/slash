@@ -7253,6 +7253,7 @@ function syncComments(pr) {
     cs.pr = pr
     cs.sel = 0
     loadComments(pr)
+    loadReviewerStatus(pr)
   }
   // The batch run's volatile per-comment snapshot rides along on the same PR
   // (one read + the SSE push, no poll of its own — see commentBatch.mjs).
@@ -7262,6 +7263,116 @@ function syncComments(pr) {
   }
   if (!heartbeatTimer) {
     heartbeatTimer = setInterval(beat, 60000)
+  }
+}
+
+// ── An inline comment on a PR you don't review ──────────────────────────────
+//
+// GitHub turns every inline review comment (a new root, or a reply in an
+// inline thread) into a COMMENTED review, which puts its author in the PR's
+// Reviewers sidebar — and a COMMENTED review can never be dismissed or
+// deleted afterwards. So before a NEW inline comment reaches GitHub on a PR
+// where the reviewer is not a reviewer yet, home.mjs asks first (menu mode
+// 'notReviewer', and an extra item in 'replyPublish'): post it inline anyway,
+// or as a PR-wide comment instead. A reply in an existing GitHub thread is
+// deliberately NOT asked about (reviewer decision). See "Placing an inline
+// comment on a PR you don't review" in .claude/docs/comments-panel.md.
+//
+// reviewerState is a plain, non-reactive snapshot of GET /api/reviewer-status
+// (a live GitHub read): `reviewer` is null while unknown (still loading,
+// offline, SLASH_GITHUB=off) — unknown never asks. Nothing is remembered per
+// PR beyond this tab: once an inline comment lands, the reviewer IS one on
+// GitHub, so markReviewerOnPr flips the snapshot and later comments post
+// without the question.
+const reviewerState = { pr: null, reviewer: null }
+
+async function loadReviewerStatus(pr) {
+  reviewerState.pr = pr
+  reviewerState.reviewer = null
+  try {
+    const res = await fetch('/api/reviewer-status?pr=' + encodeURIComponent(pr) + repoParam())
+    const j = res.ok ? await res.json() : null
+    if (reviewerState.pr === pr && j && j.ok) reviewerState.reviewer = !!j.reviewer
+  } catch (_) {
+    /* unknown: never ask */
+  }
+}
+
+// notReviewerOnPr — the reviewer is known NOT to be a reviewer on cs.pr.
+export function notReviewerOnPr() {
+  return reviewerState.pr != null && reviewerState.pr === cs.pr && reviewerState.reviewer === false
+}
+
+function markReviewerOnPr() {
+  if (reviewerState.pr === cs.pr) reviewerState.reviewer = true
+}
+
+// inlineLocationPrefix is the first line of an inline comment that is posted
+// PR-wide instead: the PR-wide comment has no anchor, so the text itself names
+// the place. Language-neutral on purpose (it goes to GitHub).
+function inlineLocationPrefix(file, start, end) {
+  if (!file) return ''
+  const lines = start ? (end && end !== start ? start + '-' + end : String(start)) : ''
+  return '`' + file + (lines ? ':' + lines : '') + '`\n\n'
+}
+
+// composeNeedsReviewerChoice — the open composer would place a NEW inline
+// comment on GitHub (not a PR-wide one, not a reply on an existing local
+// Claude-chat anchor, which stays local) on a PR the reviewer doesn't review.
+export function composeNeedsReviewerChoice(commentTarget) {
+  if (!notReviewerOnPr() || cs.prWideCompose) return false
+  const t = warningOverride ? warningOverride.target : (commentTarget && commentTarget()) || null
+  if (placeholderAnchorFor(draftKeyFor(t))) return false
+  return true
+}
+
+// pendingPublishNeedsReviewerChoice — the held replyPublish send would put a
+// still-local INLINE thread on GitHub (a new inline comment there) on a PR the
+// reviewer doesn't review; the replyPublish menu then offers the PR-wide way.
+export function pendingPublishNeedsReviewerChoice() {
+  if (!notReviewerOnPr() || !pendingPublish || !pendingPublish.body) return false
+  const c = commentById(pendingPublish.commentId)
+  return !!c && !isPrWideKind(c.kind)
+}
+
+// sendPendingAsPrWide posts the held reply as a NEW PR-wide comment instead of
+// publishing the local inline thread — the reviewer stays off the Reviewers
+// sidebar. Only the typed reply goes out (with its location on top); the local
+// thread itself stays local and untouched. Mirrors postThreadReply/
+// postPrCommentReply's optimistic field reset and failure handling.
+export async function sendPendingAsPrWide() {
+  const p = pendingPublish
+  pendingPublish = null
+  if (!p || !p.body) return
+  const c = commentById(p.commentId)
+  if (!c) return
+  if (p.kind === 'prwide') {
+    cancelPrCommentReply()
+    exitPrCommentThread()
+  } else {
+    const el = document.querySelector('[data-testid=reaction-compose]')
+    if (el) {
+      el.value = ''
+      resetTextareaHeight(el)
+      if (el.blur) el.blur()
+    }
+    releaseFocus()
+  }
+  const ok = await createComment({
+    pr: cs.pr,
+    file: '',
+    line: 0,
+    body: inlineLocationPrefix(c.file, c.line) + p.body,
+    kind: 'issue',
+  })
+  if (ok) {
+    if (p.kind === 'prwide') deletePrReplyDraft(c.id)
+    else deleteReplyDraft(c.id)
+    clearSendFailed('reply:' + c.id)
+  } else {
+    markSendFailed('reply:' + c.id)
+    if (p.kind === 'prwide') setPrReplyDraft(c.id, p.body)
+    else setReplyDraft(c.id, p.body)
   }
 }
 
@@ -7697,6 +7808,33 @@ export async function placeComment(state, commentTarget, opts = {}) {
   const t = override ? override.target : (commentTarget && commentTarget()) || null
   const draftKey = draftKeyFor(t)
 
+  // opts.asPrWide — the reviewer chose "Plaats als algemene comment" in the
+  // 'notReviewer' menu (home.mjs): the same text, posted PR-wide (Kind
+  // "issue", no anchor) with its location on top, so GitHub does not add the
+  // reviewer to the Reviewers sidebar. The keyboard goes back to the diff like
+  // an inline post; the sidebar selection is deliberately NOT moved to the new
+  // PR-wide row (unlike startPrWideComment) — the reviewer is mid-review here.
+  // An AI finding being converted is still replaced, only once this landed.
+  if (opts.asPrWide) {
+    const start = (t && t.startLine) || anchorLineFor(t, b)
+    const prefix = inlineLocationPrefix((t && t.file) || (b && b.file), start, t && t.endLine)
+    el.value = ''
+    exitRelated()
+    const ok = await createComment({ pr: state.pr, file: '', line: 0, body: prefix + body, kind: 'issue' })
+    if (ok) {
+      deleteComposeDraft(draftKey)
+      clearSendFailed('new:' + draftKey)
+      if (override && override.original) {
+        await deleteComment(override.original)
+        await loadComments(state.pr)
+      }
+    } else {
+      markSendFailed('new:' + draftKey)
+      setComposeDraft(draftKey, body)
+    }
+    return
+  }
+
   // A Claude conversation already lazily created the ONE backing comment for
   // this exact unit — either just now, in THIS composing session
   // (ensureClaudeAnchorForNew, tracked by claudeAutoAnchor) or earlier, in a
@@ -7793,6 +7931,7 @@ export async function placeComment(state, commentTarget, opts = {}) {
   if (ok) {
     deleteComposeDraft(draftKey)
     clearSendFailed('new:' + draftKey)
+    if (!opts.local) markReviewerOnPr()
   } else {
     markSendFailed('new:' + draftKey)
   }
@@ -8168,6 +8307,8 @@ async function postThreadReply(c, body, publish, withHistory) {
       // replyDrafts above) has nothing left to hold.
       deleteReplyDraft(c.id)
       clearSendFailed('reply:' + c.id)
+      // An inline reply that reaches GitHub makes the reviewer one there.
+      if ((publish || !isLocalComment(c)) && !isPrWideKind(c.kind)) markReviewerOnPr()
       cs.replySent = true
       setTimeout(() => {
         cs.replySent = false
@@ -11917,6 +12058,7 @@ async function postPrCommentReply(c, body, publish, withHistory) {
     if (res && res.ok) {
       deletePrReplyDraft(c.id)
       clearSendFailed('reply:' + c.id)
+      if ((publish || !isLocalComment(c)) && !isPrWideKind(c.kind)) markReviewerOnPr()
       await loadComments(cs.pr)
     } else {
       markSendFailed('reply:' + c.id)

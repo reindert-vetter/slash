@@ -191,7 +191,9 @@ export default function CommandMenu(menu, resolve, onRun, opts = {}) {
             t(
               menu.mode === 'compose'
                 ? 'Kies wat er met je comment gebeurt…'
-                : // reviewReject (home.mjs) has no static command list — the
+                : menu.mode === 'notReviewer'
+                  ? 'Je bent geen reviewer op deze PR…'
+                  : // reviewReject (home.mjs) has no static command list — the
                   // textarea itself IS the rejection-reason input, and
                   // resolveCommands only offers a "submit" row once it's
                   // non-blank (GitHub/the backend reject an empty

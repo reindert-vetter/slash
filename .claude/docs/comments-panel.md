@@ -2944,6 +2944,60 @@ sent within the same second as the publish can still see `githubId === 0` and be
 asked again. Choosing a GitHub option twice is harmless (the workflow ignores a
 `Publish` once the thread has a root, so it degrades into an ordinary reply).
 
+### Placing an inline comment on a PR you don't review
+
+Reviewer request: "als ik een comment plaats op een pr waar ik niet als
+reviewer sta, dan wil ik niet dat ik daarna als reviewer op ben gezet".
+slash never requests a reviewer itself — **GitHub** does it: every inline
+review comment (`PostReviewComment`, and a `Reply` in an inline thread) is a
+COMMENTED review, which lists its author in the PR's Reviewers sidebar. That
+cannot be undone afterwards: GitHub refuses to dismiss a COMMENTED review and
+only deletes a still-pending one, and `remove_reviewer` (DELETE
+`requested_reviewers`) does nothing for it. A PR-wide issue comment does not
+make you a reviewer. So the choice is made **before** posting:
+
+- **When it asks:** only for a NEW inline comment that reaches GitHub —
+  `runComposePost` (the ordinary composer and the AI-finding conversion) and
+  publishing a still-local inline thread via the `replyPublish` menu. A reply
+  in an existing GitHub thread is deliberately **never** asked about (it stays
+  in its thread, as before — reviewer decision); a reply on an un-taken-over
+  Claude-chat anchor stays local and isn't asked either. Gate:
+  `composeNeedsReviewerChoice` / `pendingPublishNeedsReviewerChoice`
+  (`RelatedPanel.mjs`).
+- **"Not a reviewer"** comes from `GET /api/reviewer-status?pr=N`
+  (`reviewer_status.go`, `countsAsReviewer`): a live, read-only GitHub read
+  (`github.ReviewerFacts`, one GraphQL call) — you are a reviewer when you are
+  the author, are requested personally **or through a requested team you are a
+  member of** (`Team.members(query: login)`, exact login compared after), or
+  have submitted any review. Fetched once per PR open (`loadReviewerStatus` in
+  `syncComments`) into the plain `reviewerState`; unknown (offline,
+  `SLASH_GITHUB=off`, a failed call) never asks. Nothing is remembered per PR:
+  `markReviewerOnPr` only flips this tab's snapshot after an inline comment or
+  inline reply actually reached GitHub, because from then on you ARE one.
+- **The question** is menu mode `notReviewer` (`NOT_REVIEWER_COMMANDS`,
+  `home.mjs`), anchored over the composer like `compose`: **"Plaats toch
+  inline (je wordt reviewer)"** is the default (reviewer decision, so "type,
+  Enter, Enter" still places an inline comment), **"Plaats als algemene
+  comment (geen reviewer)"** calls `placeComment(..., {asPrWide:true})`. The
+  menu has no title row, so the labels carry the consequence and the input
+  placeholder ("Je bent geen reviewer op deze PR…") the reason.
+- **PR-wide instead:** the same text as Kind `issue` (no anchor), with its
+  location as a first line — `` `file:start-end` `` (`inlineLocationPrefix`,
+  language-neutral since it goes to GitHub). The keyboard returns to the diff
+  like an inline post; the sidebar selection is NOT moved to the new PR-wide
+  row (unlike `startPrWideComment`) since the reviewer is mid-review. A
+  converted AI finding is still deleted once this landed.
+- **`replyPublish` on such a PR:** the inline items get " (je wordt
+  reviewer)" appended, and one more item, "Alleen mijn antwoord als algemene
+  comment (geen reviewer)" (`sendPendingAsPrWide`), posts only the typed
+  reply PR-wide (location of the thread on top); the local thread itself
+  stays local and gets no reply.
+- **Not covered:** the comment menu's "Zet op GitHub" on an EMPTY reply field
+  (`publishThreadOnly`) publishes a local inline thread without this question,
+  and comments Claude posts itself via `gh` in a chat turn are out of scope.
+
+Tests: `reviewer_status_test.go`, `tests/not-reviewer-comment.spec.mjs`.
+
 ### The "+ Nieuwe comment" trigger row is gone
 
 `newCommentComposer` used to render a permanently visible "+ Nieuwe comment"

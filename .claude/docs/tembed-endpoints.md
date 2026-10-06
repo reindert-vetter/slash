@@ -125,6 +125,7 @@ Both are carve-outs from the write boundary because they touch nothing durable
 | `GET /api/pending-push?prs=N[,N…]` | `{ok, pending}` — per PR the landed-but-unpushed chat edits: `{headRef, sha, ahead, files, state, pushRunId, error}`. Purely local git reads (`for-each-ref`/`rev-list`/`diff`), no fetch, no `gh`; `state` (`ready`/`pushing`/`failed`) is volatile/in-memory, git is the durable truth. Batch-shaped because the PR overview asks for several rows at once. See `.claude/docs/pending-push.md`. |
 | `GET /api/problems` | `{failedRuns, logErrors}` — failed runs (repo-wide) + mirrored glue log lines, both limited to the last `problemWindow` (**four days**, `run_errors.go`). Each failed run also carries `retryable` (see `POST /api/workflows/retry` above). |
 | `GET /api/me` | The authenticated GitHub user (`gh api user`, cached for the process lifetime). |
+| `GET /api/reviewer-status?pr=N[&repo=…]` | `{ok, reviewer}` — live: does the local user already count as a reviewer on that PR (author, personal/team request, any submitted review)? `{ok:false}` when unknown. See `reviewer_status.go`. |
 | `GET /api/names?logins=a,b` | Login → real name + avatar. See `.claude/docs/pages-and-routing.md`. |
 | `GET /api/reviewers` | Collaborators sorted most-used-first. |
 | `GET /api/inbox`, `/api/inbox/status`, `/api/prs*` | See `.claude/docs/pages-and-routing.md`. |

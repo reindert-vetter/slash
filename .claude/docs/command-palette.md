@@ -20,6 +20,7 @@ Arrow-key navigation of the tree itself lives in
 | `claude` | `Enter` on the Claude column while its composer is NOT the focused element (`cs.claudePos > 0`, stepped up into the transcript), OR — via a separate callback path, see "Comment hiervan maken' on an empty Claude input" in `.claude/docs/claude-chat-panel.md` — while it IS focused but EMPTY (rest position) | `claudeChatCommandsFor()` — "Wis Claude-gesprek" (confirm submenu, and deliberately first so it stays the `defaultSel` action) + "Comment hiervan maken" (only while `claudeAnchorIsPlaceholder()`) + "Probeer de mislukte turn opnieuw" (direct, the keyboard twin of the failed bubble's own button) |
 | `prComment` | `Enter` on a comment-index row | `prCommentCommandsFor()` |
 | `compose` | `Enter`/"Place…" with text in the composer | `COMPOSE_COMMANDS` |
+| `notReviewer` | `runComposePost`, when a new inline comment would make you a reviewer on a PR you don't review | `NOT_REVIEWER_COMMANDS` — see "Placing an inline comment on a PR you don't review" in `.claude/docs/comments-panel.md` |
 | `replyPublish` | automatically when a reply is sent on a thread that isn't on GitHub | `replyPublishCommandsFor()` |
 | `postApprove` | automatically after a palette approve | `POSTAPPROVE_COMMANDS` |
 | `reviewApprove` / `reviewChoice` / `reviewReject` | automatically when nothing is left ahead | `REVIEW_APPROVE_COMMANDS` / `REVIEW_CHOICE_COMMANDS` / built from the typed text |
@@ -1684,6 +1685,12 @@ menu (`commentMenuOpener`) still opens right after, unrelated to this —
 
 It is **not** an `isReviewFollowup` mode: the reply field it belongs to is
 on-screen, so `positionMenu` anchors it normally.
+
+On a PR you don't review yet (`pendingPublishNeedsReviewerChoice`), publishing
+a still-local inline thread would make you a reviewer on GitHub, so the inline
+items read "… (je wordt reviewer)" and a last item posts only the reply as a
+PR-wide comment instead — see "Placing an inline comment on a PR you don't
+review" in `.claude/docs/comments-panel.md`.
 
 ## `/` always opens the PR menu (and `contextMenuMode` is now the right-click's)
 

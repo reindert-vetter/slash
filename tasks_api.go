@@ -891,6 +891,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// so the UI can show who "I" am on the comments/replies written in this app
 	// (they carry no GitHub author of their own). See handleMe.
 	mux.HandleFunc("/api/me", s.handleMe)
+	// GET /api/reviewer-status?pr=N → read-only, live: do I already count as a
+	// reviewer on this PR? Asked before an inline comment would make me one.
+	// See handleReviewerStatus.
+	mux.HandleFunc("/api/reviewer-status", s.handleReviewerStatus)
 	// GET /api/names?logins=a,b,c → read-only: the human name + avatar behind a
 	// GitHub login, so the UI can show "Dennis" instead of "dennissloove". See
 	// handleNames / usernames.go.
