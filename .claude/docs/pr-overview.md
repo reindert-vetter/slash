@@ -1179,8 +1179,8 @@ ticket … morgen 8 uur, volgende week maandag, 7 dagen".
 
 - **The item** (`snoozeAction`, `data-testid=snooze-pr`, `clock` icon) sits
   directly below "Open Jira-ticket" (below "Kopieer GitHub URL" when the title
-  has no Jira key). Clicking it expands three inline options in the same
-  popover (`data-testid=snooze-option`, `data-option=tomorrow_8|next_monday_8|
+  has no Jira key). Clicking it expands four inline options (the first, `hours_3` "Over 3 uur", is exactly now+3h, not 08:00) in the same
+  popover (`data-testid=snooze-option`, `data-option=hours_3|tomorrow_8|next_monday_8|
   days_7`) and focuses the first one, so ↓/Enter pick with the existing
   focus-based popover keyboard model — no submenu component. Each option names
   its own resolved moment in words ("do 1 okt 08:00", `formatSnoozeMoment`),

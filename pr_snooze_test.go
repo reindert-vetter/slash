@@ -31,12 +31,13 @@ func TestSnoozeUntil(t *testing.T) {
 		{"next Monday from a Wednesday", at(2026, 9, 30, 15), SnoozeNextMonday, at(2026, 10, 5, 8)},
 		{"next Monday from a Monday is a week later", at(2026, 10, 5, 7), SnoozeNextMonday, at(2026, 10, 12, 8)},
 		{"next Monday from a Sunday is tomorrow", at(2026, 10, 4, 20), SnoozeNextMonday, at(2026, 10, 5, 8)},
+		{"3 hours is exact, not 08:00", at(2026, 9, 30, 15), SnoozeThreeHours, at(2026, 9, 30, 18)},
 		{"7 days at 08:00", at(2026, 9, 30, 15), SnoozeSevenDays, at(2026, 10, 7, 8)},
 		{"7 days across the DST switch stays 08:00 wall-clock", at(2026, 10, 22, 12), SnoozeSevenDays, at(2026, 10, 29, 8)},
 	}
 	for _, c := range cases {
 		got, ok := snoozeUntil(c.now, c.option)
-		if !ok || !got.Equal(c.want) || got.Hour() != 8 {
+		if !ok || !got.Equal(c.want) || (c.option != SnoozeThreeHours && got.Hour() != 8) {
 			t.Errorf("%s: snoozeUntil(%v, %q) = %v, %v; want %v", c.name, c.now, c.option, got, ok, c.want)
 		}
 	}

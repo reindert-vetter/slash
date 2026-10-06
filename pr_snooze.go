@@ -27,6 +27,7 @@ const (
 // The snooze options the popover offers. The wake-up MOMENT is computed inside
 // the workflow from w.Now() (snoozeUntil), never taken from the request.
 const (
+	SnoozeThreeHours = "hours_3"       // exactly 3 hours from now
 	SnoozeTomorrow   = "tomorrow_8"    // tomorrow 08:00
 	SnoozeNextMonday = "next_monday_8" // Monday of next week, 08:00
 	SnoozeSevenDays  = "days_7"        // in 7 days, 08:00
@@ -36,7 +37,7 @@ const (
 // validSnoozeOption reports whether option is one of the four above.
 func validSnoozeOption(option string) bool {
 	switch option {
-	case SnoozeTomorrow, SnoozeNextMonday, SnoozeSevenDays, SnoozeClear:
+	case SnoozeThreeHours, SnoozeTomorrow, SnoozeNextMonday, SnoozeSevenDays, SnoozeClear:
 		return true
 	}
 	return false
@@ -62,6 +63,8 @@ type PrSnoozeSignal struct {
 func snoozeUntil(now time.Time, option string) (until time.Time, ok bool) {
 	days := 0
 	switch option {
+	case SnoozeThreeHours:
+		return now.Add(3 * time.Hour), true
 	case SnoozeTomorrow:
 		days = 1
 	case SnoozeNextMonday:

@@ -27,11 +27,12 @@ test.describe('PR overview — snooze a PR', () => {
     const popover = page.locator('[data-testid="pr-popover"]')
     await popover.locator('[data-testid="snooze-pr"]').click()
     const options = popover.locator('[data-testid="snooze-option"]')
-    await expect(options).toHaveCount(3)
+    await expect(options).toHaveCount(4)
     // The expanded options take the keyboard focus straight away.
     await expect(options.first()).toBeFocused()
-    await expect(options.nth(1)).toContainText('Volgende week maandag 08:00')
-    await options.first().click()
+    await expect(options.first()).toContainText('Over 3 uur')
+    await expect(options.nth(2)).toContainText('Volgende week maandag 08:00')
+    await options.nth(1).click()
 
     await expect(inSection).toHaveCount(0)
     const snoozed = page.locator('[data-testid="snoozed-section"]')

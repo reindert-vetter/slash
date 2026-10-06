@@ -408,6 +408,7 @@ export const EN = {
   'Snooze…': 'Snooze…',
   'Morgen 08:00': 'Tomorrow 08:00',
   'Volgende week maandag 08:00': 'Next week Monday 08:00',
+  'Over 3 uur': 'In 3 hours',
   'Over 7 dagen 08:00': 'In 7 days 08:00',
   'Snooze opheffen': 'Unsnooze',
   'Snoozen mislukt': 'Snoozing failed',

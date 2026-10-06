@@ -479,7 +479,7 @@ notification has no PR at all.
   back read.
 - **Reminders and snooze** (the bell's own, see "Reminders and snooze in the
   bell" in `.claude/docs/pr-overview.md`) ride on the same Signal:
-  `{"kind":"snooze","id","option"}` (`tomorrow_8`/`next_monday_8`/`days_7`,
+  `{"kind":"snooze","id","option"}` (`hours_3`/`tomorrow_8`/`next_monday_8`/`days_7`,
   or `clear`), `{"kind":"reminder_add","text","option"}` (those three or
   `now`) and `{"kind":"reminder_delete","id"}`. The workflow reads `w.Now()`
   once, computes the moment with `pr_snooze.go`'s pure `snoozeUntil`, and
@@ -758,8 +758,8 @@ carries its own `repo`.
   row already expired at that moment — housekeeping), `Clear`, and the read
   `List(ctx, now)` (only `until > now`) behind `GET /api/prsnoozes`.
 - **Workflow (`pr_snooze.go`):** a loop on the `pr_snooze` Signal
-  (`PrSnoozeSignal{Repo, PR, Option}`, option `tomorrow_8`/`next_monday_8`/
-  `days_7`/`clear`). A snooze reads the clock once via `w.Now()` (recorded),
+  (`PrSnoozeSignal{Repo, PR, Option}`, option `hours_3` (now+3h exactly)/`tomorrow_8`/
+  `next_monday_8`/`days_7`/`clear`). A snooze reads the clock once via `w.Now()` (recorded),
   computes the wake-up moment with the pure `snoozeUntil(now.In(time.Local),
   option)` — 08:00 wall-clock on the chosen day, DST-safe via `time.Date` —
   and runs one `savePrSnooze` Activity; `clear` runs one `clearPrSnooze`.

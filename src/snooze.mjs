@@ -10,6 +10,7 @@ import { t, uiLang } from './i18n.mjs'
 // The three options, in menu order. The keys are the Go constants in
 // pr_snooze.go (SnoozeTomorrow/SnoozeNextMonday/SnoozeSevenDays).
 export const SNOOZE_OPTIONS = [
+  { key: 'hours_3', label: 'Over 3 uur' },
   { key: 'tomorrow_8', label: 'Morgen 08:00' },
   { key: 'next_monday_8', label: 'Volgende week maandag 08:00' },
   { key: 'days_7', label: 'Over 7 dagen 08:00' },
@@ -18,6 +19,7 @@ export const SNOOZE_OPTIONS = [
 // snoozePreviewUntil mirrors pr_snooze.go's snoozeUntil in the browser's local
 // time: 08:00 on tomorrow / next calendar week's Monday / the day 7 days out.
 export function snoozePreviewUntil(option, now = new Date()) {
+  if (option === 'hours_3') return new Date(now.getTime() + 3 * 3600 * 1000)
   let days = 0
   if (option === 'tomorrow_8') days = 1
   else if (option === 'next_monday_8') days = 7 - ((now.getDay() + 6) % 7)
