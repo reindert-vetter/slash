@@ -851,7 +851,9 @@ that fit no other section but do change one of those.
   first segment or a `Routes` segment; an `Http/Controllers`, `Http/Requests`
   or `Http/Resources` pair. A bare nwidart `modules/X/Resources/` (views/lang)
   is deliberately NOT an API resource, and anything under a `tests` segment is
-  ignored. Middleware, docs and sdks are out of scope (confirmed). A PR with
+  ignored. Only `.php` files count at all — a frontend router like
+  `routes/admin.ts` (or any `.ts`/`.js`/`.vue` file) is never an API or
+  migration change (reviewer request, OPS-523). Middleware, docs and sdks are out of scope (confirmed). A PR with
   more than 100 changed files can miss a badge — accepted. `statusesFor`
   batches per 50 PRs (`statusChunk`) because the section below roughly triples
   the PR count. A PR where the logged-in user is a personal reviewer (pending

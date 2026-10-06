@@ -1278,9 +1278,14 @@ func eligibleAutoIngestPRs(mode string, myLogin string, sections []inboxSection,
 //     `Http/Resources` segment pair. A bare modules/X/Resources/ is NOT an API
 //     resource (nwidart puts views/lang there), hence the `Http/` requirement.
 //
-// Anything with a `tests` segment is ignored.
+// Anything with a `tests` segment is ignored, and so is every non-.php file:
+// a frontend router like routes/admin.ts (or a .js/.vue file under a
+// migrations dir) is not a Laravel API or migration change.
 func classifyTouched(paths []string) (migrations, api []string) {
 	for _, p := range paths {
+		if !strings.HasSuffix(strings.ToLower(p), ".php") {
+			continue
+		}
 		segs := strings.Split(strings.ToLower(p), "/")
 		dirs := segs[:len(segs)-1]
 		isTest, isMig, isAPI := false, false, false

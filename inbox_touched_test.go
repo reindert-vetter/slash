@@ -23,6 +23,11 @@ func TestClassifyTouched(t *testing.T) {
 		"tests/Feature/Http/Controllers/OrderControllerTest.php",
 		"modules/Forms/Tests/Database/Migrations/fake.php",
 		"app/Models/Order.php",
+		// not API/migration: only .php files count (a frontend router is not the API)
+		"routes/admin.ts",
+		"modules/Pages/Routes/pages.tsx",
+		"resources/js/routes/index.js",
+		"database/migrations/seed.ts",
 	})
 	wantMig := []string{
 		"database/migrations/2026_01_01_000000_add_x.php",
