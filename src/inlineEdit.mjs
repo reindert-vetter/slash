@@ -82,7 +82,7 @@ export function computeInlineEditCaretOffset(rows, rowStart, rowEnd) {
   let end = null
   for (let i = 0; i < (rows || []).length; i++) {
     const r = rows[i]
-    const text = r && (r.right != null ? r.right : r.left)
+    const text = r && !r.imp ? (r.right != null ? r.right : r.left) : null
     if (text == null) continue
     if (i === rowStart) start = offset
     if (i >= rowStart && i <= rowEnd) end = offset + text.length
@@ -164,10 +164,13 @@ export function scheduleInlineEditGrow(b) {
 // base a sub-range edit gets merged back into — see
 // mergeInlineEditRangeIntoSource below) even though the editor itself no
 // longer edits the whole thing at once (see blockNewSourceRangeText).
+// An inlined import row (`imp`, withImportRows in Block.mjs) belongs to the
+// file's header, not this block's source: every helper here skips it, so the
+// inline editor only ever edits the block's own body.
 export function blockNewSourceText(rows) {
   const lines = []
   for (const r of rows || []) {
-    const text = r && (r.right != null ? r.right : r.left)
+    const text = r && !r.imp ? (r.right != null ? r.right : r.left) : null
     if (text != null) lines.push(text)
   }
   return lines.join('\n')
@@ -185,7 +188,7 @@ export function blockNewSourceRangeText(rows, rowStart, rowEnd) {
   const lines = []
   for (let i = rowStart; i <= rowEnd; i++) {
     const r = all[i]
-    const text = r && (r.right != null ? r.right : r.left)
+    const text = r && !r.imp ? (r.right != null ? r.right : r.left) : null
     if (text != null) lines.push(text)
   }
   return lines.join('\n')
@@ -207,7 +210,7 @@ export function mergeInlineEditRangeIntoSource(rows, rowStart, rowEnd, text) {
   const after = []
   for (let i = 0; i < all.length; i++) {
     const r = all[i]
-    const t = r && (r.right != null ? r.right : r.left)
+    const t = r && !r.imp ? (r.right != null ? r.right : r.left) : null
     if (t == null) continue
     if (i < rowStart) before.push(t)
     else if (i > rowEnd) after.push(t)

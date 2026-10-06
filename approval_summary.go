@@ -48,8 +48,10 @@ func (s *server) handleApprovalSummary(w http.ResponseWriter, r *http.Request) {
 		}
 		baseDir, headDir := worktreeDirs(s.dataDir, key.Repo, pr)
 		done, total := 0, 0
+		plan := planImportInlining(baseDir, headDir, blocks)
 		for _, b := range blocks {
-			t := blockChangedRowCount(baseDir, headDir, b)
+			rows, _, _ := blockAlignedRows(baseDir, headDir, b)
+			t := countChangedRows(applyImportPlan(rows, b, plan))
 			total += t
 			if d := approvedByID[b.ID()]; d > 0 {
 				if d > t {

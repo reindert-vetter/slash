@@ -124,6 +124,10 @@ func firstChangedRowIndex(rows []alignRow) (int, bool) {
 type alignRow struct {
 	left, right         *string
 	leftMark, rightMark string
+	// imp: a header row inlined at the top of a block that uses its import;
+	// hidden: a header row inlined elsewhere (not changed/rendered/counted
+	// here). See import_inline.go.
+	imp, hidden bool
 }
 
 // dedent4 is the Go port of Block.mjs dedent4: when every non-blank line of BOTH
@@ -305,6 +309,9 @@ func wsOnly(r alignRow) bool {
 // rowChanged is the Go port of Block.mjs rowChanged: the row carries a del/ins
 // mark and isn't a whitespace-only re-alignment.
 func rowChanged(r alignRow) bool {
+	if r.hidden {
+		return false
+	}
 	return (r.leftMark != "" || r.rightMark != "") && !wsOnly(r)
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -234,11 +235,27 @@ func (s *server) handleBlockStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseDir, headDir := worktreeDirs(s.dataDir, repo, pr)
+	// The import inlining (import_inline.go) is part of the row space: a block
+	// counts the imports shown at its top, a header no longer counts them.
+	plan := planImportInlining(baseDir, headDir, blocks)
 	stats := make(map[string]int, len(blocks))
 	for _, b := range blocks {
-		stats[b.ID()] = blockChangedRowCount(baseDir, headDir, b)
+		rows, _, _ := blockAlignedRows(baseDir, headDir, b)
+		stats[b.ID()] = countChangedRows(applyImportPlan(rows, b, plan))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"pr": pr, "totals": stats})
+	// imports: per user block, the header row behind each of its prefix rows (in
+	// order) — what the frontend needs to keep one import's approval shared
+	// across every block that shows it, without loading their code.
+	// inlinedHeaders: headers with nothing left of their own (leave the index).
+	imports := map[string][]int{}
+	for id, pre := range plan.prefix {
+		hr := make([]int, len(pre))
+		for i, p := range pre {
+			hr[i] = p.HeaderRow
+		}
+		imports[id] = hr
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pr": pr, "totals": stats, "imports": imports, "inlinedHeaders": plan.empty})
 }
 
 // handleCode serves GET /api/code?pr=N&file=...&class=...&name=... — the old
@@ -317,12 +334,45 @@ func (s *server) handleCode(w http.ResponseWriter, r *http.Request) {
 		extractBlockSource(filepath.Join(baseDir, oldFile), oldFile, oldClass, oldName),
 		extractBlockSource(filepath.Join(headDir, file), file, class, name),
 	)
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"file":       file,
 		"old":        oldSide,
 		"new":        newSide,
 		"docChanged": docChanged,
-	})
+	}
+	// The import inlining (import_inline.go): a block that uses a changed
+	// import gets it as prefix rows, a header the rows inlined elsewhere as
+	// hiddenRows. Only for a stored PR block of a PHP file.
+	if ok && filepath.Ext(file) == ".php" {
+		if all, err := blocksByPR(s.db, repo, pr); err == nil {
+			var same []Block
+			var self *Block
+			for i := range all {
+				if all[i].File != file {
+					continue
+				}
+				same = append(same, all[i])
+				if all[i].Side != SideOld && all[i].Class == class && all[i].Name == name {
+					self = &all[i]
+				}
+			}
+			if self != nil {
+				plan := planImportInlining(baseDir, headDir, same)
+				if pre := plan.prefixFor(*self); len(pre) > 0 {
+					resp["imports"] = pre
+				}
+				if hid := plan.hidden[self.ID()]; len(hid) > 0 {
+					rows := make([]int, 0, len(hid))
+					for i := range hid {
+						rows = append(rows, i)
+					}
+					sort.Ints(rows)
+					resp["hiddenRows"] = rows
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleIngest serves POST /api/ingest {"pr":N[,"repo":"owner/name"]} — runs the

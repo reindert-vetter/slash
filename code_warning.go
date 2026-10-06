@@ -811,7 +811,11 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (
 	}
 	in.Label = b.Label
 	in.Gran = "line"
-	if row, ok := rowForLine(baseDir, headDir, b, f.Line, "RIGHT"); ok {
+	if row, ok := rowForLineIn(baseDir, headDir, b, blocks, f.Line, "RIGHT"); ok {
+		if ub, ur, moved := redirectInlinedImport(baseDir, headDir, b, blocks, row); moved {
+			b, row = ub, ur
+			in.Label = b.Label
+		}
 		in.RowStart = row
 		in.RowEnd = row
 		return in, b.ID()
@@ -821,7 +825,7 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (
 	// under a navigation unit that actually covers that row (in practice:
 	// the block's first group/line), never under every other line of the
 	// same block. The label says it's about the whole block, not that row.
-	rows, _, _ := blockAlignedRows(baseDir, headDir, b)
+	rows, _, _ := prBlockRows(baseDir, headDir, b, blocks)
 	if row, ok := firstChangedRowIndex(rows); ok {
 		in.RowStart = row
 		in.RowEnd = row

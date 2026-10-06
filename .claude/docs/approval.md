@@ -185,6 +185,16 @@ recurring finding kept eating approvals unattended). Both the comment and the
 warning still appear exactly as before — only the retraction is gone. Don't
 reintroduce either half without asking.
 
+## A changed import is approved once, in every block showing it
+
+The `use` rows inlined at the top of a block (see "Imports used by a block show
+inside it" in `.claude/docs/blocks-and-ingest.md`) are ordinary rows of that
+block, but `persistApproval` first runs `propagateImportApproval`: the prefix
+rows this write changed (vs. `importPrefixSnapshot`) are set/cleared in every
+other block of the same file that shows the same header row
+(`state.importRows`), each persisted via `persistApprovalOnly` (no cascade).
+`syncImportApprovals` runs after `loadApprovals`+`loadBlockStats`.
+
 ## Combined approval per tree (sidebar + Underlying code)
 
 The sidebar shows a pill per top-level block (`data-testid=block-approval`) with

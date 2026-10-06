@@ -330,10 +330,46 @@ test file's preamble groups into its `test_class` row (`methodLabel` shows
 `classifyFile` surfaces it only when a changed line hits it, like any block.
 `scanBlocksRaw` (callresolve) never sees it; `matchMovedBlocks` and
 `scanTestCovers` skip it (near-identical `use` lists would invent moves; it is
-not a test). Test: `preamble_test.go`. When a changed `use` line imports a
-name another changed block in the file uses, the block leaves the index and
-shows as Onderliggende code under that block instead (`resolveImports`, see
-`.claude/docs/workflows-analysis.md`).
+not a test). Test: `preamble_test.go`.
+
+**Imports used by a block show inside it (`import_inline.go`).** Reviewer
+request: a changed `use` line that a changed block needs is shown at the top of
+that block, with its `-`/`+`, approvable there; approved in one block = approved
+in every block showing it; with no user it stays in the header as before.
+`planImportInlining` takes every changed header row whose NEW side is a `use`
+line (`importedShortNames`, alias/group aware) and gives it to every changed
+block of the same file whose head source references that short name
+(`inlineImportRows`, the pure core). A replaced import (`use A\Foo` → `use
+B\Foo`) is one paired row, so it shows as `-`/`+`; a pure deletion has no new
+side and stays in the header.
+
+- **Row space.** The rows are part of the block's canonical rows: prepended
+  copies (`imp`), in header order. In the header those rows are flagged
+  `hidden` — kept in the array (row indices and line counting stay put) but
+  `rowChanged` is false, they don't render and don't count. So the header shows
+  **only its leftover lines** (confirmed), and a header with nothing left
+  (`inlinedHeaders`) leaves the index entirely. `prBlockRows` is the Go entry
+  point (blockstats, approval summary, comment import incl. `rowForLineIn`,
+  reanchor, code_warning); `/api/code` sends `imports` (rows with their own
+  `newLine`/`oldLine`/`headerRow`) and `hiddenRows`, which `withImportRows`
+  (`Block.mjs`'s `blockRows`) applies. Keep both in lockstep.
+- **Line numbers.** An `imp` row lives on the header's lines: `unitLineRange`/
+  `unitBothLineRanges`/`githubFileLine` (`home.mjs`) and `rowForLineIn` skip it
+  when counting the body and use its own line instead. A GitHub/AI comment on a
+  hidden header line is moved to the first user block's prefix row
+  (`redirectInlinedImport`).
+- **Inline edit** only edits the body: `inlineEdit.mjs` skips `imp` rows (the
+  reviewer did not answer this one; our own proposal).
+- **Shared approval.** Each block stores its own prefix rows like any other row
+  (so the per-block server done/total stays exact). `GET /api/blockstats`'s
+  `imports` (block id → header row per prefix row) lets
+  `propagateImportApproval` (in `persistApproval`) copy a changed prefix row to
+  every block of the file showing the same header row without loading code, and
+  `syncImportApprovals` unions them once approvals + stats are in. The PR-wide
+  total counts a shared import once per block showing it (both halves, so it
+  still reaches 100%).
+- **Accepted:** approvals stored before this change on such a block shift by
+  the number of prefix rows (one-time, no migration — confirmed).
 
 Tests: `phpscan_test.go` (`TestBladeTemplateIsOneWholeFileBlock`, which first
 asserts the premise that `scanPHP` *does* return decoy blocks, plus

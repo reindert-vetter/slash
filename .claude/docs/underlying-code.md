@@ -930,7 +930,7 @@ a fixture that never set one): "nothing to compare", not "line 0, presumably out
 of range". Three exemptions follow:
 
 1. **A block-level synthetic callKey**
-   (`resource:`/`migration_model:`/`data_provider:`/`trait_usage:`/`import:`, see
+   (`resource:`/`migration_model:`/`data_provider:`/`trait_usage:`, see
    `isBlockLevelCallKey`) has no site to compare — always kept, as at
    `line`/`call`. `trait_usage:` was added *because* of this change: `group` is
    the **default** granularity, so once it hard-filtered, `findCallSites`

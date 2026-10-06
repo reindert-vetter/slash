@@ -94,9 +94,9 @@ const (
 	KindDataProvider   = "data_provider"   // a test's #[DataProvider('m')]/@dataProvider m → the provider method
 	KindTranslation    = "translation"     // a trans('file.key')/__(...)/@lang(...) call → the lang file value, one per locale
 	KindTraitUsage     = "trait_usage"     // a class's `use TraitName;` → the trait as a whole
-	// KindImport hangs a PHP file's preamble block (<file-header>, "Imports")
-	// under every changed block in that file that uses a name the PR newly
-	// imports there (resolveImports, callresolve_analysis.go).
+	// KindImport is retired: a used changed import is now shown inside the
+	// block itself (import_inline.go). Kept so a stale stored row still
+	// decodes; the frontend ignores it (loadCallResolve).
 	KindImport = "import"
 	// The class-member kinds below are the declared properties/constants of a
 	// <class-header> block, shown as their own Underlying-code cards instead of

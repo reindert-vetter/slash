@@ -222,7 +222,7 @@ func planCommentReanchor(dataDir string, pr int, changedFiles []string, cs []com
 		}
 		rows, cached := rowsFor[b.ID()]
 		if !cached {
-			rows, _, _ = blockAlignedRows(baseDir, headDir, b)
+			rows, _, _ = prBlockRows(baseDir, headDir, b, blocks)
 			rowsFor[b.ID()] = rows
 		}
 		// Nothing to search for: a comment that was already unpinned, or a
@@ -311,7 +311,7 @@ func planApprovalRemap(baseDir, headDir, oldBaseDir, oldHeadDir string, aps []ap
 			// approval at restore); file untouched → its rows still line up.
 			continue
 		}
-		newRows, _, _ := blockAlignedRows(baseDir, headDir, b)
+		newRows, _, _ := prBlockRows(baseDir, headDir, b, blocks)
 		if len(newRows) == 0 {
 			continue
 		}
@@ -332,7 +332,7 @@ func planApprovalRemap(baseDir, headDir, oldBaseDir, oldHeadDir string, aps []ap
 				return an.Text, ok
 			}
 		} else {
-			oldRows, _, _ := blockAlignedRows(oldBaseDir, oldHeadDir, b)
+			oldRows, _, _ := prBlockRows(oldBaseDir, oldHeadDir, b, blocks)
 			if len(oldRows) == 0 {
 				// No anchors AND the previous sides couldn't be read (a
 				// `git show` miss, e.g. the file was added since). Leave the

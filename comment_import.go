@@ -82,8 +82,15 @@ func mapReviewComment(dataDir string, repo string, pr int, blocks []Block, gc gi
 	in.Side = side
 	in.Gran = "line"
 
-	if row, ok := rowForLine(baseDir, headDir, b, gc.Line, side); ok {
-		rows, _, _ := blockAlignedRows(baseDir, headDir, b)
+	if row, ok := rowForLineIn(baseDir, headDir, b, blocks, gc.Line, side); ok {
+		// A `use` line shown inside the block that uses it (import_inline.go)
+		// is hidden in the header: anchor the comment on that block's row.
+		if ub, ur, moved := redirectInlinedImport(baseDir, headDir, b, blocks, row); moved {
+			b, row = ub, ur
+			in.File = b.File
+			in.Label = b.Label
+		}
+		rows, _, _ := prBlockRows(baseDir, headDir, b, blocks)
 		if row < len(rows) && rowChanged(rows[row]) && rowHasContent(rows[row]) {
 			in.RowStart = row
 			in.RowEnd = row
@@ -164,11 +171,22 @@ func blockForLine(baseDir, headDir string, blocks []Block, file string, line int
 // an imported comment N rows off (N = the folded doc lines), since /api/code and
 // the approve total both count the post-fold rows.
 func rowForLine(baseDir, headDir string, b Block, line int, side string) (int, bool) {
-	rows, oldSide, newSide := blockAlignedRows(baseDir, headDir, b)
+	return rowForLineIn(baseDir, headDir, b, nil, line, side)
+}
+
+// rowForLineIn is rowForLine in the canonical row space including the import
+// inlining (prBlockRows, import_inline.go): blocks is the PR's block list. An
+// inlined import row (imp) belongs to the header's lines, not this block's, so
+// it never advances the counters.
+func rowForLineIn(baseDir, headDir string, b Block, blocks []Block, line int, side string) (int, bool) {
+	rows, oldSide, newSide := prBlockRows(baseDir, headDir, b, blocks)
 
 	curOld := oldSide.Start
 	curNew := newSide.Start
 	for i, r := range rows {
+		if r.imp {
+			continue
+		}
 		switch side {
 		case "LEFT":
 			if r.left != nil && curOld == line {

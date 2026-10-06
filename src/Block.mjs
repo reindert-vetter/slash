@@ -4247,6 +4247,7 @@ function paneHTML(
   const parts = []
   const pushRow = (i) => {
     const r = rows[i]
+    if (r.hidden) return
     // Partial call approval: once at least one — but not all — of this row's
     // call segments is approved, every segment gets a dot marker (solid =
     // approved, hollow = waiting) UNDER its own first character, inside the
@@ -4274,6 +4275,7 @@ function paneHTML(
         segDots,
       ),
     )
+    if (r.impLast) parts.push(IMPORT_SEP_HTML)
   }
   const { segs, beforeCount, afterCount } = virtualizedSegs(baseSegs, win)
   if (beforeCount) parts.push(virtualSpacerHTML(beforeCount, 'before'))
@@ -4381,8 +4383,10 @@ function unifiedHTML(
     // deletion) — which in the unified stand is exactly the line carrying the
     // row's metadata (emitMeta), see unifiedRowHTML.
     const partial = partialCallApproval(rows, i, approved, approvedCalls)
+    if (r.hidden) return
     const segDots = partial ? segDotMarkers(r.right != null ? r.right : r.left, partial) : null
     parts.push(unifiedRowHTML(r, i, group, approved, commented, focused, lineSummaries, segDots, commentRange, lang, wrap))
+    if (r.impLast) parts.push(IMPORT_SEP_HTML)
   }
   const { segs, beforeCount, afterCount } = virtualizedSegs(baseSegs, win)
   if (beforeCount) parts.push(virtualSpacerHTML(beforeCount, 'before'))
@@ -4555,6 +4559,9 @@ function wsOnly(r) {
 // for home.mjs's referenceRows, which needs the exact same "is this row
 // changed?" answer to decide which call sites sit on an UNCHANGED line.
 export function rowChanged(r) {
+  // A header row shown inside the block that uses it (withImportRows) is no
+  // change of the header anymore.
+  if (r.hidden) return false
   return !!(r.leftMark || r.rightMark) && !wsOnly(r)
 }
 
@@ -4731,10 +4738,47 @@ export function blockRows(b) {
     (c.old && c.old.text) || '',
     (c.new && c.new.text) || '',
   )
-  const rows = alignRows(oldText, newText)
+  let rows = alignRows(oldText, newText)
+  rows = withImportRows(rows, c)
   blockRowsCache.set(b, { code: c, rows })
   return rows
 }
+
+// withImportRows applies the server's import inlining (import_inline.go) to a
+// block's aligned rows. A block that uses a changed `use` import gets those
+// header rows prepended (`imp`, carrying their own file lines `newLine`/
+// `oldLine` and the header row they mirror, `headerRow`); a header gets the
+// rows it hands to such a block flagged `hidden` — kept in the array so every
+// row index and line count stays put, but not changed (rowChanged), not
+// rendered and not counted. Row space is identical to the Go side's
+// prBlockRows, so approvals/comments/totals agree. The last prefix row carries
+// `impLast` for the separator line under the imports.
+function withImportRows(rows, c) {
+  if (Array.isArray(c.hiddenRows) && c.hiddenRows.length) {
+    const hid = new Set(c.hiddenRows)
+    rows = rows.map((r, i) => (hid.has(i) ? { ...r, hidden: true } : r))
+  }
+  const imps = Array.isArray(c.imports) ? c.imports : []
+  if (!imps.length) return rows
+  const pre = imps.map((p, k) => ({
+    left: p.left == null ? null : p.left,
+    right: p.right == null ? null : p.right,
+    leftMark: p.leftMark || null,
+    rightMark: p.rightMark || null,
+    imp: true,
+    impLast: k === imps.length - 1,
+    headerRow: p.headerRow,
+    oldLine: p.oldLine || 0,
+    newLine: p.newLine || 0,
+  }))
+  return pre.concat(rows)
+}
+
+// IMPORT_SEP_HTML is the thin rule under the import rows a block shows at its
+// top (withImportRows) — emitted in every pane at the same spot, so the panes
+// stay aligned. Shape, not colour, carries "end of the imports".
+const IMPORT_SEP_HTML =
+  '<div data-import-sep="true" class="my-0.5 border-b border-dashed border-slate-300 dark:border-zinc-700"></div>'
 
 // unitsFor maps a granularity ('group' | 'line' | 'call') to its navigation-unit
 // list for the given rows: whole change runs (changeGroups), individual changed
@@ -4947,7 +4991,7 @@ export function diffStat(rows) {
   let add = 0
   let del = 0
   for (const r of rows) {
-    if (wsOnly(r)) continue
+    if (wsOnly(r) || r.hidden) continue
     if (r.rightMark === 'ins') add++
     if (r.leftMark === 'del') del++
   }

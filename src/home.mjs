@@ -623,6 +623,16 @@ const state = reactive({
   // and known immediately, so done/total is right before a block's code lazily
   // loads; blockApproveCount prefers it and falls back to the client-side count.
   blockTotals: {},
+  // importRows — per block id → the header row behind each import row shown at
+  // that block's top (GET /api/blockstats `imports`, import_inline.go), in
+  // prefix order: prefix row k mirrors header row importRows[id][k]. What
+  // syncImportApprovals needs to share one import's approval across every
+  // block showing it without loading their code.
+  importRows: {},
+  // inlinedHeaders — header (<file-header>) block id → true when every changed
+  // line of it shows inside a block that uses it: such a header leaves the
+  // index (recomputeLeftList).
+  inlinedHeaders: {},
   // showApproved — when false (default) fully-approved top-level blocks are hidden
   // from the starting-points list, revealed by the "Toon N goedgekeurde blokken"
   // button at the bottom. Ephemeral UI state, not bound to the URL.
@@ -2801,6 +2811,7 @@ async function loadBlocks() {
   // syncCommentBatch's own call site (RelatedPanel.mjs's syncComments).
   syncTestRun(state.pr)
   await Promise.all([loadApprovals(), loadBlockStats(), loadIgnoredComments(), ensureAutoWarn()])
+  syncImportApprovals()
   // state.blockTotals only lands here (loadBlockStats), after the FIRST
   // recomputeLeftList() call above already ran without it — re-run so a
   // childIds row with a confirmed zero total drops out of the index (see the
@@ -2867,6 +2878,8 @@ async function loadBlockStats() {
     if (data && data.totals && typeof data.totals === 'object') {
       state.blockTotals = data.totals
     }
+    state.importRows = data && data.imports && typeof data.imports === 'object' ? data.imports : {}
+    state.inlinedHeaders = data && data.inlinedHeaders && typeof data.inlinedHeaders === 'object' ? data.inlinedHeaders : {}
   } catch (_) {
     /* offline — fall back to client-side counts */
   }
@@ -3084,11 +3097,101 @@ window.addEventListener('pagehide', () => {
   approveSignalPending.clear()
 })
 
+// ── Shared import approval ──────────────────────────────────────────────────
+// A changed `use` import shows as rows at the top of every block that uses it
+// (withImportRows in Block.mjs, import_inline.go). Reviewer request: "als ze in
+// een andere blok al zijn goedgekeurd, zijn ze daar ook goedgekeurd". Each
+// block stores its own prefix rows like any other row (so the server's
+// done/total per block stays exact); these two helpers keep the copies equal.
+// state.importRows maps a block to the header row behind each prefix row, so
+// this works without anyone's code being loaded.
+
+// importPrefixSnapshot — block id → the prefix indices approved as last seen.
+// Plain module state (never reactive): it is how propagateImportApproval tells
+// the rows THIS write changed from rows that merely differ elsewhere.
+const importPrefixSnapshot = new Map()
+
+function importPrefixApproved(b, n) {
+  const set = approvedRowSet(b)
+  const out = new Set()
+  for (let k = 0; k < n; k++) if (set.has(k)) out.add(k)
+  return out
+}
+
+// setPrefixRow approves/clears prefix row k of y (reassigning the arrays, like
+// every approval writer). Returns whether anything changed.
+function setPrefixRow(y, k, on) {
+  const set = approvedRowSet(y)
+  const calls = Array.isArray(y.approvedCalls) ? y.approvedCalls : []
+  const callsOnRow = calls.some((key) => String(key).startsWith(k + ':'))
+  if (set.has(k) === on && !callsOnRow) return false
+  if (on) set.add(k)
+  else set.delete(k)
+  y.approvedRows = [...set].sort((a, b) => a - b)
+  if (callsOnRow) y.approvedCalls = calls.filter((key) => !String(key).startsWith(k + ':'))
+  return true
+}
+
+// propagateImportApproval copies the prefix rows b's latest write changed to
+// every other block of the same file showing the same header row.
+function propagateImportApproval(b) {
+  const hr = state.importRows && state.importRows[b.id]
+  if (!hr || !hr.length) return
+  const now = importPrefixApproved(b, hr.length)
+  const prev = importPrefixSnapshot.get(b.id) || new Set()
+  importPrefixSnapshot.set(b.id, now)
+  const changes = []
+  for (let k = 0; k < hr.length; k++) if (now.has(k) !== prev.has(k)) changes.push([hr[k], now.has(k)])
+  if (!changes.length) return
+  for (const y of state.allBlocks) {
+    if (y === b || y.file !== b.file) continue
+    const yr = state.importRows[y.id]
+    if (!yr) continue
+    let changed = false
+    for (const [h, on] of changes) {
+      const k = yr.indexOf(h)
+      if (k >= 0 && setPrefixRow(y, k, on)) changed = true
+    }
+    importPrefixSnapshot.set(y.id, importPrefixApproved(y, yr.length))
+    if (changed) persistApprovalOnly(y)
+  }
+}
+
+// syncImportApprovals aligns all copies once approvals + blockstats are in: a
+// header row approved in ANY block counts as approved in all of them. Also
+// (re)seeds importPrefixSnapshot.
+function syncImportApprovals() {
+  const map = state.importRows || {}
+  const users = state.allBlocks.filter((y) => map[y.id] && map[y.id].length)
+  const approved = new Set()
+  for (const y of users) {
+    const yr = map[y.id]
+    for (const k of importPrefixApproved(y, yr.length)) approved.add(y.file + '\n' + yr[k])
+  }
+  for (const y of users) {
+    const yr = map[y.id]
+    let changed = false
+    for (let k = 0; k < yr.length; k++) {
+      if (approved.has(y.file + '\n' + yr[k]) && setPrefixRow(y, k, true)) changed = true
+    }
+    importPrefixSnapshot.set(y.id, importPrefixApproved(y, yr.length))
+    if (changed) persistApprovalOnly(y)
+  }
+}
+
 // persistApproval signals a block's full approved state to the durable approve
 // tracker — the ONLY write path (the UI never writes a read-model directly). A
 // no-op until approveRunId is known (offline); fire-and-forget, best-effort,
 // serialized/coalesced through approveSignalQueue above.
 function persistApproval(b) {
+  if (!b) return
+  propagateImportApproval(b)
+  persistApprovalOnly(b)
+}
+
+// persistApprovalOnly is persistApproval without the import propagation — the
+// propagation's own writes go through here, so they never cascade.
+function persistApprovalOnly(b) {
   if (!b || !state.approveRunId) return
   const anchors = approvalAnchors(b)
   queueApproveSignal('block:' + b.id, {
@@ -3873,6 +3976,9 @@ function recomputeLeftList() {
   // resolvedCallTargetIds/testCallTargetIds — so it joins the relation
   // children here instead of vanishing.
   const hidden = new Set(resolvedCallTargetIds())
+  // A header whose every changed line shows inside a block that uses it
+  // (import_inline.go) has nothing of its own left to review.
+  for (const id of Object.keys(state.inlinedHeaders || {})) if (state.inlinedHeaders[id]) hidden.add(id)
   const testTargetIds = testCallTargetIds()
   const childIds = new Set([...state.relations.map((r) => r.childId), ...testTargetIds])
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
@@ -5131,7 +5237,9 @@ async function loadCallResolve() {
     const res = await fetch(`/api/callresolve?pr=${state.pr}${repoQuery}`)
     if (!res.ok) return
     const rows = await res.json()
-    state.callResolve = Array.isArray(rows) ? rows : []
+    // kind 'import' is retired (a used import now shows inside the block,
+    // import_inline.go): ignore a row a not-yet-rebuilt relations pass left.
+    state.callResolve = Array.isArray(rows) ? rows.filter((r) => r.kind !== 'import') : []
     // A resolved call whose definition is a PR block now shows in "Onderliggende
     // code", so drop it from the left list (recompute preserves the selection).
     recomputeLeftList()
@@ -5522,6 +5630,7 @@ async function refreshBlocksAfterOwnLanding(touchedFiles) {
   // fetched and codeDiff even ran, but its DOM never mounted, leaving a
   // header-only card. Reproduced and fixed in tests/refreshing-pill.spec.mjs.
   await Promise.all([loadApprovals(), loadBlockStats()])
+  syncImportApprovals()
   recomputeLeftList()
   // A really removed drilled block: one level back, onto the parent's last
   // approved unit. A really removed selected block: the last approved line of
@@ -5941,7 +6050,7 @@ function childrenOf(b) {
 // non-block-level treatment, findCallSites' own `class_ctor:`/`class_method:`
 // branch just matches the `Foo(` literal too in that case.
 function isBlockLevelCallKey(name) {
-  return /^(resource|migration_model|data_provider|trait_usage|class_member|import):/.test(name)
+  return /^(resource|migration_model|data_provider|trait_usage|class_member):/.test(name)
 }
 
 // findCallSites locates, in a block's aligned diff rows, every place method
@@ -12244,6 +12353,16 @@ function unitLineRange(b, rows, unit) {
     const r = rows[i]
     if (!r) continue
     const hasContent = side === 'RIGHT' ? r.right != null : r.left != null
+    // An inlined import row (withImportRows, Block.mjs) lives on the header's
+    // lines: it carries its own line number and never advances the body's.
+    if (r.imp) {
+      const no = side === 'RIGHT' ? r.newLine : r.oldLine
+      if (i >= unit.start && i <= unit.end && hasContent && no) {
+        if (!startLine) startLine = no
+        endLine = no
+      }
+      continue
+    }
     if (i >= unit.start && i <= unit.end && hasContent) {
       const no = side === 'RIGHT' ? newNo : oldNo
       if (!startLine) startLine = no
@@ -12275,6 +12394,18 @@ function unitBothLineRanges(b, rows, unit) {
     const r = rows[i]
     if (!r) continue
     const inUnit = i >= unit.start && i <= unit.end
+    // An inlined import row: its own lines, see unitLineRange.
+    if (r.imp) {
+      if (inUnit && r.newLine) {
+        if (!newStartLine) newStartLine = r.newLine
+        newEndLine = r.newLine
+      }
+      if (inUnit && r.oldLine) {
+        if (!oldStartLine) oldStartLine = r.oldLine
+        oldEndLine = r.oldLine
+      }
+      continue
+    }
     if (inUnit && r.right != null) {
       if (!newStartLine) newStartLine = newNo
       newEndLine = newNo
@@ -14352,8 +14483,15 @@ function githubFileLine() {
   const idx = state.mode === 'diff' ? state.change : 0
   const unit = navUnitsOf(b, rows, gran)[idx]
   const startRow = unit ? unit.start : 0
+  // An inlined import row (withImportRows) carries its own file line.
+  const sr = rows[startRow]
+  if (sr && sr.imp) {
+    const no = useOld ? sr.oldLine : sr.newLine
+    if (no) return { file: b.file, line: no, side: gutter }
+  }
   let seen = 0
   for (let i = 0; i <= startRow && i < rows.length; i++) {
+    if (rows[i].imp) continue
     if (rows[i][sideKey] != null) seen++
   }
   return { file: b.file, line: cs.start + Math.max(seen - 1, 0), side: gutter }
