@@ -6632,14 +6632,15 @@ export function startComment(commentTargetFn) {
 //
 // It deliberately reuses toNew() (draft handling, Claude reset, focus) and
 // only then flips the flag — toNew clears it, so the order matters.
-export function startPrWideComment() {
+export function startPrWideComment(text) {
   toNew(null)
   cs.prWideCompose = true
   // Its own draft identity — draftKeyFor(null) would be '__none__', which a
   // line-comment composer opened with no resolvable target also uses, and the
   // two drafts have nothing to do with each other.
   composeDraftKey = PRWIDE_DRAFT_KEY
-  const draft = getComposeDraft(PRWIDE_DRAFT_KEY)
+  // Typed text (the `/` menu's no-match fallback) wins over a stored draft.
+  const draft = text || getComposeDraft(PRWIDE_DRAFT_KEY)
   if (draft) prefillField('[data-testid=comment-compose]', draft)
 }
 

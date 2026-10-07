@@ -1727,12 +1727,14 @@ that guard the description column's own anchor would never be reached.
 ### The general chat: `/`'s no-match fallback and its own PR_COMMANDS item
 
 Typing something no PR command matches (the reported case: `fix tests in pr`
-→ a bare "Geen commando's.") now falls back to ONE item, **"Chat over deze
-PR"**, which opens this PR's general conversation and **sends the typed text
+→ a bare "Geen commando's.") now falls back to **"Chat over deze
+PR"** (first, default Enter) plus **"Algemene comment plaatsen"**
+(`startPrWideComment(q)`, which only PREFILLS the PR-wide composer with the
+typed text — placing stays a second, deliberate Enter), The chat item opens this PR's general conversation and **sends the typed text
 straight away** as its first turn — the same shape (and the same
 `sendClaudeChatText` send path) the block palette's "Chat over deze regel"
-already had. Deliberately a single item: placing a PR-wide comment is a real,
-GitHub-visible action and stays a deliberate menu choice, never a fallback.
+already had. The comment item is never run directly: placing a PR-wide comment
+is a real, GitHub-visible action.
 
 `PR_COMMANDS`' own first real item — **"Chat met Claude over deze PR"**, thus
 `defaultSel`'s default `Enter` action — is the same thing without typed text.

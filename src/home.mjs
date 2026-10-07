@@ -14966,6 +14966,13 @@ function resolveCommandsInner(query) {
           hint: 'claude',
           run: () => openGeneralChat(q),
         },
+        {
+          id: 'make-pr-comment',
+          label: t('Algemene comment plaatsen'),
+          hint: 'comment',
+          // Only prefills the composer; placing stays a deliberate second Enter.
+          run: () => startPrWideComment(q),
+        },
       ]
     }
     return list

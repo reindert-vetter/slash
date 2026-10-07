@@ -28,7 +28,7 @@ test('`/` + a no-match query starts the one general chat, in an overlay, with it
   // A query no PR command matches falls back to the general chat instead of
   // "Geen commando's." — the reported dead end.
   await page.getByTestId('command-input').fill('fix tests in pr')
-  await expect(rows).toHaveCount(1)
+  await expect(rows).toHaveCount(2)
   await expect(rows.first()).toContainText('Chat over deze PR')
 
   const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')

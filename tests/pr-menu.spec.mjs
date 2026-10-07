@@ -195,8 +195,13 @@ test.describe('PR Review Tree — `/` PR menu', () => {
 
     // Typing something no PR command matches lands on the general chat item.
     await page.getByTestId('command-input').fill('fix tests in pr')
-    await expect(rows).toHaveCount(1)
+    await expect(rows).toHaveCount(2)
     await expect(rows.first()).toContainText('Chat over deze PR')
+    await expect(rows.nth(1)).toContainText('Algemene comment plaatsen')
+    // Choosing it only prefills the PR-wide composer with the typed text.
+    await rows.nth(1).click()
+    await expect(page.getByTestId('comment-compose')).toHaveValue('fix tests in pr')
+    await page.keyboard.press('Escape')
 
     // Enter on the block itself still opens the block palette, with its own
     // "Chat over deze regel" no-match fallback.
