@@ -7335,6 +7335,46 @@ export function pendingPublishNeedsReviewerChoice() {
   return !!c && !isPrWideKind(c.kind)
 }
 
+// threadPublishNeedsReviewerChoice — "Zet op GitHub" on a still-local INLINE
+// thread would put the reviewer in GitHub's Reviewers sidebar (PR-wide
+// threads never do). The comment menu then offers the PR-wide way as well.
+export function threadPublishNeedsReviewerChoice(c) {
+  return !!c && notReviewerOnPr() && !isPrWideKind(c.kind)
+}
+
+// publishThreadAsPrWide — "Zet op GitHub" as a general PR comment instead:
+// the thread's root text (plus the earlier local replies when `withHistory`),
+// with its file:line on top, goes out as a NEW Kind "issue" comment, and only
+// once that landed the local thread is removed through the ordinary "delete"
+// Signal (deleteComment) — a failed post keeps the thread. An AI finding is
+// never deleted here (a reviewer delete would record it as dismissed for good).
+export async function publishThreadAsPrWide(c, withHistory) {
+  if (!c) return false
+  const parts = [c.body]
+  if (withHistory && c.reactions) {
+    for (const r of c.reactions) {
+      if ((r.source || 'ui') === 'ui' && !r.githubId && r.body && !threadStatusSentinel(r.body)) parts.push(r.body)
+    }
+  }
+  const ok = await createComment({
+    pr: cs.pr,
+    file: '',
+    line: 0,
+    body: inlineLocationPrefix(c.file, c.line) + parts.join('\n\n'),
+    kind: 'issue',
+  })
+  if (ok && (c.source || 'ui') !== 'ai') {
+    cs.busy = true
+    try {
+      await deleteComment(c)
+      await loadComments(cs.pr)
+    } finally {
+      cs.busy = false
+    }
+  }
+  return ok
+}
+
 // sendPendingAsPrWide posts the held reply as a NEW PR-wide comment instead of
 // publishing the local inline thread — the reviewer stays off the Reviewers
 // sidebar. Only the typed reply goes out (with its location on top); the local

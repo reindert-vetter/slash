@@ -2964,6 +2964,15 @@ make you a reviewer. So the choice is made **before** posting:
   Claude-chat anchor stays local and isn't asked either. Gate:
   `composeNeedsReviewerChoice` / `pendingPublishNeedsReviewerChoice`
   (`RelatedPanel.mjs`).
+- **"Zet op GitHub"** (comment menu, empty reply field, `publishThreadCommand`
+  in `home.mjs`) asks too, for a still-local INLINE thread
+  (`threadPublishNeedsReviewerChoice`): the inline items get "(je wordt
+  reviewer)" and stay first; extra items post the root text (or the whole
+  local conversation) as a PR-wide Kind `issue` comment
+  (`publishThreadAsPrWide`, location on top). Once that landed the local
+  thread is removed via the ordinary `delete` Signal (`deleteComment`), a
+  failed post keeps it; an AI finding is never deleted this way (a reviewer
+  delete would record it as dismissed).
 - **"Not a reviewer"** comes from `GET /api/reviewer-status?pr=N`
   (`reviewer_status.go`, `countsAsReviewer`): a live, read-only GitHub read
   (`github.ReviewerFacts`, one GraphQL call) — you are a reviewer when you are

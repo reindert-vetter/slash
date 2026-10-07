@@ -101,3 +101,57 @@ test('not a reviewer: the replyPublish menu offers the reply as a general commen
   expect(posted[0].kind).toBe('issue')
   expect(posted[0].body).toMatch(/^`[^`]+:1`\n\nmijn antwoord$/)
 })
+
+// "Zet op GitHub" from the comment menu (empty reply field) publishes a local
+// inline thread the same way, so it asks too: inline (default, "je wordt
+// reviewer") or as a general comment, after which the local thread is removed
+// through the ordinary delete Signal. Everything is mocked, nothing hits GitHub.
+test('not a reviewer: "Zet op GitHub" offers a general comment and then deletes the local thread', async ({ page }) => {
+  await page.route('**/api/reviewer-status**', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"reviewer":false}' }),
+  )
+  await page.goto('/pr/12903')
+  const card = page.getByTestId('block-column').locator('article').first()
+  await expect(card).toBeVisible()
+  const label = (await card.locator('h2').first().innerText()).trim()
+  const fileLine = (await card.locator('.font-mono.text-slate-500').first().innerText()).trim()
+  const body = 'lokale inline thread zonder antwoord'
+  const seeded = await page.request.post('/api/workflows/task_code_comment', {
+    data: { pr: 12903, file: fileLine.split(':')[0], line: 1, author: 'reviewer', body, local: true, label, gran: 'group', rowStart: 0, rowEnd: 0 },
+  })
+  expect(seeded.ok()).toBeTruthy()
+  await page.goto('/pr/12903?sel=' + encodeURIComponent(fileLine))
+  await expect(card.locator('h2').first()).toHaveText(label)
+
+  const posted = []
+  const deleted = []
+  const published = []
+  await page.route('**/api/workflows/task_code_comment', async (route) => {
+    posted.push(route.request().postDataJSON())
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"runId":"fake-run"}' })
+  })
+  await page.route('**/api/workflows/*/signals/delete', async (route) => {
+    deleted.push(route.request().url())
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+  })
+  await page.route('**/api/workflows/*/signals/reply', async (route) => {
+    published.push(route.request().postDataJSON())
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' })
+  })
+  const row = page.getByTestId('inline-comments').getByTestId('comment-item').filter({ hasText: body })
+  await row.click()
+  const field = page.getByTestId('reaction-compose')
+  await expect(field).toBeFocused()
+  await field.press('Enter') // empty -> comment menu
+  const menu = page.getByTestId('command-menu')
+  await menu.getByTestId('command-row').filter({ hasText: 'Zet op GitHub' }).click()
+  const rows = menu.getByTestId('command-row')
+  await expect(rows.nth(1)).toContainText('(je wordt reviewer)')
+  await rows.filter({ hasText: 'als algemene comment' }).click()
+  await expect.poll(() => posted.length).toBe(1)
+  expect(posted[0].kind).toBe('issue')
+  expect(posted[0].file).toBe('')
+  expect(posted[0].body).toMatch(/^`[^`]+:1`\n\nlokale inline thread zonder antwoord$/)
+  await expect.poll(() => deleted.length).toBe(1)
+  expect(published).toHaveLength(0)
+})

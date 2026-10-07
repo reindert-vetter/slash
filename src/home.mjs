@@ -155,6 +155,8 @@ import RelatedPanel, {
   needsPublishChoice,
   localReplyCount,
   publishThreadOnly,
+  publishThreadAsPrWide,
+  threadPublishNeedsReviewerChoice,
   CodePreviewPanel,
   toggleCodePreviewExpanded,
   activeCodePreviewKey,
@@ -8924,12 +8926,20 @@ async function deleteCommentAndSelectRow() {
 // positions to return to (mirroring the same split between
 // `deleteCommentAndSelectRow` and `deletePrCommentItem`). Defaults to the bare
 // call for any future caller that doesn't care.
-function publishThreadCommand(c, doPublish) {
+function publishThreadCommand(c, doPublish, doPrWide) {
   const n = localReplyCount(c)
   const isAI = (c.source || 'ui') === 'ai'
   const rootNoun = isAI ? t('de AI-melding') : t('mijn comment')
   const publish = doPublish || ((withHistory) => publishThreadOnly(c, withHistory))
-  if (n === 0) {
+  const prWide = doPrWide || ((withHistory) => publishThreadAsPrWide(c, withHistory))
+  // On a PR the reviewer doesn't review, an inline publish makes them a
+  // reviewer for good (see NOT_REVIEWER_COMMANDS): say so, and offer the
+  // PR-wide way too. Inline stays first, i.e. the default.
+  const notReviewer = threadPublishNeedsReviewerChoice(c)
+  const asReviewer = (label) => (notReviewer ? t('{label} (je wordt reviewer)', { label }) : label)
+  const prWideItems = (withHistory, id, label) =>
+    notReviewer ? [{ id, label, hint: 'hele PR', run: () => prWide(withHistory) }] : []
+  if (n === 0 && !notReviewer) {
     return {
       id: 'comment-publish',
       label: t('Zet op GitHub'),
@@ -8937,24 +8947,43 @@ function publishThreadCommand(c, doPublish) {
       run: () => publish(false),
     }
   }
+  const items = [
+    {
+      id: 'comment-publish-root',
+      label: asReviewer(t('Alleen {noun}', { noun: rootNoun })),
+      hint: 'alleen dit',
+      run: () => publish(false),
+    },
+  ]
+  if (n > 0) {
+    items.push({
+      id: 'comment-publish-history',
+      label: asReviewer(t(n === 1 ? 'Met de eerdere {n} bericht' : 'Met de eerdere {n} berichten', { n })),
+      hint: 'hele gesprek',
+      run: () => publish(true),
+    })
+  }
+  items.push(
+    ...prWideItems(
+      false,
+      'comment-publish-prwide',
+      t('Alleen {noun} als algemene comment (geen reviewer)', { noun: rootNoun }),
+    ),
+  )
+  if (n > 0) {
+    items.push(
+      ...prWideItems(
+        true,
+        'comment-publish-prwide-history',
+        t('Het hele gesprek als algemene comment (geen reviewer)'),
+      ),
+    )
+  }
   return {
     id: 'comment-publish',
     label: t('Zet op GitHub'),
     hint: 'github',
-    children: withClose([
-      {
-        id: 'comment-publish-root',
-        label: t('Alleen {noun}', { noun: rootNoun }),
-        hint: 'alleen dit',
-        run: () => publish(false),
-      },
-      {
-        id: 'comment-publish-history',
-        label: t(n === 1 ? 'Met de eerdere {n} bericht' : 'Met de eerdere {n} berichten', { n }),
-        hint: 'hele gesprek',
-        run: () => publish(true),
-      },
-    ]),
+    children: withClose(items),
   }
 }
 
@@ -8970,9 +8999,9 @@ function publishThreadCommand(c, doPublish) {
 // tests/reply-publish-local-thread.spec.mjs) — snapshots the focused block
 // BEFORE the await, same reasoning as `deleteCommentAndSelectRow`: the reload
 // inside `publishThreadOnly` can itself touch `cs.focus`/`cs.sel`.
-async function publishThreadAndSelectRow(c, withHistory) {
+async function publishThreadAndSelectRow(c, withHistory, how = publishThreadOnly) {
   const b = focusedBlock()
-  await publishThreadOnly(c, withHistory)
+  await how(c, withHistory)
   if (!b) return
   const rows = blockRows(b)
   const gran = c.gran || 'group'
@@ -9096,7 +9125,13 @@ function commentCommandsFor() {
     })
   }
   if (needsPublishChoice(c))
-    items.push(publishThreadCommand(c, (withHistory) => publishThreadAndSelectRow(c, withHistory)))
+    items.push(
+      publishThreadCommand(
+        c,
+        (withHistory) => publishThreadAndSelectRow(c, withHistory),
+        (withHistory) => publishThreadAndSelectRow(c, withHistory, publishThreadAsPrWide),
+      ),
+    )
   const githubId = focusedCommentGithubId()
   if (githubId) {
     items.push({
