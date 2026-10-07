@@ -215,7 +215,8 @@ import { ensureAutoWarn, autoWarnToggleButton, autoWarn } from './autowarn.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import TestMethodsColumn from './TestMethodsColumn.mjs'
-import { meLogin, ensureMe } from './avatar.mjs'
+import { meLogin, ensureMe, ensureNames } from './avatar.mjs'
+import { reviewerAvatar, sortReviewers } from './reviewerAvatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 // Only the fetch wrapper is needed here now: the rows themselves are rendered
 // by the merged "Taken" block (TasksPanel, RelatedPanel.mjs), not by a separate
@@ -785,6 +786,10 @@ const state = reactive({
   // URL — ephemeral UI state, like `menu`/`ui.task`, not a navigation position a
   // refresh needs to restore.
   showDescription: false,
+  // prReviewers — [{login, avatarUrl, state, team}] for the avatar row in the
+  // PR-info column. Refetched from GET /api/inbox/status every time stop 1
+  // opens (watch below); the previous list stays until the answer lands.
+  prReviewers: [],
   // descriptionPinned / keepIndexInDiff — "keep this left column VISIBLE even
   // though the keyboard has moved past it, because it still fits". Both are
   // written only by applyDiffColumnFit (see its own doc comment) after a MOUSE
@@ -1334,6 +1339,33 @@ function editableCaretCanMoveDown() {
 // future extra windows bind their own state with their own `ns` so their params
 // sit alongside these in the same query string. Do this before the first render
 // so restored values are already in `state`.
+// Refresh the PR-info column's reviewer avatars every time stop 1 opens. Deps
+// inline in the getter (arrowjs-pitfalls); the fetch lives in the callback and
+// only replaces state.prReviewers once the answer is in (no flicker), dropped
+// if the PR changed meanwhile.
+watch(
+  () => [state.showDescription, state.pr],
+  () => {
+    if (state.showDescription && state.pr) refreshPrReviewers()
+  },
+)
+async function refreshPrReviewers() {
+  const pr = state.pr
+  const key = REPO ? REPO + '#' + pr : String(pr)
+  try {
+    const res = await fetch('/api/inbox/status?prs=' + encodeURIComponent(key))
+    if (!res.ok) return
+    const body = await res.json()
+    const st = body && body.ok && body.statuses && body.statuses[key]
+    if (!st || pr !== state.pr) return
+    const list = Array.isArray(st.reviewers) ? st.reviewers : []
+    await ensureNames(list.filter((r) => !r.team).map((r) => r.login))
+    if (pr === state.pr) state.prReviewers = list
+  } catch (e) {
+    // keep the last-known avatars
+  }
+}
+
 bindUrlState(state, [
   { key: 'blockRef', param: 'sel', default: '' },
   { key: 'mode', param: 'mode', default: 'list' },
@@ -17262,19 +17294,6 @@ function prStatusSlot(meta) {
     ]
   }
   const pills = [prReviewPill(meta).key('review'), prChecksPill(meta)]
-  const reviewers = Array.isArray(meta.reviewers) ? meta.reviewers : []
-  if (reviewers.length) {
-    pills.push(
-      html`<span class="flex flex-wrap items-center gap-1" data-testid="pr-info-reviewers">
-        ${reviewers.map((login, i) =>
-          html`<span
-            class="inline-flex items-center rounded-full bg-slate-100 dark:bg-zinc-800 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:text-zinc-400 ring-1 ring-inset ring-slate-200 dark:ring-zinc-800"
-            >${login}</span
-          >`.key('rev:' + i + ':' + login),
-        )}
-      </span>`.key('reviewers'),
-    )
-  }
   return pills.filter(Boolean)
 }
 
@@ -17784,7 +17803,9 @@ function prInfoCard(state) {
             </div>`
           : ''}
       <div class="flex items-center justify-between" data-testid="pr-info-theme-row">
-        <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Weergave')}</span>
+        <span class="flex min-h-[1.5rem] flex-wrap items-center gap-1.5" data-testid="pr-info-reviewer-avatars">
+          ${() => sortReviewers(state.prReviewers).map((r, i) => reviewerAvatar(r).key('rev:' + i + ':' + r.login))}
+        </span>
         <div class="flex items-center gap-1.5">
           ${prMenuButton()}
           ${autoWarnToggleButton()}

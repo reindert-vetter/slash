@@ -670,6 +670,19 @@ above Mentioned).
 Test: `tests/pr-description-block.spec.mjs`; backend
 `pr_description_comment_test.go`.
 
+**Reviewer avatars in the top row.** The row above "Doel"
+(`data-testid=pr-info-theme-row`) used to start with a "Weergave" label; it now
+starts with the reviewer avatars + status badges (`pr-info-reviewer-avatars`),
+horizontally, exactly like `/pr-overview`. `reviewerAvatar`/`sortReviewers` live
+in `src/reviewerAvatar.mjs` (extracted from `overview.mjs`, which is an
+un-importable page bootstrap) and both pages import them. The data is NOT in
+`state.prMeta.reviewers` (logins only): `refreshPrReviewers` (`home.mjs`) reads
+the read-only `GET /api/inbox/status?prs=<key>` into `state.prReviewers` from a
+`watch(() => [state.showDescription, state.pr], ...)` — i.e. on **every** open of
+stop 1. The old list stays until the new answer is in (no flicker); empty while
+there are none/not loaded. The old text chips (`pr-info-reviewers`) in the
+status footer are gone. Test: `tests/pr-info-reviewer-avatars.spec.mjs`.
+
 ## The block column and its neighbour
 
 **Block column** (`data-testid=block-column`, **`shrink-0`** — not `flex-1`, so
