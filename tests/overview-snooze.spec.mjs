@@ -32,7 +32,11 @@ test.describe('PR overview — snooze a PR', () => {
     await expect(options.first()).toBeFocused()
     await expect(options.first()).toContainText('Over 3 uur')
     await expect(options.nth(2)).toContainText('Volgende week maandag 08:00')
+    // The UI hides the row optimistically, faster than the write lands; wait for
+    // the Signal so the reload below cannot abort it.
+    const sig = page.waitForResponse((r) => r.url().includes('/signals/pr_snooze') && r.request().method() === 'POST')
     await options.nth(1).click()
+    await sig
 
     await expect(inSection).toHaveCount(0)
     const snoozed = page.locator('[data-testid="snoozed-section"]')
