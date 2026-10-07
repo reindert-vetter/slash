@@ -588,6 +588,9 @@ export const EN = {
   'workflow-runs · deze PR': 'workflow runs · this PR',
   'Geen taken.': 'No tasks.',
   'nog {n} meer — scroll voor de rest': '{n} more — scroll for the rest',
+  '{n} verwijzingen': '{n} references',
+  '+{n} regels': '+{n} lines',
+  '+{n} meer': '+{n} more',
   'Dekking niet te bepalen — geen #[CoversMethod]/@covers gevonden op deze test.':
     'Coverage cannot be determined — no #[CoversMethod]/@covers found on this test.',
   'Dekking niet te bepalen — #[CoversClass] gevonden, maar geen specifieke methode kunnen vaststellen.':

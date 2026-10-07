@@ -6704,8 +6704,16 @@ function relatedChildren(b) {
   // every groupTier is a no-op 0, so this filter is itself a no-op there.
   if (range) sorted = sorted.filter((c) => (c.groupTier || 0) === 0)
   sorted = interleaveTranslationSiblings(sorted)
-  return groupTestChildren(b, sorted)
+  const grouped = groupTestChildren(b, sorted)
+  // A hard ceiling on cards: even after merging, a block can reference hundreds
+  // of DIFFERENT definitions. The rest is a "+N meer" line (`hidden`), not a
+  // card — rendering them all froze the tab.
+  if (grouped.length <= MAX_RELATED_CARDS) return grouped
+  const capped = grouped.slice(0, MAX_RELATED_CARDS)
+  capped.hidden = grouped.length - MAX_RELATED_CARDS
+  return capped
 }
+const MAX_RELATED_CARDS = 50
 
 // interleaveTranslationSiblings makes the translation children (kind:
 // 'translation', one per locale of the same key, see resolvedCallChildren)
@@ -6813,7 +6821,7 @@ function resolvedCallChildren(b) {
   const hideOutOfScope = state.mode === 'diff'
   const byId = allBlocksById()
   const changed = new Set(changedRows(rows))
-  return resolved
+  const cards = resolved
     .filter((r) => scope == null || !hideOutOfScope || scope.has(r.callKey))
     .map((r) => {
       // A translation child (a trans()/__()/@lang() key → its lang file, one per
@@ -6988,6 +6996,41 @@ function resolvedCallChildren(b) {
         nestedSig: nestedSigOf(nested),
       }
     })
+  return mergeIdenticalChildren(cards)
+}
+
+// mergeIdenticalChildren folds read-only reference cards that show the very
+// same code into ONE card. A config file with 1126 `CountryStateCodeIso::XX`
+// references resolves to 1126 rows (one per enum case) that all carry the whole
+// enum as childCode — 1126 identical cards, ~10M DOM nodes, a frozen tab (PR
+// 14092). Only a card that is not a PR block (blockId '') and not a translation
+// is merged: a changed block has its own diff/approval/arrow, and translations
+// differ per locale. The merged card keeps the first member's id/label base and
+// says how many references it stands for (`mergedCount`, shown in the label).
+// See "Identical children merge, the list is capped" in underlying-code.md.
+function mergeIdenticalChildren(cards) {
+  const seen = new Map()
+  const out = []
+  for (const c of cards) {
+    if (c.blockId || c.kind === 'translation' || !c.code) {
+      out.push(c)
+      continue
+    }
+    const key = c.file + '|' + c.line + '|' + c.code
+    const first = seen.get(key)
+    if (!first) {
+      seen.set(key, c)
+      out.push(c)
+      continue
+    }
+    first.mergedCount = (first.mergedCount || 1) + 1
+    first.prio = Math.min(first.prio, c.prio)
+    first.groupTier = Math.min(first.groupTier || 0, c.groupTier || 0)
+  }
+  for (const c of seen.values()) {
+    if (c.mergedCount > 1) c.label = c.label.split('::')[0] + ' · ' + t('{n} verwijzingen', { n: c.mergedCount })
+  }
+  return out
 }
 
 // callArrowPairs computes the arrow start/end pairs for the call-arrow overlay
@@ -12723,7 +12766,8 @@ watch(
       lastRelatedBlockId = bid
       if (state.testsExpanded) state.testsExpanded = false
     }
-    setRelated(relatedChildren(b), unresolvedCalls(b).concat(unresolvedTestCovers(b)), testCoverWarning(b))
+    const kids = relatedChildren(b)
+    setRelated(kids, unresolvedCalls(b).concat(unresolvedTestCovers(b)), testCoverWarning(b), kids.hidden || 0)
     // Push the call→child arrow pairs for the overlay (same untracked-callback
     // decoupling as setRelated itself — see callArrowPairs / callArrows.mjs).
     setCallArrows(callArrowPairs(b))

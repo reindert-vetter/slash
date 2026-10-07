@@ -359,15 +359,16 @@ let restorePending =
 // "loading" — home.mjs computes the list in a `watch` and pushes it here via
 // setRelated (the same decoupling the comment index uses with setCommentScope).
 // `rc` is this module's own reactive so the render reliably re-runs on a push.
-const rc = reactive({ children: [], unresolved: [], warning: null })
+const rc = reactive({ children: [], unresolved: [], warning: null, more: 0 })
 
 // setRelated receives the freshly-scoped underlying-code children, the
 // unresolved-call/test-coverage list, and the test-coverage warning (or null)
 // from home.mjs (via a watch on the navigation state) and stores them on rc.
 // Always reassigns (never mutates in place) so arrow.js re-renders the keyed
 // card list.
-export function setRelated(children, unresolved, warning) {
+export function setRelated(children, unresolved, warning, more = 0) {
   rc.children = Array.isArray(children) ? children : []
+  rc.more = more
   rc.unresolved = Array.isArray(unresolved) ? unresolved : []
   rc.warning = warning || null
   // A block switch (or a shrinking list) must not leave the child cursor on a
@@ -10548,6 +10549,16 @@ function hasTextSelection() {
 // related-code render encodes the nested signature). data-child-id stays on the inner card, so
 // the call-arrow overlay (callArrows.mjs, which targets the card's LEFT edge)
 // is unaffected by the chips on the right.
+// A card shows at most this many lines of its code until the cursor lands on
+// it (then the whole code renders). Rendering every card's full code froze the
+// tab on a block with many large children (PR 14092).
+const EXCERPT_LINES = 100
+function codeExcerpt(code) {
+  const lines = code.split('\n')
+  if (lines.length <= EXCERPT_LINES) return code
+  return lines.slice(0, EXCERPT_LINES).join('\n') + '\n… ' + t('+{n} regels', { n: lines.length - EXCERPT_LINES })
+}
+
 function relatedCard(r, i, drill) {
   // The card's own highlight steps aside once the cursor descends into one of
   // its drill-hint chips (cs.chipPath, see nestedChip/handleRelatedKey) — only
@@ -10652,7 +10663,7 @@ function relatedCard(r, i, drill) {
             : r.code
               ? html`<code
                   class="language-php m-0 block whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 dark:text-zinc-300"
-                  .innerHTML="${() => highlight(r.code)}"
+                  .innerHTML="${() => highlight(selected() ? r.code : codeExcerpt(r.code))}"
                 ></code>`
               : r.loading
                 ? html`<p class="px-3 py-2 text-[11px] text-slate-400 dark:text-zinc-500">${t('code laden…')}</p>`
@@ -11570,6 +11581,12 @@ export default function RelatedPanel(state, commentTarget, search) {
             )
             i++
           }
+          if (rc.more > 0)
+            rows.push(
+              html`<p class="px-1 py-1 text-[11px] text-slate-400 dark:text-zinc-500" data-testid="related-more">
+                ${t('+{n} meer', { n: rc.more })}
+              </p>`.key('related-more:' + rc.more),
+            )
           return rows
         }}
       </div>

@@ -424,6 +424,28 @@ column's full height and then scrolls internally (`min-h-0`, body
 `flex-1 overflow-auto`). Code excerpts **wrap** (`whitespace-pre-wrap
 break-words`, no horizontal scroll).
 
+### Identical children merge, long code is an excerpt, the list is capped
+
+Measured freeze (PR 14092, `config/country_states.php`): 1126 `CountryStateCodeIso::XX`
+references each resolve to a callresolve row whose `childCode` is the WHOLE enum
+(~30 KB). That was 1162 cards x ~1100 highlighted lines = ~10M DOM nodes, 8 GB
+RSS and a tab that never came back (a 100-line cap alone still froze ~12 s with
+590k nodes). Three guards, all frontend; don't remove one thinking another covers it:
+
+- **`mergeIdenticalChildren`** (`home.mjs`, end of `resolvedCallChildren`): read-only
+  children (no PR block, not a translation) with the same file+line+code become ONE
+  card labelled `Class · N verwijzingen` (`mergedCount`). Changed blocks never merge
+  (own diff/approval/call arrow). The merged card keeps the first member's id.
+- **Excerpt until selected** (`codeExcerpt`, `RelatedPanel.mjs`): a card shows at most
+  100 lines plus `… +N regels`; the full code renders once the cursor is on the card
+  (`selected()`). Display only: `r.code`, drilling and approval are unchanged.
+- **Card cap** (`MAX_RELATED_CARDS` = 50, end of `relatedChildren`): the rest is one
+  `+N meer` line (`related-more`, via `setRelated`'s 4th arg `rc.more`).
+
+The 36 MB callresolve payload (childCode per reference) is deliberately NOT deduped in
+the backend: parsing it is cheap (~0.2 s); the DOM was the cost. Test:
+`tests/related-merge-and-cap.spec.mjs`.
+
 ### Cards above the cursor collapse to just their header
 
 `relatedCard`'s `collapsed = () => cs.focus === 'code' && i < cs.codeSel`: any
