@@ -188,8 +188,8 @@ const (
 	WorkflowReadyForReview = "ready_for_review"
 	// WorkflowRemoveReviewer is the Workflow Type that drops the local
 	// reviewer (me) from a PR's requested reviewers: one Execution per "Verwijder
-	// mij als reviewer" click in the /pr-overview row popover. It runs its one
-	// Activity synchronously and completes — no signal, mirrors
+	// mij als reviewer" click in the /pr-overview row popover. It runs its two
+	// Activities (DELETE + the local "not my review" mark) synchronously and completes — no signal, mirrors
 	// WorkflowReadyForReview. WHO is removed is resolved server-side (the
 	// authenticated GitHub user), never taken from the request, so this can
 	// only ever remove yourself.
@@ -1321,6 +1321,17 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 						}
 					}
 					pr.Comments = open
+				}
+			}
+		}
+		// A new, real review request on a PR I took myself off ("Verwijder mij
+		// als reviewer") ends that: clear the mark so a later COMMENTED-only
+		// review lists it again. Best-effort — a failed clear just retries on
+		// the next refresh.
+		if m.prmeta != nil {
+			for _, k := range reRequestedMarks(snap.Sections, snap.Statuses, snap.GeneratedFor, reviewerLeftSet(ctx, m.prmeta)) {
+				if err := m.prmeta.ClearReviewerLeftAt(ctx, k.Repo, k.PR); err != nil {
+					m.logf("pr_inbox: clear reviewer-left mark %s: %v", k, err)
 				}
 			}
 		}
@@ -2934,6 +2945,21 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, fmt.Errorf("remove reviewer: unknown current user")
 		}
 		return nil, m.ghFor(arg.Repo).RemoveReviewer(ctx, arg.PR, me.Login)
+	})
+	// Activity for remove_reviewer (write, workflow-driven): remember locally
+	// that I am no reviewer on this PR. The DELETE above cannot drop a
+	// COMMENTED-only review, so GitHub keeps listing me and the inbox's
+	// reviewed-by:@me catch would bring the PR back; this mark makes it skip it
+	// until a new real review request (see reRequestedMarks).
+	engine.RegisterActivity("markReviewerLeft", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg reviewerLeftMark
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		if m.prmeta == nil {
+			return nil, nil
+		}
+		return nil, m.prmeta.SaveReviewerLeftAt(ctx, arg.Repo, arg.PR, arg.At)
 	})
 	engine.RegisterActivity("bumpReviewerUsage", func(ctx context.Context, in []byte) ([]byte, error) {
 		var arg ReadyForReviewInput
@@ -4597,8 +4623,9 @@ func (m *TaskManager) StartReadyForReview(in ReadyForReviewInput) (string, error
 }
 
 // removeReviewerWorkflow drops the local reviewer from a PR's requested
-// reviewers. One Activity, always in the same position, so replay is trivially
-// deterministic. No signal — it runs straight through and completes, mirroring
+// reviewers, then marks the PR locally as "not my review" (markReviewerLeft,
+// stamped with w.Now()). Two Activities, always in the same order, so replay is
+// trivially deterministic. No signal — it runs straight through and completes, mirroring
 // readyForReviewWorkflow.
 func removeReviewerWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	var in RemoveReviewerInput
@@ -4608,7 +4635,18 @@ func removeReviewerWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if err := w.ExecuteActivity("removeSelfAsReviewer", in, nil); err != nil {
 		return nil, fmt.Errorf("remove reviewer: %w", err)
 	}
+	mark := reviewerLeftMark{Repo: in.Repo, PR: in.PR, At: w.Now().UTC().Format(time.RFC3339)}
+	if err := w.ExecuteActivity("markReviewerLeft", mark, nil); err != nil {
+		return nil, fmt.Errorf("remove reviewer: mark: %w", err)
+	}
 	return json.Marshal(map[string]any{"pr": in.PR})
+}
+
+// reviewerLeftMark is markReviewerLeft's input; At comes from w.Now().
+type reviewerLeftMark struct {
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
+	At   string `json:"at"`
 }
 
 // StartRemoveReviewer runs the remove_reviewer Workflow Execution to completion

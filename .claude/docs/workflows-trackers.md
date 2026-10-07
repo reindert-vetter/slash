@@ -743,7 +743,27 @@ trivially deterministic.
   that login is unknown (offline / `SLASH_GITHUB=off`) rather than silently
   removing nobody. `RemoveReviewerInput` therefore carries only `PR` — a request
   can never name a different reviewer.
-- Tests: `remove_reviewer_test.go`,
+- **The DELETE alone is not enough — a local "not my review" mark.** GitHub
+  also lists you as a reviewer once you only left an inline comment/reply (a
+  COMMENTED review), and such a review can be neither dismissed nor removed. The
+  DELETE is then a no-op, and the "Needs your review" catch
+  (`reviewed-by:@me` + "my latest review is COMMENTED", `inbox.go`) brought the
+  PR straight back on the next refresh/page load. So the workflow runs a second
+  Activity, **`markReviewerLeft`**, which stamps `w.Now()` into prmeta's
+  `reviewer_left_at` column (`SaveReviewerLeftAt`). `buildInboxSnapshot` reads
+  all marks once (`reviewerLeftSet` → `ReviewerLeftMarks`) and the COMMENTED
+  catch's `keep` (via `keepCtx.left`) skips every marked PR. On GitHub you stay
+  visible in the sidebar; only slash forgets the PR.
+- **Only a new, real review request lifts the mark** (an explicit product
+  choice: a later reply of your own does NOT bring the PR back). A re-request
+  re-lists the PR through the first query (`user-review-requested:@me`, which
+  has no `keep`), and the `refreshInbox` Activity then clears the mark
+  (`reRequestedMarks` — marked PRs where I am a personal `PENDING` reviewer →
+  `ClearReviewerLeftAt`), so a COMMENTED review after that re-request is caught
+  again as usual. Accepted gap: re-requested **and** reviewed with only a
+  comment before any refresh ran → the mark survives and the PR stays hidden.
+  A merged PR loses the mark with its whole prmeta row in `cleanup`.
+- Tests: `remove_reviewer_test.go`, `inbox_reviewer_left_test.go`,
   `tests/overview-remove-reviewer.spec.mjs`.
 
 ## Ignoring a PR in Migrations & API changes (`pr_ignore` + `modules/prignore`)

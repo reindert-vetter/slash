@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS pr_meta (
   fully_approved_at TEXT NOT NULL DEFAULT '',
   base_ref         TEXT NOT NULL DEFAULT '',
   prev_base_ref    TEXT NOT NULL DEFAULT '',
+  reviewer_left_at TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (repo, pr)
 );
 `
@@ -178,6 +179,7 @@ func migrate(db *sql.DB) {
 		`ALTER TABLE pr_meta ADD COLUMN summary_source TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN base_ref TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE pr_meta ADD COLUMN prev_base_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pr_meta ADD COLUMN reviewer_left_at TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -331,6 +333,58 @@ func (m *Module) SaveFullyApprovedAt(ctx context.Context, repo string, pr int) e
 			fully_approved_at=excluded.fully_approved_at, updated_at=excluded.updated_at`,
 		repo, pr, now(), now())
 	return err
+}
+
+// SaveReviewerLeftAt stamps at (RFC3339, the remove_reviewer workflow's own
+// w.Now()) as the moment the local reviewer took themselves off pr ("Verwijder
+// mij als reviewer"). WRITE — workflow-only. GitHub keeps listing a reviewer
+// whose only review is COMMENTED (such a review cannot be dismissed), so the
+// inbox's reviewed-by:@me COMMENTED catch would bring the PR straight back; this
+// mark is what makes that catch skip it (see buildInbox). Only touches its own
+// column.
+func (m *Module) SaveReviewerLeftAt(ctx context.Context, repo string, pr int, at string) error {
+	_, err := m.db.ExecContext(ctx, `
+		INSERT INTO pr_meta (repo, pr, reviewer_left_at, updated_at) VALUES (?,?,?,?)
+		ON CONFLICT(repo, pr) DO UPDATE SET reviewer_left_at=excluded.reviewer_left_at,
+			updated_at=excluded.updated_at`,
+		repo, pr, at, now())
+	return err
+}
+
+// ClearReviewerLeftAt drops the SaveReviewerLeftAt mark of pr — a new, real
+// review request arrived, so the reviewer is a reviewer again. WRITE —
+// workflow-only (the refreshInbox Activity). A no-op when there is no row.
+func (m *Module) ClearReviewerLeftAt(ctx context.Context, repo string, pr int) error {
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE pr_meta SET reviewer_left_at = '' WHERE repo = ? AND pr = ?`, repo, pr)
+	return err
+}
+
+// LeftMark is one PR the local reviewer took themselves off (ReviewerLeftMarks).
+type LeftMark struct {
+	Repo string
+	PR   int
+	At   string
+}
+
+// ReviewerLeftMarks lists every PR that currently carries a
+// SaveReviewerLeftAt mark. READ — safe anywhere; one query for the whole inbox.
+func (m *Module) ReviewerLeftMarks(ctx context.Context) ([]LeftMark, error) {
+	rows, err := m.db.QueryContext(ctx,
+		`SELECT repo, pr, reviewer_left_at FROM pr_meta WHERE reviewer_left_at != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LeftMark
+	for rows.Next() {
+		var lm LeftMark
+		if err := rows.Scan(&lm.Repo, &lm.PR, &lm.At); err != nil {
+			return nil, err
+		}
+		out = append(out, lm)
+	}
+	return out, rows.Err()
 }
 
 // Purge removes the stored pr_meta row of pr, if any. WRITE — workflow-only,

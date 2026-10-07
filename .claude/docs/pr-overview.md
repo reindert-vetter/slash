@@ -1155,7 +1155,11 @@ up — so the row would linger, then flicker away. Instead the PR number goes in
 **`isHiddenPr`** predicate that `normalizeSections`/`applyCached` apply to every
 later snapshot, and — like `approvedPr` — is **never emptied**, otherwise the row
 would pop back on the next poll. A real page load clears it, by which time the
-server agrees. The repaint after the filter is **explicit** (`scheduleRepaint()`):
+server agrees — also when GitHub keeps listing me because my only review is a
+COMMENTED one (which cannot be dismissed): the workflow leaves a local
+`reviewer_left_at` mark that makes the `reviewed-by:@me` COMMENTED catch skip
+the PR until a new real review request (see "Take myself off a PR" in
+`.claude/docs/workflows-trackers.md`). The repaint after the filter is **explicit** (`scheduleRepaint()`):
 the nav watch keys on `state.sections.length`, which a row leaving a section does
 not change.
 

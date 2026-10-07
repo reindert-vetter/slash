@@ -151,9 +151,17 @@ type inboxFixture struct {
 type queryDef struct {
 	q     string
 	light bool
-	keep  func(r inboxRow, login string) bool
+	keep  func(r inboxRow, kc keepCtx) bool
 	// limit overrides inboxLimit for this one query (0 = inboxLimit).
 	limit int
+}
+
+// keepCtx is what a queryDef.keep filter may consult besides the row itself.
+type keepCtx struct {
+	login string
+	// left holds every PR the local reviewer took themselves off via
+	// "Verwijder mij als reviewer" (prmeta's reviewer_left_at mark). nil = none.
+	left map[prKey]bool
 }
 
 // sectionDef defines a section and the queries that fill it. A PR lands in the
@@ -192,9 +200,17 @@ var inboxSections = []sectionDef{
 		// including a comment-only one. Re-catch those where your latest review is
 		// only COMMENTED so an in-progress review does not vanish. light:false so
 		// reviewers is populated for the keep filter even on the fast first paint.
-		{q: "is:pr reviewed-by:@me state:open archived:false -author:@me", light: false, keep: func(r inboxRow, login string) bool {
+		// A PR I took myself off ("Verwijder mij als reviewer") is skipped: GitHub
+		// keeps a COMMENTED-only reviewer in the sidebar (that review can't be
+		// dismissed), so without the local mark it would come straight back. A
+		// new real review request re-lists it via the query above and clears the
+		// mark (clearReRequestedMarks).
+		{q: "is:pr reviewed-by:@me state:open archived:false -author:@me", light: false, keep: func(r inboxRow, kc keepCtx) bool {
+			if kc.left[prKey{r.Repo, r.Number}] {
+				return false
+			}
 			for _, rv := range r.Reviewers {
-				if rv.Login == login {
+				if rv.Login == kc.login {
 					return rv.State == "COMMENTED"
 				}
 			}
@@ -882,8 +898,9 @@ func mergeReviewers(n ghPRNode) []reviewer {
 
 // buildInbox runs every section's queries, de-dupes within and across sections
 // (first match wins), and overlays hasGraph from the DB. Queries run in parallel.
-func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
-	login := ghLogin(ctx)
+// left is the set of PRs I took myself off as reviewer (see keepCtx); nil = none.
+func buildInbox(ctx context.Context, db *sql.DB, left map[prKey]bool) ([]inboxSection, error) {
+	kc := keepCtx{login: ghLogin(ctx), left: left}
 
 	// Flatten queries so they can run concurrently, then reassemble in order.
 	type qref struct{ sec, q int }
@@ -916,7 +933,7 @@ func buildInbox(ctx context.Context, db *sql.DB) ([]inboxSection, error) {
 			if qd.keep != nil {
 				kept := rows[:0]
 				for _, r := range rows {
-					if qd.keep(r, login) {
+					if qd.keep(r, kc) {
 						kept = append(kept, r)
 					}
 				}
@@ -1148,6 +1165,51 @@ type snapshotResult struct {
 	Statuses     map[string]prStatus
 }
 
+// reviewerLeftSet reads prmeta's "I took myself off this PR" marks as a set.
+// Best-effort: nil pm or a read error yields nil (nothing skipped).
+func reviewerLeftSet(ctx context.Context, pm *prmeta.Module) map[prKey]bool {
+	if pm == nil {
+		return nil
+	}
+	marks, err := pm.ReviewerLeftMarks(ctx)
+	if err != nil || len(marks) == 0 {
+		return nil
+	}
+	out := make(map[prKey]bool, len(marks))
+	for _, lm := range marks {
+		out[prKey{lm.Repo, lm.PR}] = true
+	}
+	return out
+}
+
+// reRequestedMarks returns every marked PR (left) in which login is a
+// requested reviewer again (state PENDING, see mergeReviewers) according to
+// statuses — a new, real review request, so its "I'm not a reviewer here"
+// mark must go. Pure; the refreshInbox Activity does the clearing write.
+func reRequestedMarks(sections []inboxSection, statuses map[string]prStatus, login string, left map[prKey]bool) []prKey {
+	if len(left) == 0 || login == "" {
+		return nil
+	}
+	var out []prKey
+	seen := map[prKey]bool{}
+	for _, s := range sections {
+		for _, r := range s.PRs {
+			k := prKey{r.Repo, r.Number}
+			if !left[k] || seen[k] {
+				continue
+			}
+			for _, rv := range statuses[rowKey(r)].Reviewers {
+				if !rv.Team && rv.Login == login && rv.State == "PENDING" {
+					seen[k] = true
+					out = append(out, k)
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
 // buildInboxSnapshot fetches the current inbox from GitHub (or the fixture under
 // SLASH_GITHUB=off) and its per-PR statuses, overlaying hasGraph from the DB.
 // This is the one place the pr_inbox Activity reaches GitHub; the HTTP handlers
@@ -1169,7 +1231,7 @@ func buildInboxSnapshot(ctx context.Context, db *sql.DB, pm *prmeta.Module) (*sn
 		}, nil
 	}
 
-	sections, err := buildInbox(ctx, db)
+	sections, err := buildInbox(ctx, db, reviewerLeftSet(ctx, pm))
 	if err != nil {
 		return nil, err
 	}
