@@ -11646,7 +11646,13 @@ function focusDrillPreviewSibling() {
 function focusedColumnEl(level = state.focusLevel) {
   return level === 0
     ? document.querySelector('[data-testid="block-column"]')
-    : document.querySelectorAll('[data-testid="drill-column"]')[level - 1]
+    : // Looked up by data-drill-idx, NOT by position among the drill-column
+      // elements: every ancestor of the focused column is collapsed to a rail
+      // (drill-collapsed), so at focusLevel >= 2 the focused column is the
+      // FIRST drill-column in the DOM and `[level - 1]` was undefined —
+      // scrollFocusIntoView then returned early and a ← back from the
+      // column's right-hand panel left it clipped at <main>'s left edge.
+      document.querySelector(`[data-testid="drill-column"][data-drill-idx="${level - 1}"]`)
 }
 
 // scrollFocusIntoView scrolls whichever column now owns the diff keyboard into

@@ -446,6 +446,13 @@ froze on repeated ↓/↑ through same-file blocks). Both pitfalls:
 
 ## Scrolling and the ‹ chevron hint
 
+`focusedColumnEl` finds the focused drill column by `data-drill-idx` (= level - 1),
+never by position among the `drill-column` elements: every ancestor is a rail
+(`drill-collapsed`), so at focusLevel >= 2 the focused column is the FIRST
+`drill-column` in the DOM. The positional lookup returned `undefined` there, so
+`scrollFocusIntoView` bailed and a ← out of the column's right-hand panel left it
+clipped at the left edge.
+
 A new column scrolls itself into view (`scrollFocusIntoView`, `<main>` scrolls
 horizontally) — always aligned **left** (`inline:'start'`, for a drilled column
 too), so the columns you came from disappear off-screen to the left instead of
