@@ -245,6 +245,15 @@ follow-up, this is a bulk toggle, not a step in the review flow.
 Test: `tests/test-class-grouping.spec.mjs` ("the class checkbox approves every
 method, and clears them again").
 
+**From the index row (not the column), Space and the Enter palette's approve
+item do the same.** While a `test_class` row is selected, `state.mode ===
+'list'`, `testColumnFocused` is false and there is no Shift range
+(`classRowApproveTarget`, `home.mjs`), `spaceKey` and the `approve` command
+call `toggleTestClassApproval` (label "Keur alle methodes goed" / retract,
+via `isApproveDone`/`approveNoun`). From the methodes-kolom (one `→`) they
+still act on the single active method. Test: "Space on a class row in the
+index approves every method, then retracts".
+
 ## URL state
 
 `?sel=testclass:<file>::<class>` mirrors the selected class row

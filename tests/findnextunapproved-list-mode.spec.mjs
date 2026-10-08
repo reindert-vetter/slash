@@ -46,6 +46,9 @@ test.describe('findNextUnapproved from list mode — test-class sibling methods'
       /bg-indigo-50|dark:bg-indigo-500\/15/,
     )
 
+    // Focus the methodes-kolom first (one →, still list mode): from the INDEX
+    // row, approve now covers the whole class (see test-class-grouping.md).
+    await page.keyboard.press('ArrowRight')
     // Approve the active (first) method's only group via the palette.
     await page.keyboard.press('Enter')
     await page.getByTestId('command-input').fill('keur')

@@ -675,6 +675,7 @@ export const EN = {
   'Ga dieper': 'Go deeper',
   kolom: 'column',
   'dit block': 'this block',
+  'alle methodes': 'all methods',
   'deze vertaling': 'this translation',
   'deze call': 'this call',
   'deze {n} regels': 'these {n} lines',

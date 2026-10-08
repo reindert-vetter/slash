@@ -13353,7 +13353,21 @@ function approveContext() {
 // (default approveContext()) so a caller that already resolved one (e.g. the
 // COMMANDS label, which also needs it for the done/undone check) doesn't
 // re-derive it.
+// classRowApproveTarget returns the selected test_class row when the INDEX row
+// (not the methodes-kolom, not the diff) has the keyboard — then approve acts
+// on the whole class via toggleTestClassApproval, not just the active method.
+function classRowApproveTarget() {
+  const row = curTestClassRow()
+  return row && state.mode === 'list' && !state.testColumnFocused && !hasMultiSelection() ? row : null
+}
+
+function classRowApproveDone(row) {
+  const s = state.approvalSummaries && state.approvalSummaries[row.id]
+  return !!(s && s.total > 0 && s.done === s.total)
+}
+
 function approveNoun(ctx = approveContext()) {
+  if (classRowApproveTarget()) return t('alle methodes')
   if (ctx.mode !== 'diff') return t('dit block')
   if (ctx.b && ctx.b.category === 'TRANSLATION') return t('deze vertaling')
   if (ctx.gran === 'call') return t('deze call')
@@ -14180,6 +14194,8 @@ async function afterResolveAction(wasCommentIndexRow, beforeIdx, beforeId) {
 // the same "is there anything left to approve here" answer without a second
 // implementation of the check.
 function isApproveDone(ctx) {
+  const classRow = classRowApproveTarget()
+  if (classRow) return classRowApproveDone(classRow)
   const b = ctx.b
   if (b && ctx.mode === 'diff' && ctx.gran === 'call') {
     const unit = navUnitsOf(b, blockRows(b), 'call')[ctx.change]
@@ -14409,6 +14425,11 @@ function spaceKey() {
     }
     return
   }
+  const classRow = classRowApproveTarget()
+  if (classRow) {
+    toggleTestClassApproval(classRow)
+    return
+  }
   const ctx = approveContext()
   if (!ctx.b) return
   if (!isApproveDone(ctx)) {
@@ -14444,7 +14465,11 @@ const COMMANDS = withClose([
       return isApproveDone(ctx) ? t('Trek goedkeuring van {noun} in', { noun }) : t('Keur {noun} goed', { noun })
     },
     hint: 'approve',
-    run: () => toggleApprove(),
+    run: () => {
+      const classRow = classRowApproveTarget()
+      if (classRow) return toggleTestClassApproval(classRow)
+      return toggleApprove()
+    },
   },
   {
     id: 'edit-code',

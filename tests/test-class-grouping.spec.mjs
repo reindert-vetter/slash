@@ -420,4 +420,21 @@ test.describe('test methods group per class', () => {
     await expect(methodRows.nth(0)).not.toContainText('✓')
     await expect(methodRows.nth(1)).not.toContainText('✓')
   })
+
+  // Index row focused (not the methodes-kolom): Space and the Enter palette's
+  // approve item act on the WHOLE class, and a second Space retracts it.
+  test('Space on a class row in the index approves every method, then retracts', async ({ page }) => {
+    await page.goto(`/pr/${PR}`)
+    await page.getByTestId('block-row').filter({ hasText: 'TriggersIndexTest' }).click()
+    const checkbox = page.getByTestId('test-class-approve-checkbox').locator('input[type=checkbox]')
+    const methodRows = page.getByTestId('test-method-row')
+    await expect(checkbox).not.toBeChecked()
+    await page.keyboard.press('Space')
+    await expect(checkbox).toBeChecked()
+    await expect(methodRows.nth(1)).toContainText('✓')
+    await page.keyboard.press('Space')
+    await expect(checkbox).not.toBeChecked()
+    await page.keyboard.press('Enter')
+    await expect(page.getByText('Keur alle methodes goed')).toBeVisible()
+  })
 })
