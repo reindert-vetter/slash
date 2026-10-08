@@ -75,3 +75,56 @@ func TestIsRetryablePostError(t *testing.T) {
 		}
 	}
 }
+
+// TestFailedPostsSurfaceRootAndReply: a root post that failed for good and a
+// reply whose mirror failed both show up in TaskManager.FailedPosts (the
+// failedPosts half of GET /api/problems); a "repost" of that reply clears it.
+func TestFailedPostsSurfaceRootAndReply(t *testing.T) {
+	shrinkPostRetryDelays(t)
+	m, gh, cs := newTestManager(t)
+	ctx := context.Background()
+
+	// 1) A permanent root failure is listed at once.
+	gh.SetPostReviewErrs(errors.New("gh: Validation Failed (HTTP 422)"))
+	if _, err := m.StartCodeComment(ctx, CodeCommentInput{PR: 42, File: "src/Order.php", Line: 10, Author: "reindert", Body: "why?"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(m.FailedPosts(ctx)) == 1 })
+	if f := m.FailedPosts(ctx)[0]; f.ReactionID != "" || f.Error == "" || f.PR != 42 {
+		t.Fatalf("root failure row = %+v", f)
+	}
+
+	// 2) A posted thread whose reply mirror fails lists that reply too.
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{PR: 43, File: "src/Order.php", Line: 11, Author: "reindert", Body: "and this?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		l, _ := cs.List(ctx, "", 43)
+		return len(l) == 1 && l[0].GithubID != 0
+	})
+	gh.SetReplyErrs(errors.New("gh: Not Found (HTTP 404)"))
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-r1", Source: "ui", Author: "me", Body: "ping"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(m.FailedPosts(ctx)) == 2 })
+	var reply *struct{ id, body string }
+	for _, f := range m.FailedPosts(ctx) {
+		if f.ReactionID == "ui-r1" {
+			reply = &struct{ id, body string }{f.ReactionID, f.Body}
+		}
+	}
+	if reply == nil || reply.body != "ping" {
+		t.Fatalf("reply failure not listed: %+v", m.FailedPosts(ctx))
+	}
+
+	// 3) "repost" mirrors it again; once it lands the row is gone.
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-r1", Source: "ui", Action: "repost", Body: "ping"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(m.FailedPosts(ctx)) == 1 })
+	l, _ := cs.List(ctx, "", 43)
+	if len(l[0].Reactions) != 1 || l[0].Reactions[0].GithubID == 0 || l[0].Reactions[0].PostError != "" {
+		t.Fatalf("repost did not land cleanly: %+v", l[0].Reactions)
+	}
+}

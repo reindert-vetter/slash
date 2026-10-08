@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS reactions (
   avatar_url TEXT NOT NULL DEFAULT '',
   body       TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  github_id  INTEGER NOT NULL DEFAULT 0
+  github_id  INTEGER NOT NULL DEFAULT 0,
+  post_error TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_comments_pr ON comments(pr);
@@ -222,6 +223,11 @@ type Reaction struct {
 	// reply that failed to mirror/hasn't yet. Lets the reviewer's own later
 	// edit of this reply PATCH the right GitHub comment.
 	GithubID int64 `json:"githubId,omitempty"`
+	// PostError is why the latest attempt to mirror this UI reply to GitHub
+	// failed ("" = none on record) — the reply counterpart of
+	// Comment.PostError. Set by SetReactionPostError, cleared once a mirror
+	// lands (SetReactionGithubID).
+	PostError string `json:"postError,omitempty"`
 }
 
 // Module is the comments service.
@@ -283,6 +289,8 @@ func migrate(db *sql.DB) {
 		// post_error (see Comment.PostError): nothing to backfill.
 		`ALTER TABLE comments ADD COLUMN post_error TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE comments ADD COLUMN post_retry_at TEXT NOT NULL DEFAULT ''`,
+		// Reaction.PostError: nothing to backfill.
+		`ALTER TABLE reactions ADD COLUMN post_error TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(col) // ignore "duplicate column name"
 	}
@@ -456,8 +464,63 @@ func (m *Module) SetReactionGithubID(ctx context.Context, id string, githubID in
 	if githubID <= 0 {
 		return nil
 	}
-	_, err := m.db.ExecContext(ctx, `UPDATE reactions SET github_id = ? WHERE id = ?`, githubID, id)
+	_, err := m.db.ExecContext(ctx, `UPDATE reactions SET github_id = ?, post_error = '' WHERE id = ?`, githubID, id)
 	return err
+}
+
+// SetReactionPostError records why mirroring a UI reply to GitHub failed — a
+// no-op for an empty reason or a reply that already has a GitHub id. WRITE —
+// workflow-driven only (called from the mirror Activities themselves).
+func (m *Module) SetReactionPostError(ctx context.Context, id, postErr string) error {
+	if id == "" || postErr == "" {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx, `UPDATE reactions SET post_error = ? WHERE id = ? AND github_id = 0`, postErr, id)
+	return err
+}
+
+// FailedPost is one post to GitHub that failed for good: a comment root whose
+// automatic retries are used up (or that failed permanently), or a UI reply
+// whose mirror failed. ReactionID is "" for a root.
+type FailedPost struct {
+	CommentID  string `json:"commentId"`
+	RunID      string `json:"runId"`
+	Repo       string `json:"repo,omitempty"`
+	PR         int    `json:"pr"`
+	File       string `json:"file"`
+	Line       int    `json:"line"`
+	ReactionID string `json:"reactionId,omitempty"`
+	Body       string `json:"body"`
+	Error      string `json:"error"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+// FailedPosts lists every failed GitHub post on record (see FailedPost),
+// oldest first. A root still waiting on an automatic retry (post_retry_at set)
+// is not "failed for good" yet and is left out. READ — safe for the UI.
+func (m *Module) FailedPosts(ctx context.Context) ([]FailedPost, error) {
+	rows, err := m.db.QueryContext(ctx, `
+		SELECT id, run_id, repo, pr, file, line, '' AS rid, body, post_error, created_at
+		  FROM comments
+		 WHERE post_error != '' AND github_id = 0 AND post_retry_at = ''
+		UNION ALL
+		SELECT c.id, c.run_id, c.repo, c.pr, c.file, c.line, r.id, r.body, r.post_error, r.created_at
+		  FROM reactions r JOIN comments c ON c.id = r.comment_id
+		 WHERE r.post_error != '' AND r.github_id = 0
+		 ORDER BY 10`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FailedPost
+	for rows.Next() {
+		var f FailedPost
+		if err := rows.Scan(&f.CommentID, &f.RunID, &f.Repo, &f.PR, &f.File, &f.Line, &f.ReactionID, &f.Body, &f.Error, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // AddReaction stores a reaction and does the module's own thing: it bumps the
@@ -608,14 +671,14 @@ func (m *Module) query(ctx context.Context, where string, args ...any) ([]Commen
 	}
 
 	rrows, err := m.db.QueryContext(ctx,
-		`SELECT id, comment_id, source, author, avatar_url, body, created_at, github_id FROM reactions ORDER BY created_at`)
+		`SELECT id, comment_id, source, author, avatar_url, body, created_at, github_id, post_error FROM reactions ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
 	defer rrows.Close()
 	for rrows.Next() {
 		var r Reaction
-		if err := rrows.Scan(&r.ID, &r.CommentID, &r.Source, &r.Author, &r.AvatarURL, &r.Body, &r.CreatedAt, &r.GithubID); err != nil {
+		if err := rrows.Scan(&r.ID, &r.CommentID, &r.Source, &r.Author, &r.AvatarURL, &r.Body, &r.CreatedAt, &r.GithubID, &r.PostError); err != nil {
 			return nil, err
 		}
 		if i, ok := byID[r.CommentID]; ok {

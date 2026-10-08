@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/reindert-vetter/tembed"
+	"slash/modules/comments"
 )
 
 // This file surfaces the two ways background work can go wrong without the
@@ -353,6 +355,31 @@ func supersededRuns(runs []tembed.RunRecord, prOf func(string) int) map[string]t
 		}
 	}
 	return alive
+}
+
+// FailedPosts lists the comment/reply posts to GitHub that failed for good
+// (comments.FailedPost) and were written within problemWindow — the third
+// half of GET /api/problems, which the global popup (src/failedTasks.mjs)
+// shows next to the failed runs. These are not failed runs: a comment thread's
+// Execution keeps running (its reply loop) after a best-effort post failed, so
+// the failure only lives in the comments read-model. Read-only.
+func (m *TaskManager) FailedPosts(ctx context.Context) []comments.FailedPost {
+	if m.comments == nil {
+		return nil
+	}
+	list, err := m.comments.FailedPosts(ctx)
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-problemWindow)
+	out := make([]comments.FailedPost, 0, len(list))
+	for _, f := range list {
+		if t, err := time.Parse(time.RFC3339Nano, f.CreatedAt); err == nil && t.Before(cutoff) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // FailedRuns lists, newest-updated first, up to limit workflow runs (limit <= 0

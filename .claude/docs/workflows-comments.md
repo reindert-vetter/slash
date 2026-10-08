@@ -38,6 +38,19 @@ result recorded before these fields existed decodes as "no error, no retry".
 Before this, a rate-limited post (PR 13968) just logged "github post skipped"
 and looked exactly like a local note. Tests: `post_retry_test.go`.
 
+**A failed reply mirror is recorded too, and both reach the global popup.**
+`replyGithub`/`postGithubIssueComment` take an optional `reactionId` and, on
+failure, write `reactions.post_error` (`SetReactionPostError`) **inside that
+same Activity** — never via an extra `ExecuteActivity` call, which would shift
+the positional history of every live thread recorded before it (tembed replays
+by position, not by name). A landed mirror (`SetReactionGithubID`) clears it.
+`comments.FailedPosts` (roots failed for good + failed replies) feeds
+`TaskManager.FailedPosts` → `failedPosts` in `GET /api/problems` (4-day window
+on `created_at`), shown in `src/failedTasks.mjs` — see `pr-overview.md`. The
+`repost` reply Action retries one failed reply; the signal handler takes its
+body from the read-model and only accepts a reply really on record as failed.
+Test: `TestFailedPostsSurfaceRootAndReply`.
+
 ### A `saveReaction` write retries a transient SQLite lock, durably
 
 `executeActivityWithLockRetry` (`workflows.go`) wraps both `saveReaction`

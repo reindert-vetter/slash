@@ -21,6 +21,9 @@ import { settingsButton } from './settingsLink.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { claudeStatusText } from './ClaudeChat.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
+// The ONE global "er is werk mislukt" dialog (src/failedTasks.mjs) — also on
+// this page, so a failed GitHub post or review never goes unnoticed here.
+import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
 import { relativeTime } from './relativeTime.mjs'
@@ -583,6 +586,12 @@ function focusComposer() {
 // onKeydown — the page's own keys plus the tree's routing for its comment/
 // Claude block (the relatedActive() branch mirrors home.mjs's onKeydown).
 function onKeydown(e) {
+  // The global failed-tasks dialog owns the keyboard while it is up — checked
+  // first, same contract as home.mjs.
+  if (isFailedTasksOpen()) {
+    handleFailedTasksKeydown(e)
+    return
+  }
   if (isNativeTextEditKey(e)) return
   if (handleDictationKeydown(e)) return
   if (isLightboxOpen()) return handleLightboxKeydown(e)
@@ -1089,6 +1098,8 @@ if (!PR) {
   html`${App()}`(app)
   MenuHost()(app)
   ImageLightboxHost()(app)
+  FailedTasksHost()(app)
+  initFailedTasksPopup()
   initWorkDirOverlay(state, sendCheckoutAction)
   WorkDirOverlayHost()(app)
   initDebugLog()

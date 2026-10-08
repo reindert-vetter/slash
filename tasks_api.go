@@ -1332,7 +1332,33 @@ func (s *server) handleProblems(w http.ResponseWriter, r *http.Request) {
 	for _, l := range logs {
 		addTitle(l.PR)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs, "prTitles": titles, "prAuthors": authors})
+	posts := s.tasks.manager.FailedPosts(r.Context())
+	if posts == nil {
+		posts = []comments.FailedPost{}
+	}
+	for _, p := range posts {
+		addTitle(p.PR)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "failedRuns": failed, "logErrors": logs, "failedPosts": posts, "prTitles": titles, "prAuthors": authors})
+}
+
+// failedReply returns the reply targetID of comment commentID when its GitHub
+// mirror is on record as failed (Reaction.PostError set, no GitHub id) — the
+// gate of the "repost" reply Action. Read-only.
+func (s *server) failedReply(ctx context.Context, commentID, targetID string) (comments.Reaction, bool) {
+	if s.tasks.manager.comments == nil || targetID == "" {
+		return comments.Reaction{}, false
+	}
+	c, ok, err := s.tasks.manager.comments.Get(ctx, commentID)
+	if err != nil || !ok {
+		return comments.Reaction{}, false
+	}
+	for _, rc := range c.Reactions {
+		if rc.ID == targetID && rc.Source == "ui" && rc.PostError != "" && rc.GithubID == 0 {
+			return rc, true
+		}
+	}
+	return comments.Reaction{}, false
 }
 
 // handleRetryRun serves POST /api/workflows/retry {"runId":"…"} — resume the
@@ -2066,6 +2092,18 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// Carries no message either: the workflow writes the "/reopen" trace
 			// itself (reopenSentinel), so an empty body is correct here too — and
 			// a body sent along anyway is ignored rather than stored.
+		case "repost":
+			// Retry mirroring ONE earlier reply (targetId) whose GitHub post
+			// failed — the "Opnieuw" of a failed-post row in the global popup
+			// (src/failedTasks.mjs). The body comes from the read-model, never
+			// from the request, and only a reply that really is on record as
+			// failed qualifies.
+			reply, ok := s.failedReply(r.Context(), runID, body.TargetID)
+			if !ok {
+				http.Error(w, "invalid repost", http.StatusBadRequest)
+				return
+			}
+			body.Body = reply.Body
 		default:
 			http.Error(w, "invalid action", http.StatusBadRequest)
 			return
@@ -2089,7 +2127,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			Author: body.Author, Body: body.Body, Done: body.Done, Action: body.Action,
 			Publish: body.Publish, PublishHistory: body.PublishHistory,
 		}
-		if body.Action == "edit" {
+		if body.Action == "edit" || body.Action == "repost" {
 			sig.ID = body.TargetID
 		}
 		if err := s.tasks.manager.Signal(runID, sig); err != nil {

@@ -29,9 +29,9 @@ let problemAuthors = {}
 export async function fetchProblems() {
   try {
     const res = await fetch('/api/problems')
-    if (!res.ok) return { ok: false, failedRuns: [], logErrors: [], prTitles: {} }
+    if (!res.ok) return { ok: false, failedRuns: [], logErrors: [], failedPosts: [], prTitles: {} }
     const body = await res.json()
-    if (!body || !body.ok) return { ok: false, failedRuns: [], logErrors: [], prTitles: {} }
+    if (!body || !body.ok) return { ok: false, failedRuns: [], logErrors: [], failedPosts: [], prTitles: {} }
     const authors = body.prAuthors && typeof body.prAuthors === 'object' ? body.prAuthors : {}
     try {
       await ensureNames(Object.values(authors))
@@ -41,10 +41,11 @@ export async function fetchProblems() {
       ok: true,
       failedRuns: Array.isArray(body.failedRuns) ? body.failedRuns : [],
       logErrors: Array.isArray(body.logErrors) ? body.logErrors : [],
+      failedPosts: Array.isArray(body.failedPosts) ? body.failedPosts : [],
       prTitles: body.prTitles && typeof body.prTitles === 'object' ? body.prTitles : {},
     }
   } catch (_) {
-    return { ok: false, failedRuns: [], logErrors: [], prTitles: {} }
+    return { ok: false, failedRuns: [], logErrors: [], failedPosts: [], prTitles: {} }
   }
 }
 
@@ -203,4 +204,54 @@ export function problemLogRow(entry, i, prTitles, { showPr = true } = {}) {
       </div>
     </div>
   `.key('problem-log:' + i + ':' + (entry.at || '') + ':' + (entry.message || '').slice(0, 40))
+}
+
+// problemPostRow — one comment/reply whose post to GitHub failed for good (the
+// failedPosts half of GET /api/problems: the thread itself kept running, only
+// the best-effort post failed, so it is no failed RUN). Deliberately NO
+// "Negeer": the comment really is not on GitHub, and the reviewer decided a
+// failure like that may not be clicked away — it stays listed until a post
+// lands. onRetry (default null) adds the "Opnieuw proberen" button.
+export function problemPostRow(post, prTitles, { onRetry = null } = {}) {
+  const what = post.reactionId ? t('Reactie niet op GitHub geplaatst') : t('Comment niet op GitHub geplaatst')
+  return html`
+    <div data-testid="problem-post" class="${PROBLEM_ROW_CLASS}">
+      <div class="contents">${() => problemAuthorMark(post.pr)}</div>
+      ${problemMark(t('mislukt'))}
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <span class="shrink-0 text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${what}</span>
+          <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-600">${relativeTime(post.createdAt)}</span>
+        </div>
+        <div class="contents">${() => (post.pr ? problemPrTitleLine(post.pr, prTitles) : '')}</div>
+        ${problemCommentLine({ file: post.file, line: post.line, snippet: commentSnippetOf(post.body) })}
+        <p class="line-clamp-4 text-[12px] text-slate-500 dark:text-zinc-500" title="${post.error || ''}">${post.error || ''}</p>
+      </div>
+      <div class="flex shrink-0 flex-col items-stretch gap-2">
+        <div class="contents">${() => (onRetry ? problemRetryButton(() => onRetry(post)) : '')}</div>
+      </div>
+    </div>
+  `.key('problem-post:' + post.commentId + ':' + (post.reactionId || ''))
+}
+
+// problemClientRow — a failure that never became a run or a read-model row
+// (the request itself was refused, e.g. a review on your own PR, or no answer
+// at all). Lives only in the popup's memory, see showClientFailure in
+// failedTasks.mjs.
+export function problemClientRow(f) {
+  return html`
+    <div data-testid="problem-client" class="${PROBLEM_ROW_CLASS}">
+      ${problemMark(t('mislukt'))}
+      <div class="min-w-0 flex-1">
+        <span class="text-[13px] font-semibold text-slate-900 dark:text-zinc-100">${f.title}</span>
+        <p class="line-clamp-4 text-[12px] text-slate-500 dark:text-zinc-500" title="${f.error || ''}">${f.error || ''}</p>
+      </div>
+    </div>
+  `.key('problem-client:' + f.id)
+}
+
+// commentSnippetOf — a ~60-character, single-line preview of a body.
+function commentSnippetOf(body) {
+  const s = String(body || '').replace(/\s+/g, ' ').trim()
+  return s.length > 60 ? s.slice(0, 60).trimEnd() + '…' : s
 }

@@ -56,6 +56,9 @@ import { restorePendingAttachments, takePendingAttachments } from './chatAttachm
 // home.mjs wires it (see imageLightbox.mjs); this page had no image to show
 // before attachments existed.
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
+// The ONE global "er is werk mislukt" dialog (src/failedTasks.mjs) — also on
+// this page, so a failed GitHub post or review never goes unnoticed here.
+import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 // The live "what is Claude doing right now" wiring behind this chat is
 // reused unchanged from the review tree: events.mjs's one multiplexed SSE
 // stream and claudeTurns.mjs's per-conversation snapshot store are both pure,
@@ -1869,6 +1872,12 @@ function focusColumn1() {
 
 function onKeydown(e) {
   if (e.metaKey || e.ctrlKey || e.altKey) return
+  // The global failed-tasks dialog owns the keyboard while it is up — checked
+  // first, same contract as home.mjs.
+  if (isFailedTasksOpen()) {
+    handleFailedTasksKeydown(e)
+    return
+  }
   // F5 (toggle) dictates into this ticket's chat — see src/dictation.mjs. First,
   // because the chatOpen branch right below returns early: dictating a second
   // paragraph into an already-open chat has to stay possible.
@@ -4660,6 +4669,8 @@ if (!planKey) {
   // (a sibling, never inside the flex layout — the host renders a bare <div>
   // that would otherwise become a flex item of its own).
   ImageLightboxHost()(document.getElementById('app'))
+  FailedTasksHost()(document.getElementById('app'))
+  initFailedTasksPopup()
   // Debug mode ("record my navigation so a later session can replay a
   // reported bug", .claude/docs/debug-mode.md) was wired into home.mjs/
   // overview.mjs/settings.mjs but never into this page — so a reviewer with

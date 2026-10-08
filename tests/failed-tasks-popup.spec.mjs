@@ -161,4 +161,123 @@ test.describe('global failed-tasks dialog', () => {
     await expect(page.getByTestId('failed-tasks-note')).toHaveText('Opnieuw gestart.')
     expect(posted).toEqual([{ runId: 'run-boom-0' }])
   })
+
+  // A comment/reply whose post to GitHub failed for good is no failed RUN (the
+  // thread keeps running), so it arrives as GET /api/problems' failedPosts.
+  // It can NOT be ignored — only retried, through the thread's own Signal.
+  test('lists failed GitHub posts without an ignore option, and retries them via a Signal', async ({ page }) => {
+    await enableFailedTasksPopup(page)
+    const now = new Date().toISOString()
+    await stubProblems(page, {
+      ok: true,
+      failedRuns: [],
+      logErrors: [],
+      failedPosts: [
+        { commentId: 'run-c1', runId: 'run-c1', pr: 12903, file: 'app/Order.php', line: 10, body: 'why?', error: 'gh: Validation Failed (HTTP 422)', createdAt: now },
+        { commentId: 'run-c2', runId: 'run-c2', pr: 12903, file: 'app/Order.php', line: 20, reactionId: 'ui-r1', body: 'ping', error: 'gh: Not Found (HTTP 404)', createdAt: now },
+      ],
+      prTitles: {},
+    })
+    const signals = []
+    await page.route('**/api/workflows/*/signals/reply', (route) => {
+      signals.push({ url: new URL(route.request().url()).pathname, body: JSON.parse(route.request().postData() || '{}') })
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'signalled' }) })
+    })
+    await page.goto('/pr-overview')
+    await appReady(page)
+
+    const dialog = page.getByTestId('failed-tasks-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(page.getByTestId('failed-tasks-title')).toHaveText('Mislukte taken van de laatste 4 dagen · 2')
+    const posts = dialog.getByTestId('problem-post')
+    await expect(posts).toHaveCount(2)
+    await expect(posts.nth(0)).toContainText('Comment niet op GitHub geplaatst')
+    await expect(posts.nth(1)).toContainText('Reactie niet op GitHub geplaatst')
+    await expect(dialog.getByTestId('problem-ignore')).toHaveCount(0)
+    await expect(page.getByTestId('failed-tasks-ignore-all')).toBeDisabled()
+
+    await posts.nth(0).getByTestId('problem-retry').click()
+    await expect(page.getByTestId('failed-tasks-note')).toHaveText('Opnieuw gestart.')
+    await posts.nth(1).getByTestId('problem-retry').click()
+    await expect.poll(() => signals.length).toBe(2)
+    expect(signals).toEqual([
+      { url: '/api/workflows/run-c1/signals/reply', body: { action: 'publish' } },
+      { url: '/api/workflows/run-c2/signals/reply', body: { action: 'repost', targetId: 'ui-r1' } },
+    ])
+  })
+
+  test('is mounted on the QA and plan pages too', async ({ page }) => {
+    await enableFailedTasksPopup(page)
+    await stubProblems(page)
+    await page.goto('/qa/12903')
+    await expect(page.getByTestId('failed-tasks-dialog')).toBeVisible()
+    await page.goto('/plan/TEST-901')
+    await expect(page.getByTestId('failed-tasks-dialog')).toBeVisible()
+  })
+
+  // A PR review GitHub refuses: the dialog opens at once — even through a
+  // running snooze (the harness pre-snoozes it, and this test deliberately
+  // does NOT call enableFailedTasksPopup) — and the tab stays on the PR
+  // instead of following "en ga naar overzicht".
+  test('a failed PR review opens the dialog at once and does not navigate away', async ({ page }) => {
+    let failed = false
+    await page.route('**/api/problems', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          logErrors: [],
+          failedPosts: [],
+          prTitles: {},
+          failedRuns: failed
+            ? [{ runId: 'run-review', workflow: 'submit_review', pr: 12903, updatedAt: new Date().toISOString(), error: 'submit review: gh: Can not approve your own pull request (HTTP 422)', retryable: true }]
+            : [],
+        }),
+      }),
+    )
+    await page.route('**/api/workflows/submit_review', (route) => {
+      failed = true
+      return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'submit review failed (run run-review)' }) })
+    })
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('ArrowLeft')
+    await expect(page.getByTestId('pr-info-column')).toBeVisible()
+    await page.keyboard.press('/')
+    const rows = page.getByTestId('command-row')
+    await rows.filter({ hasText: 'GitHub' }).click()
+    await rows.filter({ hasText: 'PR keuren' }).click()
+    await rows.filter({ hasText: 'Keur de HELE PR goed' }).click()
+    await rows.filter({ hasText: 'Goedkeuren en ga naar overzicht' }).click()
+
+    const dialog = page.getByTestId('failed-tasks-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByTestId('problem-run')).toContainText('Can not approve your own pull request')
+    expect(new URL(page.url()).pathname).toBe('/pr/12903')
+  })
+
+  test('a review refused before any run started shows the server reason as its own row', async ({ page }) => {
+    await page.route('**/api/problems', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, failedRuns: [], logErrors: [], failedPosts: [], prTitles: {} }) }),
+    )
+    await page.route('**/api/workflows/submit_review', (route) =>
+      route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'you cannot review your own PR' }) }),
+    )
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('/')
+    const rows = page.getByTestId('command-row')
+    await rows.filter({ hasText: 'GitHub' }).click()
+    await rows.filter({ hasText: 'PR keuren' }).click()
+    await rows.filter({ hasText: 'Keur de HELE PR goed' }).click()
+    await rows.filter({ hasText: 'Goedkeuren en sluiten' }).click()
+
+    const row = page.getByTestId('failed-tasks-dialog').getByTestId('problem-client')
+    await expect(row).toContainText('Review insturen is niet gelukt')
+    await expect(row).toContainText('you cannot review your own PR')
+  })
 })

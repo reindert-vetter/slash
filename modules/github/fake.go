@@ -46,6 +46,7 @@ type Fake struct {
 	markFileViewedErr error                // set by SetMarkFileViewedErr: MarkFileViewed fails instead of recording
 
 	postReviewErrs []error // set by SetPostReviewErrs: the next PostReviewComment calls fail with these, in order
+	replyErrs      []error // set by SetReplyErrs: the next Reply calls fail with these, in order
 
 	lastStartLine int
 	lastEndLine   int
@@ -133,9 +134,21 @@ func (f *Fake) LastPostedBody() string {
 	return f.Posted[len(f.Posted)-1]
 }
 
+// SetReplyErrs makes the next Reply calls fail with errs, in order (tests only).
+func (f *Fake) SetReplyErrs(errs ...error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.replyErrs = errs
+}
+
 func (f *Fake) Reply(_ context.Context, pr int, inReplyTo int64, body string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.replyErrs) > 0 {
+		err := f.replyErrs[0]
+		f.replyErrs = f.replyErrs[1:]
+		return 0, err
+	}
 	f.nextID++
 	f.Posted = append(f.Posted, body)
 	return f.nextID, nil

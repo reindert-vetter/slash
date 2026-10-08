@@ -180,7 +180,7 @@ import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKey
 import { initMarkdownCodeCopy, copyCodeToClipboard } from './codeCopy.mjs'
 // The global failed-tasks dialog (failedTasks.mjs) — same top-level-mount +
 // owns-the-keyboard contract as the lightbox above.
-import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
+import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown, showFailedTasksNow, showClientFailure } from './failedTasks.mjs'
 // The global auth dialog (authStatus.mjs) — same top-level-mount + keyboard
 // contract as FailedTasksHost, and checked before it.
 import AuthStatusHost, { initAuthStatusPopup, isAuthProblemOpen, handleAuthProblemKeydown } from './authStatus.mjs'
@@ -9353,10 +9353,13 @@ async function copySelectedCode() {
 // a bodyless one, so callers must never invoke this with an empty body for
 // that event (see the 'reviewReject' menu mode below, which only ever offers
 // its run once the typed reason is non-blank).
-// Error handling is deliberately minimal: this app has no toast/error-surface
-// convention anywhere yet (see conventions.md — even createComment doesn't
-// check res.ok), so a 400/502 or network failure just logs — the reviewer can
-// see nothing landed (no new "Review" run in Taken) and retry via `/`.
+// A failure opens the global failed-tasks dialog (src/failedTasks.mjs) right
+// away: a 502 means the submit_review run itself failed, so it is listed
+// there with GitHub's own reason (showFailedTasksNow lifts any snooze and
+// refetches); a refusal before any run started (400, e.g. a review on your own
+// PR) or no answer at all becomes an in-memory row (showClientFailure).
+// Returns whether the review was placed, so a caller never navigates away
+// from a failure.
 // On success this is itself a fresh workflow run, so pollWorkflows() refreshes
 // the Taken column sooner than the next WORKFLOWS_POLL_MS tick — the same
 // courtesy call compose-post already makes after placing a comment.
@@ -9372,12 +9375,25 @@ async function submitReview(event, body = '') {
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       console.error('submit_review failed:', res.status, text)
-      return
+      const runs = await showFailedTasksNow()
+      if (!runs.some((r) => r.workflow === 'submit_review' && Number(r.pr) === Number(state.pr))) {
+        let reason = text.trim() || 'HTTP ' + res.status
+        try {
+          const j = JSON.parse(text)
+          if (j && typeof j.error === 'string' && j.error) reason = j.error
+        } catch (_) {}
+        showClientFailure({ title: t('Review insturen is niet gelukt'), error: reason })
+      }
+      pollWorkflows()
+      return false
     }
     pollWorkflows()
     await copyReviewSummary(buildReviewClipboardText(event, body))
+    return true
   } catch (err) {
     console.error('submit_review network error:', err)
+    showClientFailure({ title: t('Review insturen is niet gelukt'), error: t('geen antwoord van de server') })
+    return false
   }
 }
 
@@ -9409,8 +9425,7 @@ const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
     hint: 'overzicht',
     icon: 'approve-pr',
     run: async () => {
-      await submitReview('APPROVE')
-      location.href = overviewExitUrlAfterApprove()
+      if (await submitReview('APPROVE')) location.href = overviewExitUrlAfterApprove()
     },
   },
   {

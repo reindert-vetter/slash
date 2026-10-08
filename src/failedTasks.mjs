@@ -35,7 +35,7 @@
 // like the theme preference, and for the same reason: it is a UI convenience,
 // not durable state, so it is outside the workflow write boundary.
 import { reactive, html } from './vendor/arrow.js'
-import { fetchProblems, problemRunRow } from './problems.mjs'
+import { fetchProblems, problemRunRow, problemPostRow, problemClientRow } from './problems.mjs'
 // The auth dialog wins over this one: an expired credential is usually the
 // CAUSE of the failures listed here, and two stacked modals help nobody. See
 // the header of src/authStatus.mjs. (One-way import — authStatus.mjs knows
@@ -55,6 +55,14 @@ const fs = reactive({
   // rows: the failed runs of GET /api/problems, newest-updated first (the
   // order the endpoint already delivers them in).
   rows: [],
+  // posts: GET /api/problems' failedPosts — a comment or reply whose post to
+  // GitHub failed for good. Not a failed run (the thread keeps running), and
+  // deliberately NOT ignorable: only "Opnieuw proberen" makes it go away.
+  posts: [],
+  // clientFailures: failures that never reached the server's own records (a
+  // refused request, no answer at all) — see showClientFailure. In memory
+  // only; a snooze clears them.
+  clientFailures: [],
   prTitles: {},
   // expanded: the "toon meer" button was pressed, so the whole list shows
   // instead of the first PREVIEW_COUNT rows.
@@ -100,6 +108,7 @@ function snooze() {
   fs.expanded = false
   fs.note = ''
   fs.confirmIgnoreAll = false
+  fs.clientFailures = []
   writeSnooze(until)
   setTimeout(() => {
     // Re-read rather than clearing blindly: a later snooze (another tab, or a
@@ -112,12 +121,39 @@ function snooze() {
 // runs. A transient failure leaves whatever was on screen untouched —
 // fetchProblems resolves with ok:false and empty data rather than throwing.
 export async function refreshFailedTasks() {
-  const { ok, failedRuns, prTitles } = await fetchProblems()
+  const { ok, failedRuns, failedPosts, prTitles } = await fetchProblems()
   if (!ok) return
   fs.rows = failedRuns
+  fs.posts = failedPosts
   fs.prTitles = prTitles
   fs.loaded = true
-  if (failedRuns.length === 0) fs.note = ''
+  if (failedRuns.length === 0 && failedPosts.length === 0) fs.note = ''
+}
+
+// showFailedTasksNow — something the reviewer JUST did failed (e.g. the PR
+// review was refused by GitHub): lift any running snooze and refetch, so the
+// dialog opens right away instead of on the next poll. Returns the fresh
+// failed runs so the caller can tell whether its own failure is among them.
+export async function showFailedTasksNow() {
+  fs.snoozedUntil = 0
+  writeSnooze(0)
+  await refreshFailedTasks()
+  return fs.rows
+}
+
+// showClientFailure adds a failure that has no run and no read-model row (the
+// request was refused before any workflow started, or never got an answer) to
+// the same dialog, and opens it. In memory only.
+let clientFailureSeq = 0
+export function showClientFailure({ title, error }) {
+  fs.snoozedUntil = 0
+  writeSnooze(0)
+  fs.clientFailures = [...fs.clientFailures, { id: ++clientFailureSeq, title: title || '', error: error || '' }]
+}
+
+// totalCount — every row the dialog lists, of all three kinds.
+function totalCount() {
+  return fs.clientFailures.length + fs.posts.length + fs.rows.length
 }
 
 // initFailedTasksPopup starts the poll. Idempotent, so a page may call it once
@@ -135,7 +171,8 @@ export function initFailedTasksPopup() {
 // this dialog is up it owns the keyboard completely.
 export function isFailedTasksOpen() {
   if (isAuthProblemOpen()) return false
-  return fs.loaded && fs.rows.length > 0 && Date.now() >= fs.snoozedUntil
+  if (Date.now() < fs.snoozedUntil) return false
+  return fs.clientFailures.length > 0 || (fs.loaded && fs.rows.length + fs.posts.length > 0)
 }
 
 export function handleFailedTasksKeydown(e) {
@@ -169,10 +206,48 @@ function failureReason(res, body) {
   return res ? 'HTTP ' + res.status : 'geen antwoord'
 }
 
+// retryPost re-sends ONE failed GitHub post through its comment thread's own
+// workflow — a Signal, the sanctioned write: a root via the existing "publish"
+// Action ("Zet op GitHub"), a reply via "repost" (the server takes the body
+// from the read-model). Returns the failure reason, or '' when signalled.
+async function signalRetryPost(post) {
+  const payload = post.reactionId ? { action: 'repost', targetId: post.reactionId } : { action: 'publish' }
+  try {
+    const res = await fetch('/api/workflows/' + encodeURIComponent(post.runId) + '/signals/reply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (res.ok) return ''
+    const text = await res.text().catch(() => '')
+    let body = null
+    try {
+      body = JSON.parse(text)
+    } catch (_) {}
+    return failureReason(res, body || (text ? { error: text } : null))
+  } catch (err) {
+    return failureReason(null, null)
+  }
+}
+
+async function retryPost(post) {
+  if (fs.busy || !post) return
+  fs.busy = true
+  fs.note = t('Bezig met opnieuw proberen…')
+  const why = await signalRetryPost(post)
+  fs.note = why ? t('Opnieuw proberen is niet gelukt.') + ' (' + why + ')' : t('Opnieuw gestart.')
+  fs.busy = false
+  await refreshFailedTasks()
+}
+
 async function retryAll() {
   if (fs.busy) return
   fs.busy = true
   fs.note = t('Bezig met opnieuw proberen…')
+  // The failed posts first: they are no runs, so retry-all below never sees
+  // them. Their outcome only shows in the note when one could not be sent.
+  let postFails = 0
+  for (const p of fs.posts) if (await signalRetryPost(p)) postFails++
   try {
     const res = await fetch('/api/workflows/retry-all', {
       method: 'POST',
@@ -183,7 +258,7 @@ async function retryAll() {
     if (!res.ok || !body || !body.ok) {
       fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(res, body) + ')'
     } else {
-      fs.note = t('{n} hervat, {s} overgeslagen.', { n: body.retried || 0, s: body.skipped || 0 })
+      fs.note = t('{n} hervat, {s} overgeslagen.', { n: (body.retried || 0) + fs.posts.length - postFails, s: (body.skipped || 0) + postFails })
     }
   } catch (err) {
     fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(null, null) + ')'
@@ -285,7 +360,7 @@ function dialog() {
           <span aria-hidden="true" class="text-rose-600 dark:text-rose-300">⚠</span>
           <div class="min-w-0 flex-1">
             <p data-testid="failed-tasks-title" class="text-[13px] font-semibold text-slate-900 dark:text-zinc-100">
-              ${() => t('Mislukte taken van de laatste 4 dagen') + ' · ' + fs.rows.length}
+              ${() => t('Mislukte taken van de laatste 4 dagen') + ' · ' + totalCount()}
             </p>
             <p class="text-[12px] text-slate-500 dark:text-zinc-500">
               ${t('Opnieuw proberen gaat verder vanaf de laatste stap die wél lukte.')}
@@ -294,6 +369,8 @@ function dialog() {
         </div>
 
         <div data-testid="failed-tasks-list" class="min-h-0 flex-1 overflow-y-auto">
+          ${() => fs.clientFailures.map((f) => problemClientRow(f))}
+          ${() => fs.posts.map((p) => problemPostRow(p, fs.prTitles, { onRetry: (x) => retryPost(x) }))}
           ${() =>
             visibleRows().map((run) =>
               problemRunRow(run, fs.prTitles, { onIgnore: (r) => ignoreRuns([r.runId]), onRetry: (r) => retryRun(r.runId) }),
@@ -335,7 +412,7 @@ function dialog() {
           <button
             type="button"
             data-testid="failed-tasks-ignore-all"
-            disabled="${() => fs.busy}"
+            disabled="${() => fs.busy || fs.rows.length === 0}"
             title="${t('Verwijder alle mislukte taken uit de lijst zonder ze opnieuw te proberen')}"
             class="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800/60"
             @click="${(e) => {

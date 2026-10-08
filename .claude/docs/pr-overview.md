@@ -1583,10 +1583,30 @@ dat dezelfde taak goed is gegaan", refined to "ik wil bovenaan van 4 dagen zien
 4 dagen, toon maximaal 3 items met een toon meer knop". The drawer above stays
 exactly as it is; this is a second, **push** surface on top of it.
 
-**`src/failedTasks.mjs`** is one shared module, mounted on **all three pages**
-(`home.mjs`, `overview.mjs`, `settings.mjs`): `FailedTasksHost()` next to
-`MenuHost`/`ImageLightboxHost`, plus `initFailedTasksPopup()` (a 30s poll of the
-same read-only `GET /api/problems`).
+**`src/failedTasks.mjs`** is one shared module, mounted on **every page**
+(`home.mjs`, `overview.mjs`, `settings.mjs`, `qa.mjs`, `plan.mjs`):
+`FailedTasksHost()` next to `MenuHost`/`ImageLightboxHost`, plus
+`initFailedTasksPopup()` (a 30s poll of the same read-only `GET /api/problems`).
+
+- **Three row kinds** (reviewer request: "als een comment op pr of goedkeuren
+  (uiteindelijk) niet slaagt, geef dan de algemene popup error model"):
+  1. failed runs (`failedRuns`, as below);
+  2. **failed GitHub posts** (`failedPosts`, `problemPostRow`): a comment root
+     whose post failed for good (`post_error` set, `post_retry_at` empty —
+     a root still on the `postRetryDelays` ladder is not listed yet) or a UI
+     reply whose mirror failed (`reactions.post_error`). No failed run, because
+     the thread's Execution keeps running. **Deliberately not ignorable**
+     (explicit reviewer decision: "dit kan je niet negeren") — only
+     "Opnieuw proberen", a Signal on the thread (`publish` for a root,
+     `repost` + `targetId` for a reply); "Alles negeren" only touches runs.
+     The snooze still hides the whole dialog for 5 minutes;
+  3. **client failures** (`showClientFailure`, `problemClientRow`): a request
+     refused before any run started, kept in memory only, cleared by a snooze.
+- **A failed PR review opens it at once.** `submitReview` (`home.mjs`) calls
+  `showFailedTasksNow()` (lifts the snooze, refetches) on a non-OK answer, falls
+  back to `showClientFailure` when no `submit_review` run for this PR is listed
+  (400 / no answer), and returns `false` so "Goedkeuren en ga naar overzicht"
+  stays on the PR.
 
 - **It is a real modal** — backdrop, centered, and it **owns the keyboard**:
   every page checks `isFailedTasksOpen()` FIRST in its own global keydown

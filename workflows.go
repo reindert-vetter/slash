@@ -552,7 +552,7 @@ type ReactionSignal struct {
 	// STANDS (the root, plus the earlier local replies with PublishHistory) —
 	// the reviewer moving an existing local conversation to GitHub without
 	// typing a new reply first. Stores no reaction.
-	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit" | "publish" | "unresolve"
+	Action string `json:"action"` // "" (reply, default) | "delete" | "avatar" | "reanchor" | "chat" | "edit" | "publish" | "unresolve" | "repost"
 	// Publish promotes a thread that has never touched GitHub (a private note,
 	// or an "ai" code_warning finding — both start with posted.RootID == 0) to a
 	// real GitHub thread, as part of delivering THIS reply. Empty (the default)
@@ -1671,6 +1671,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			PR     int    `json:"pr"`
 			RootID int64  `json:"rootId"`
 			Body   string `json:"body"`
+			// ReactionID: the reply being mirrored, so a failure is recorded on
+			// it (Reaction.PostError) right here, inside this same Activity —
+			// a separate Activity call would shift the positional history of
+			// every thread recorded before it existed.
+			ReactionID string `json:"reactionId,omitempty"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -1681,6 +1686,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		id, err := m.ghFor(arg.Repo).Reply(ctx, arg.PR, arg.RootID, arg.Body)
 		if err != nil {
 			m.logf("task_code_comment: github reply skipped: %v", err)
+			if serr := cs.SetReactionPostError(ctx, arg.ReactionID, failedPost(err).Error); serr != nil {
+				return nil, serr
+			}
 			return json.Marshal(postResult{})
 		}
 		return json.Marshal(postResult{RootID: id})
@@ -1740,6 +1748,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			Repo string `json:"repo,omitempty"`
 			PR   int    `json:"pr"`
 			Body string `json:"body"`
+			// ReactionID: set when this mirrors a REPLY (not a root) — see
+			// replyGithub's own field for why the failure is recorded here.
+			ReactionID string `json:"reactionId,omitempty"`
 		}
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
@@ -1747,6 +1758,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		id, err := m.ghFor(arg.Repo).PostIssueComment(ctx, arg.PR, arg.Body)
 		if err != nil {
 			m.logf("task_code_comment: github issue comment skipped: %v", err)
+			if serr := cs.SetReactionPostError(ctx, arg.ReactionID, failedPost(err).Error); serr != nil {
+				return nil, serr
+			}
 			return json.Marshal(failedPost(err))
 		}
 		return json.Marshal(postResult{RootID: id})
@@ -6198,11 +6212,11 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				var mirrored postResult
 				if postsAsIssueComment(in) {
 					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
-						"repo": in.Repo, "pr": in.PR, "body": lr.Body,
+						"repo": in.Repo, "pr": in.PR, "body": lr.Body, "reactionId": lr.ID,
 					}, &mirrored)
 				} else {
 					_ = w.ExecuteActivity("replyGithub", map[string]any{
-						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID, "body": lr.Body,
+						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID, "body": lr.Body, "reactionId": lr.ID,
 					}, &mirrored)
 				}
 				if mirrored.RootID != 0 {
@@ -6307,6 +6321,35 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			if posted.RootID == 0 {
 				if err := publishThread(publishRootBody(), true, r.PublishHistory); err != nil {
 					return nil, fmt.Errorf("publish thread: %w", err)
+				}
+			}
+			continue
+		}
+
+		// A "repost" action retries mirroring ONE earlier UI reply (ID) whose
+		// GitHub post failed (Reaction.PostError — the "Opnieuw" of a
+		// failed-post row in the global popup). The handler took Body from the
+		// read-model. Same two mirror Activities as the ordinary reply path
+		// below; a new failure is recorded on the reply again by the Activity
+		// itself. Stores no reply. Input-driven, so replay-deterministic (and a
+		// history recorded before this Action existed never contains one).
+		if r.Action == "repost" {
+			if body := strings.TrimSpace(r.Body); r.ID != "" && body != "" && (posted.RootID != 0 || postsAsIssueComment(in)) {
+				var mirrored postResult
+				if postsAsIssueComment(in) {
+					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
+						"repo": in.Repo, "pr": in.PR, "body": r.Body, "reactionId": r.ID,
+					}, &mirrored)
+				} else {
+					_ = w.ExecuteActivity("replyGithub", map[string]any{
+						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID, "body": r.Body, "reactionId": r.ID,
+					}, &mirrored)
+				}
+				if mirrored.RootID != 0 {
+					replyGithubIDs[r.ID] = mirrored.RootID
+					_ = w.ExecuteActivity("saveReactionGithubID", map[string]any{
+						"id": r.ID, "githubId": mirrored.RootID,
+					}, nil)
 				}
 			}
 			continue
@@ -6518,7 +6561,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				if !r.Done {
 					var mirrored postResult
 					_ = w.ExecuteActivity("postGithubIssueComment", map[string]any{
-						"repo": in.Repo, "pr": in.PR, "body": r.Body,
+						"repo": in.Repo, "pr": in.PR, "body": r.Body, "reactionId": r.ID,
 					}, &mirrored)
 					if mirrored.RootID != 0 {
 						replyGithubIDs[r.ID] = mirrored.RootID
@@ -6531,7 +6574,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				if body := strings.TrimSpace(r.Body); body != "" && body != resolveSentinel {
 					var mirrored postResult
 					_ = w.ExecuteActivity("replyGithub", map[string]any{
-						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID, "body": r.Body,
+						"repo": in.Repo, "pr": in.PR, "rootId": posted.RootID, "body": r.Body, "reactionId": r.ID,
 					}, &mirrored)
 					if mirrored.RootID != 0 {
 						replyGithubIDs[r.ID] = mirrored.RootID
