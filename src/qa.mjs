@@ -1,16 +1,16 @@
 // qa.mjs — the /qa/<pr> page: "laat deze PR testen in de admin". A QA report
 // produced by the qa_run workflow (qa_run.go), shown as a step viewer whose
 // steps are COLUMNS that continue to the right (→/←), with a comments dock at
-// the bottom (comment per step + a Claude chat on a comment, like the review
-// tree). Reviewer request + the example it was modelled on: see
-// .claude/docs/qa-page.md.
+// the bottom (comment per step + a Claude chat on a comment). Reviewer request
+// + the example it was modelled on: see .claude/docs/qa-page.md.
 //
-// Like plan.mjs this is deliberately its OWN code — it imports nothing from
-// home.mjs/Block.mjs. Reused as-is: ClaudeChat.mjs's claudeChatColumn (pure
-// template, fed by this page's own small chat engine below, same shape as
-// plan.mjs's chatView/chatCallbacks), the werkmap overlay (workDirOverlay.mjs,
-// so an open checkout choice is asked here exactly as in the tree), the image
-// lightbox, markdown, theme, settings and URL-state helpers.
+// The comments dock is the review tree's OWN comment + Claude block
+// (RelatedPanel.mjs's InlineComments/ClaudeChatPanel/CommentClaudeFooter/
+// CodePreviewPanel), scoped to the focused step through a QA scope
+// (setCommentScope({ qa: true, seg })) and a QA commentTarget — so every tree
+// feature (image paste, drafts, dictation, retry/edit/queue, code previews,
+// resolve/delete/edit, …) is simply there. Its menus are the tree's own lists
+// from commentCommands.mjs. Nothing from home.mjs/Block.mjs is imported.
 import { html, reactive, watch } from './vendor/arrow.js'
 import { t } from './i18n.mjs'
 import { renderMarkdown } from './markdown.mjs'
@@ -19,14 +19,78 @@ import { initDebugLog } from './debugLog.mjs'
 import { initSelfUpdate } from './selfUpdate.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { bindUrlState, num } from './urlState.mjs'
-import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
-import { restorePendingAttachments, takePendingAttachments } from './chatAttachments.mjs'
+import { claudeStatusText } from './ClaudeChat.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 import WorkDirOverlayHost, { initWorkDirOverlay, isWorkDirOverlayOpen, handleWorkDirOverlayKeydown } from './workDirOverlay.mjs'
 import { ensureEvents, onEvent, onEventsResync } from './events.mjs'
-import { setTurnProgress, turnProgress } from './claudeTurns.mjs'
-import { avatarHtmlString, ensureMe, identityOf } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
+import { initMarkdownCodeCopy } from './codeCopy.mjs'
+import { initDictation, handleDictationKeydown } from './dictation.mjs'
+import CommandMenu, { filterCommands } from './CommandMenu.mjs'
+import { ShortcutHintBar } from './shortcutHints.mjs'
+import { loadColumnWidths } from './columnWidth.mjs'
+import {
+  isEditableFocused,
+  isModifiedKey,
+  isNativeTextEditKey,
+  editableCaretCanMoveLeft,
+  editableCaretCanMoveRight,
+  editableCaretCanMoveUp,
+  editableCaretCanMoveDown,
+} from './editableKeys.mjs'
+import {
+  commentCommandsFor,
+  claudeChatCommandsFor,
+  prCommentCommandsFor,
+  composeCommandsFor,
+  replyPublishCommandsFor,
+} from './commentCommands.mjs'
+import {
+  InlineComments,
+  ClaudeChatPanel,
+  CommentClaudeFooter,
+  CodePreviewPanel,
+  commentClaudeShortcutHints,
+  claudeChatVisible,
+  claudeColumnVisible,
+  hasCommentClaudeFooter,
+  hasAnyComments,
+  hasVisibleComments,
+  setCommentScope,
+  commentListSnapshot,
+  relatedActive,
+  handleRelatedKey,
+  leaveRelated,
+  enterCommentsOrRelated,
+  enterClaudeChatOrFromNew,
+  startComment,
+  selectComment,
+  placeComment,
+  composeHasText,
+  isComposeOpen,
+  isConvertingAiWarning,
+  isCommentOrThreadFocused,
+  commentReplyEmpty,
+  isClaudeChatFocused,
+  selectHighlightedClaudeOption,
+  selectHighlightedClaudeTask,
+  isFooterTasksFocused,
+  activeCodePreviewKey,
+  toggleCodePreviewExpanded,
+  activeClaudeMessage,
+  canEditClaudeMessage,
+  startEditClaudeMessage,
+  clearClaudeChat,
+  deleteFocusedComment,
+  deletePrCommentItem,
+  publishThreadOnly,
+  setClaudeMenuOpener,
+  setCommentMenuOpener,
+  setPrCommentMenuOpener,
+  setReplyPublishMenuOpener,
+  setClaudeTaskJump,
+  setCheckoutRefresher,
+} from './RelatedPanel.mjs'
 
 initTheme()
 
@@ -49,25 +113,29 @@ const state = reactive({
   roundRef: '',
   // step — the focused column: 0 = Overzicht, n = step n of the round.
   step: 0,
-  // focus — who owns the keyboard: the columns, the comments dock, or chat.
-  focus: 'steps',
   // cardFull — Enter on the columns: every card shows its full height (no
   // inner scroll) and the column row scrolls vertically instead.
   cardFull: false,
-  comments: [],
-  commentSel: -1, // -1 = the composer row, otherwise an index into stepComments()
-  composeBusy: false,
-  composeError: '',
   startBusy: false,
   startError: '',
-  // the Claude chat on one comment (its conversation id IS the comment id)
-  chatCommentId: '',
-  chatRunId: '',
-  chatMessages: [],
-  chatBusy: false,
-  chatError: '',
-  chatTick: 0,
+  tick: 0, // the QA status line's elapsed-seconds counter
   checkout: null, // the werkmap read model, for workDirOverlay.mjs
+})
+
+// rpState — the `state` RelatedPanel.mjs's block renders against. It is the
+// tree's state shape, reduced to what that block reads: the PR, one synthetic
+// "block" (so its "is there something to anchor on" guards pass — the real
+// anchor is the QA commentTarget below), and the column-width bookkeeping.
+const rpState = reactive({
+  pr: PR,
+  blocks: [{ id: 'qa', kind: 'qa', file: '', label: 'QA', line: 0 }],
+  selected: 0,
+  commentClaudeNarrow: false,
+  workflows: [],
+  ignoredComments: {},
+  colWidths: loadColumnWidths(),
+  colWidthVersion: 0,
+  codeVersion: 0,
 })
 
 bindUrlState(state, [
@@ -132,20 +200,6 @@ async function loadPrTitle() {
     }
   } catch (_) {
     /* offline: the header just shows the PR number */
-  }
-}
-
-async function loadComments() {
-  try {
-    // identityOf (own comment → the local reviewer) reads plain, non-reactive
-    // state, so it must be loaded BEFORE the rows render (conventions.md).
-    await ensureMe()
-    const res = await fetch(`/api/comments?pr=${PR}`)
-    if (!res.ok) return
-    const list = await res.json()
-    state.comments = Array.isArray(list) ? list.filter((c) => (c.seg || '').startsWith('qa:')) : []
-  } catch (_) {
-    /* keep the last good list */
   }
 }
 
@@ -241,243 +295,62 @@ function stepKey(i) {
   return r ? 'qa:' + r.runId + ':' + i : ''
 }
 
-function stepComments() {
-  const key = stepKey(state.step)
-  return key ? state.comments.filter((c) => c.seg === key) : []
-}
-
-// The same placeholder body RelatedPanel.mjs's CLAUDE_ANCHOR_PLACEHOLDER uses:
-// the local comment a Claude conversation hangs on while the reviewer has not
-// typed a comment of their own (isChatAnchorPlaceholder there). Kept in sync
-// by hand — qa.mjs deliberately imports nothing from RelatedPanel.mjs.
-const CHAT_ANCHOR_PLACEHOLDER = '(Nog geen eigen comment getypt — gesprek met Claude gestart.)'
-
-const isSentinel = (r) => /^\/(resolve|reopen)\b/.test((r && r.body) || '')
-const isOwn = (r) => ((r && r.source) || 'ui') === 'ui'
-const hasOwnReply = (c) => (c.reactions || []).some((r) => isOwn(r) && !isSentinel(r))
-const isBarePlaceholder = (c) => c.body === CHAT_ANCHOR_PLACEHOLDER && !hasOwnReply(c)
-
-// visibleComments: the step's comments minus a bare chat-anchor placeholder
-// (nobody wrote it, so it gets no row — same as the tree's index).
-function visibleComments() {
-  return stepComments().filter((c) => !isBarePlaceholder(c))
-}
-
-function stepPlaceholder() {
-  return stepComments().find(isBarePlaceholder) || null
-}
-
-// threadMsgs: the thread as chat messages. A taken-over placeholder drops its
-// synthetic opening message (the reviewer's first reply IS the comment).
-function threadMsgs(c) {
-  const rs = (c.reactions || []).filter((r) => !isSentinel(r))
-  if (c.body === CHAT_ANCHOR_PLACEHOLDER) return rs
-  return [{ id: 'origin:' + c.id, source: c.source, author: c.author, avatarUrl: c.avatarUrl, body: c.body, createdAt: c.createdAt }, ...rs]
-}
-
-const replyDrafts = {}
-
-function commentCountFor(i) {
-  const key = stepKey(i)
-  return key ? state.comments.filter((c) => c.seg === key).length : 0
-}
-
 function stepTitle(i) {
   if (i === 0) return t('Overzicht')
   const s = steps()[i - 1]
   return s ? s.title || '' : ''
 }
 
-// placeComment writes through the review tree's own comment workflow
-// (task_code_comment) as a PR-wide comment (kind 'issue') — so it appears in
-// the tree's comment index too, and posting to GitHub works exactly as there.
-// seg carries the step it belongs to; the body names the step for a reader on
-// GitHub, who has no other way to know.
-async function placeComment(local) {
-  const el = document.querySelector('[data-testid=qa-comment-compose]')
-  const text = el ? el.value.trim() : ''
+// stepLabel names the step on a comment (its `label`, and the bold first line
+// of its body, so a reader on GitHub knows which QA step it is about). It must
+// stay stable: RelatedPanel finds a step's Claude-chat placeholder anchor by
+// (file, label, gran, rows, seg), see draftKeyFor/placeholderAnchorFor there.
+function stepLabel(i) {
   const r = currentRound()
-  if (!text || !r || state.composeBusy) return
-  const title = stepTitle(state.step)
-  const label = state.step === 0
+  if (!r) return ''
+  return i === 0
     ? t('QA ronde {r} · overzicht', { r: r.round })
-    : t('QA ronde {r} · stap {n} — {title}', { r: r.round, n: state.step, title })
-  state.composeBusy = true
-  state.composeError = ''
-  const bodyText = '**' + label + '**\n\n' + text
-  const ph = stepPlaceholder()
-  if (ph && ph.runId) {
-    // A Claude conversation already hung a local placeholder on this step: the
-    // typed text becomes its first reply, published as the GitHub root
-    // (publish:'reply'), exactly like RelatedPanel.placeComment.
-    try {
-      const res = await fetch('/api/workflows/' + encodeURIComponent(ph.runId) + '/signals/reply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ author: 'reviewer', body: bodyText, done: false, publish: local ? undefined : 'reply' }),
-      })
-      if (!res.ok) state.composeError = t('Kon de comment niet plaatsen.')
-      else {
-        el.value = ''
-        await loadComments()
-        const at = visibleComments().findIndex((c) => c.id === ph.id)
-        if (at >= 0) state.commentSel = at
-      }
-    } catch (_) {
-      state.composeError = t('Geen verbinding met de server — draait slash nog?')
-    }
-    state.composeBusy = false
-    return
-  }
-  try {
-    const res = await fetch('/api/workflows/task_code_comment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pr: PR,
-        file: '',
-        line: 0,
-        author: 'reviewer',
-        body: bodyText,
-        gran: 'qa',
-        label,
-        seg: stepKey(state.step),
-        rowStart: -1,
-        rowEnd: -1,
-        local: !!local,
-        kind: 'issue',
-      }),
-    })
-    if (!res.ok) {
-      state.composeError = t('Kon de comment niet plaatsen.')
-    } else {
-      el.value = ''
-      let newId = ''
-      try {
-        newId = ((await res.json()) || {}).runId || ''
-      } catch (_) {
-        /* keep '' */
-      }
-      await loadComments()
-      const at = visibleComments().findIndex((c) => c.id === newId)
-      if (at >= 0) state.commentSel = at
-    }
-  } catch (_) {
-    state.composeError = t('Geen verbinding met de server — draait slash nog?')
-  }
-  state.composeBusy = false
+    : t('QA ronde {r} · stap {n} — {title}', { r: r.round, n: i, title: stepTitle(i) })
 }
 
-// ---------------------------------------------------------------- chat
-
-// ensureStepAnchor creates the local placeholder comment a first chat message
-// on a comment-less step hangs on (the backend needs a comment id), like the
-// tree's ensureClaudeAnchorForNew. Returns the comment, or null.
-async function ensureStepAnchor() {
+// commentTarget — what a NEW comment or a first Claude turn on this step
+// anchors on: a PR-wide ('issue') comment carrying the step in seg. The `qa`
+// flag routes RelatedPanel's placeComment/ensureClaudeAnchorForNew/
+// claudeContextBlock to their QA branch. null without a round.
+function commentTarget() {
   const r = currentRound()
   if (!r) return null
-  const existing = stepPlaceholder()
-  if (existing) return existing
-  const label = state.step === 0
-    ? t('QA ronde {r} · overzicht', { r: r.round })
-    : t('QA ronde {r} · stap {n} — {title}', { r: r.round, n: state.step, title: stepTitle(state.step) })
-  try {
-    const res = await fetch('/api/workflows/task_code_comment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pr: PR, file: '', line: 0, author: 'reviewer', body: CHAT_ANCHOR_PLACEHOLDER, gran: 'qa', label,
-        seg: stepKey(state.step), rowStart: -1, rowEnd: -1, local: true, kind: 'issue',
-      }),
-    })
-    if (!res.ok) return null
-    const id = ((await res.json()) || {}).runId || ''
-    await loadComments()
-    return stepComments().find((c) => c.id === id) || null
-  } catch (_) {
-    return null
+  const label = stepLabel(state.step)
+  return {
+    qa: true,
+    kind: 'issue',
+    file: '',
+    line: 0,
+    label,
+    gran: 'qa',
+    rowStart: -1,
+    rowEnd: -1,
+    seg: stepKey(state.step),
+    code: '',
+    startLine: 0,
+    endLine: 0,
+    side: 'RIGHT',
+    segment: '',
+    bodyPrefix: '**' + label + '**\n\n',
+    context: stepContext(),
   }
 }
 
-// sendReply: a reply on a comment's thread (the "reply" Signal). A thread that
-// is already on GitHub gets the reply there; a local one stays local.
-async function sendReply(c, text) {
-  const body = (text || '').trim()
-  if (!body || !c.runId) return
-  try {
-    const res = await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ author: 'reviewer', body, done: false }),
-    })
-    if (res.ok) {
-      delete replyDrafts[c.id]
-      await loadComments()
-    } else state.composeError = t('Kon de reactie niet plaatsen.')
-  } catch (_) {
-    state.composeError = t('Geen verbinding met de server — draait slash nog?')
-  }
+// The scope RelatedPanel filters its comment list by: this step's seg.
+function commentScope() {
+  const r = currentRound()
+  if (!r) return { none: true }
+  return { qa: true, seg: stepKey(state.step), file: '', label: stepLabel(state.step), mode: 'qa', gran: 'qa', rowStart: -1, rowEnd: -1 }
 }
 
-function dockOpen() {
-  return state.focus !== 'steps'
-}
-
-// syncAutoChat: like the tree, the chat is simply there next to the selected
-// comment — open it on the first comment of the step (or the placeholder of a
-// chat that was started without one) unless one of this step's is already open.
-function syncAutoChat() {
-  // The dock is collapsed while the columns own the keyboard: nothing is
-  // selected and no chat is started until ↓ (or a click) opens it.
-  if (!dockOpen()) return
-  if (state.chatCommentId && stepComments().some((c) => c.id === state.chatCommentId)) return
-  const target = visibleComments()[Math.max(state.commentSel, 0)] || stepPlaceholder()
-  if (target) openChat(target, false)
-  else if (state.chatCommentId) state.chatCommentId = ''
-}
-
-async function openChat(c, focus = true) {
-  if (!c) return
-  if (state.chatCommentId !== c.id) {
-    state.chatCommentId = c.id
-    state.chatMessages = []
-    state.chatRunId = ''
-    state.chatError = ''
-  } else if (!focus && state.chatRunId) return
-  if (focus) state.focus = 'chat'
-  try {
-    const res = await fetch('/api/workflows/claude_chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pr: PR, repo: state.repo, commentId: c.id }),
-    })
-    if (res.ok) state.chatRunId = (await res.json()).runId || ''
-  } catch (_) {
-    state.chatError = t('Kon de chat niet openen.')
-  }
-  await loadChat()
-  if (focus) focusChatComposer()
-}
-
-function focusChatComposer() {
-  requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid=qa-chat] [data-testid=claude-chat-compose]')
-    if (el) el.focus()
-  })
-}
-
-async function loadChat() {
-  const id = state.chatCommentId
-  if (!id) return
-  try {
-    const res = await fetch('/api/chat?commentId=' + encodeURIComponent(id))
-    if (!res.ok) return
-    const json = await res.json()
-    if (state.chatCommentId !== id) return
-    state.chatMessages = json.messages || []
-  } catch (_) {
-    /* keep the last good transcript */
-  }
+function commentCountFor(i) {
+  const key = stepKey(i)
+  return key ? commentListSnapshot().filter((c) => c.seg === key && !c.deleted).length : 0
 }
 
 // stepContext is the invisible context the FIRST turn of a conversation gets
@@ -503,118 +376,183 @@ function stepContext() {
   return lines.join('\n')
 }
 
-let pendingSeq = 0
-async function sendChatMessage(text) {
-  const trimmed = (text || '').trim()
-  if (!state.chatCommentId) {
-    if (!trimmed) return
-    const anchor = await ensureStepAnchor()
-    if (!anchor) {
-      state.chatError = t('Kon de chat niet openen.')
-      return
-    }
-    await openChat(anchor, false)
-  }
-  const id = state.chatCommentId
-  if (!state.chatRunId || !id) return
-  const attachments = await takePendingAttachments(id, id)
-  if (!trimmed && !attachments.length) return
-  const first = state.chatMessages.length === 0
-  state.chatBusy = true
-  state.chatError = ''
-  pendingSeq += 1
-  const pendingId = '__pending__' + pendingSeq
-  state.chatMessages = state.chatMessages.concat([{ id: pendingId, role: 'user', kind: '', body: trimmed, attachments }])
-  try {
-    const res = await fetch('/api/workflows/' + encodeURIComponent(state.chatRunId) + '/signals/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        author: 'reviewer',
-        body: trimmed,
-        context: first ? stepContext() : undefined,
-        attachments: attachments.length ? attachments : undefined,
-      }),
-    })
-    if (!res.ok) {
-      state.chatMessages = state.chatMessages.filter((m) => m.id !== pendingId)
-      restorePendingAttachments(id, id, attachments)
-      state.chatError = t('Kon niet verstuurd worden.')
-    } else {
-      await loadChat()
-    }
-  } catch (_) {
-    state.chatMessages = state.chatMessages.filter((m) => m.id !== pendingId)
-    restorePendingAttachments(id, id, attachments)
-    state.chatError = t('Geen verbinding met de server — draait slash nog?')
-  }
-  state.chatBusy = false
+// placeQAComment — "Plaats op GitHub" or "Alleen voor mij" from the QA compose
+// menu (the tree has no local option any more; a QA page keeps it).
+async function placeQAComment(local) {
+  await placeComment(rpState, commentTarget, { local })
 }
 
-async function cancelChat() {
-  if (!state.chatCommentId) return
-  try {
-    await fetch('/api/chat/cancel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ commentId: state.chatCommentId }),
-    })
-  } catch (_) {
-    /* the progress event tells the truth */
-  }
+// ---------------------------------------------------------------- menus
+
+// The command palette: CommandMenu.mjs plus the tree's own comment/Claude
+// lists (commentCommands.mjs). qaCommandHost is what those lists need from
+// this page — after a resolve/delete/publish the keyboard simply stays in the
+// dock (there is no index row to move to).
+const qaCommandHost = {
+  afterResolve: async (doResolve) => {
+    await doResolve()
+  },
+  deleteFocused: () => deleteFocusedComment(),
+  deletePrComment: (c) => deletePrCommentItem(c),
+  publishThread: (c, withHistory, how) => (how || publishThreadOnly)(c, withHistory),
+  publishPrComment: (c, withHistory) => publishThreadOnly(c, withHistory),
+  selectedComment: () => null,
+  clearClaudeChat: () => clearClaudeChat(),
+  prUrl: () => `https://github.com/plug-and-pay/plug-and-pay/pull/${PR}`,
+  composePost: () => openMenu('qaCompose'),
+  granNoun: () => 'stap',
+  ignore: null,
 }
 
-// chatView/chatCallbacks: claudeChatColumn's two arguments, the same shape
-// plan.mjs passes (getters + plain callbacks). No retry ladder/queue here.
-function chatView() {
-  return {
-    messages: () => state.chatMessages,
-    conversationId: () => state.chatCommentId,
-    status: () => 'ok',
-    busy: () => state.chatBusy,
-    retryAllBusy: () => false,
-    active: () => state.chatBusy || !!(turnProgress(state.chatCommentId) || {}).running,
-    sendError: () => state.chatError,
-    claudePos: () => 0,
-    pinned: () => true,
-    claudeOptionSel: () => 0,
-    anchorHint: () => '',
-    progress: () => turnProgress(state.chatCommentId),
-    queued: () => [],
-    elapsed: () => {
-      const p = turnProgress(state.chatCommentId)
-      void state.chatTick
-      return p && p.startedAt ? Math.max(0, Math.round((Date.now() - p.startedAt) / 1000)) : 0
-    },
-  }
+// QA_COMPOSE — Enter on a filled composer: where the comment goes. "Alleen voor
+// mij" stays local (never posted to GitHub); "Plaats op GitHub" posts it.
+function qaComposeCommands() {
+  return [
+    { id: 'close-menu', label: t('Sluit menu'), hint: 'sluit', run: () => {} },
+    { id: 'qa-compose-github', label: t('Plaats op GitHub'), hint: 'github', run: () => placeQAComment(false) },
+    { id: 'qa-compose-local', label: t('Alleen voor mij'), hint: 'lokaal', run: () => placeQAComment(true) },
+  ]
 }
 
-function chatCallbacks() {
-  return {
-    onSend: (text) => sendChatMessage(text),
-    onRetry: () => {},
-    onRetryAll: () => {},
-    onCleanup: () => {},
-    onCancel: () => cancelChat(),
-    onFocus: () => {
-      state.focus = 'chat'
-    },
-    onEmptyEnter: () => {},
-    onInput: () => {},
-    onSent: () => {},
-    onThreadScroll: () => {},
-    onJumpToBottom: () => {},
+function rootCommandsFor(mode) {
+  if (mode === 'comment') return commentCommandsFor(qaCommandHost)
+  if (mode === 'claude') return claudeChatCommandsFor(qaCommandHost)
+  if (mode === 'prComment') return prCommentCommandsFor(qaCommandHost)
+  if (mode === 'replyPublish') return replyPublishCommandsFor()
+  if (mode === 'compose') return composeCommandsFor(qaCommandHost)
+  if (mode === 'qaCompose') return qaComposeCommands()
+  return []
+}
+
+// snapshotCommands resolves every label function ONCE, here, so no live
+// reactive read ever reaches CommandMenu's never-disposed tree (see the
+// orphan-bindings entry in arrowjs-pitfalls.md).
+function snapshotCommands(list) {
+  return list
+    .filter((c) => !c.when || c.when())
+    .map((c) => ({
+      ...c,
+      label: typeof c.label === 'function' ? c.label() : c.label,
+      children: c.children ? snapshotCommands(c.children) : undefined,
+    }))
+}
+
+const menu = reactive({ open: false })
+let ms = reactive({ query: '', sel: 0, sub: null, mode: '', commands: [], native: false, x: 0, y: 0 })
+
+function defaultSel(list, native) {
+  if (native) return 0
+  return Math.min(1, Math.max(0, list.length - 1))
+}
+
+function resolveCommands(query) {
+  const list = filterCommands(ms.sub || ms.commands, query)
+  return ms.native ? list.filter((c) => c.id !== 'close-menu') : list
+}
+
+function openMenu(mode, opts = {}) {
+  const native = !!(opts && opts.native)
+  const commands = snapshotCommands(rootCommandsFor(mode))
+  if (!commands.length) return
+  ms = reactive({ query: '', sel: defaultSel(commands, native), sub: null, mode, commands, native, x: opts.x || 0, y: opts.y || 0 })
+  menu.open = true
+  requestAnimationFrame(() => {
+    positionMenu()
+    const el = document.querySelector('[data-testid="command-input"]')
+    if (el) el.focus()
+  })
+}
+
+function closeMenu() {
+  menu.open = false
+}
+
+function runCommand(cmd) {
+  if (cmd && cmd.children) {
+    ms.sub = cmd.children
+    ms.query = ''
+    ms.sel = defaultSel(cmd.children, ms.native)
+    return
   }
+  closeMenu()
+  if (cmd && cmd.run) requestAnimationFrame(() => cmd.run())
+}
+
+// positionMenu: a native (right-click) menu sits at the cursor; otherwise just
+// above the dock, so it never covers the comment/Claude block it acts on.
+function positionMenu() {
+  const el = document.querySelector('[data-testid="command-anchor"]')
+  if (!el) return
+  if (ms.native) {
+    el.style.width = 'auto'
+    el.style.left = Math.max(4, Math.min(ms.x, window.innerWidth - el.offsetWidth - 4)) + 'px'
+    el.style.top = Math.max(4, Math.min(ms.y, window.innerHeight - el.offsetHeight - 4)) + 'px'
+  } else {
+    const width = Math.min(480, window.innerWidth - 16)
+    el.style.width = width + 'px'
+    const dock = document.querySelector('[data-testid="qa-dock"]')
+    const top = dock ? dock.getBoundingClientRect().top : window.innerHeight
+    el.style.left = Math.max(8, (window.innerWidth - width) / 2) + 'px'
+    el.style.top = Math.max(8, top - (el.offsetHeight || 240) - 8) + 'px'
+  }
+  el.style.visibility = 'visible'
+}
+
+function menuOverlay() {
+  return html`
+    <div class="fixed inset-0 z-40" data-testid="command-overlay" @click="${() => closeMenu()}">
+      <div
+        class="fixed z-50 max-w-[calc(100vw-1rem)]"
+        style="top:0;left:0;visibility:hidden"
+        data-testid="command-anchor"
+        @click="${(e) => e.stopPropagation()}"
+      >
+        ${CommandMenu(ms, resolveCommands, runCommand, { native: ms.native })}
+      </div>
+    </div>
+  `
+}
+
+function MenuHost() {
+  return html`<div class="contents">${() => (menu.open ? menuOverlay() : '')}</div>`
+}
+
+function handleMenuKeydown(e) {
+  const list = resolveCommands(ms.query)
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    if (ms.sub) {
+      ms.sub = null
+      ms.query = ''
+      ms.sel = defaultSel(ms.commands, ms.native)
+    } else closeMenu()
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    ms.sel = Math.min(ms.sel + 1, Math.max(0, list.length - 1))
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    ms.sel = Math.max(ms.sel - 1, 0)
+  } else if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    if (list[ms.sel]) runCommand(list[ms.sel])
+  } else if (e.key === ' ' && ms.query === '' && !ms.native) {
+    e.preventDefault()
+    if (list[ms.sel]) runCommand(list[ms.sel])
+  }
+  if (menu.open) requestAnimationFrame(positionMenu)
 }
 
 // ---------------------------------------------------------------- navigation
 
+// dockOpen — the dock is open exactly while RelatedPanel's block owns the
+// keyboard (its own cs.focus); collapsed otherwise.
+function dockOpen() {
+  return relatedActive()
+}
+
 function goStep(n) {
   const max = stepCount()
   state.step = Math.max(0, Math.min(max, n))
-  state.commentSel = -1
-  if (state.chatCommentId && !stepComments().some((c) => c.id === state.chatCommentId)) state.chatCommentId = ''
-  syncAutoChat()
   requestAnimationFrame(() => {
     const el = document.querySelector(`[data-qa-col="${state.step}"]`)
     // inline:'start' on purpose: this IS the one horizontal "follow the
@@ -624,67 +562,100 @@ function goStep(n) {
 }
 
 // openDock: ↓ from the columns (or a click on the collapsed dock bar) — the
-// only way the dock expands and its first comment gets selected.
+// tree's own → into the comment block: the first open comment, or else the
+// Claude column/new composer.
 function openDock() {
-  state.focus = 'comments'
-  state.commentSel = visibleComments().length ? 0 : -1
-  syncAutoChat()
+  if (!currentRound()) return
+  if (hasVisibleComments()) enterCommentsOrRelated(PR)
+  else startComment(commentTarget)
 }
 
+function leaveDock() {
+  if (relatedActive()) leaveRelated()
+}
+
+// focusComposer: `/`/`c` — a new comment on this step.
 function focusComposer() {
-  state.focus = 'comments'
-  state.commentSel = -1
-  requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid=qa-comment-compose]')
-    if (el) el.focus()
-  })
+  if (!currentRound()) return
+  startComment(commentTarget)
 }
 
+// onKeydown — the page's own keys plus the tree's routing for its comment/
+// Claude block (the relatedActive() branch mirrors home.mjs's onKeydown).
 function onKeydown(e) {
+  if (isNativeTextEditKey(e)) return
+  if (handleDictationKeydown(e)) return
   if (isLightboxOpen()) return handleLightboxKeydown(e)
   if (isWorkDirOverlayOpen()) return handleWorkDirOverlayKeydown(e)
-  const tag = (e.target && e.target.tagName) || ''
-  if (tag === 'TEXTAREA' || tag === 'INPUT') {
-    if (e.key === 'Escape') {
-      e.target.blur()
-      state.focus = e.target.closest('[data-testid=qa-chat]') ? 'comments' : 'steps'
+  if (menu.open) return handleMenuKeydown(e)
+
+  if (e.key === 'Enter' && !e.shiftKey && isComposeOpen()) {
+    e.preventDefault()
+    if (composeHasText()) openMenu(isConvertingAiWarning() ? 'compose' : 'qaCompose')
+    return
+  }
+  if (e.key === 'e' && !isModifiedKey(e) && !isEditableFocused() && isClaudeChatFocused() && canEditClaudeMessage(activeClaudeMessage())) {
+    e.preventDefault()
+    startEditClaudeMessage()
+    return
+  }
+
+  if (relatedActive()) {
+    if (
+      ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape'].includes(e.key) &&
+      !(e.key === 'ArrowLeft' && editableCaretCanMoveLeft() && !isModifiedKey(e)) &&
+      !(e.key === 'ArrowRight' && editableCaretCanMoveRight() && !isModifiedKey(e)) &&
+      !(e.key === 'ArrowUp' && editableCaretCanMoveUp()) &&
+      !(e.key === 'ArrowDown' && editableCaretCanMoveDown())
+    ) {
+      e.preventDefault()
+      // 'advance' (→ past the Claude column) has no next block here: stay.
+      handleRelatedKey(e.key)
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey && isCommentOrThreadFocused() && commentReplyEmpty()) {
+      e.preventDefault()
+      openMenu('comment')
+      return
+    }
+    if (e.key === 'Enter' && isClaudeChatFocused() && selectHighlightedClaudeOption(rpState, commentTarget)) {
+      e.preventDefault()
+      return
+    }
+    if (e.key === 'Enter' && (isClaudeChatFocused() || isFooterTasksFocused()) && selectHighlightedClaudeTask()) {
+      e.preventDefault()
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey && isClaudeChatFocused()) {
+      const key = activeCodePreviewKey()
+      if (key != null) {
+        e.preventDefault()
+        toggleCodePreviewExpanded(key)
+        return
+      }
+    }
+    if (e.key === 'Enter' && isClaudeChatFocused() && document.activeElement !== document.querySelector('[data-testid=claude-chat-compose]')) {
+      e.preventDefault()
+      openMenu('claude')
     }
     return
   }
-  if (e.metaKey || e.ctrlKey || e.altKey) return
-  if (state.focus === 'steps') {
-    const main = document.querySelector('[data-testid=qa-columns]')
-    if (e.key === 'ArrowRight') goStep(state.step + 1)
-    else if (e.key === 'ArrowLeft') goStep(state.step - 1)
-    else if (e.key === 'Enter') state.cardFull = !state.cardFull
-    else if (e.key === 'Escape' && state.cardFull) state.cardFull = false
-    // Full height: ↑/↓ scroll the columns first; ↓ at the bottom opens the dock.
-    else if (e.key === 'ArrowUp' && state.cardFull && main) main.scrollBy({ top: -main.clientHeight * 0.8, behavior: 'smooth' })
-    else if (e.key === 'ArrowDown' && state.cardFull && main && main.scrollTop + main.clientHeight < main.scrollHeight - 2) {
-      main.scrollBy({ top: main.clientHeight * 0.8, behavior: 'smooth' })
-    } else if (e.key === 'ArrowDown') openDock()
-    else if (e.key === '/' || e.key === 'c') focusComposer()
-    else return
-    e.preventDefault()
+  if (isEditableFocused()) {
+    if (e.key === 'Escape') e.target.blur()
     return
   }
-  // the comments dock
-  const list = visibleComments()
-  if (e.key === 'ArrowUp') {
-    if (state.commentSel <= 0) state.focus = 'steps'
-    state.commentSel = Math.max(-1, state.commentSel - 1)
-    if (list[state.commentSel]) openChat(list[state.commentSel], false)
-  } else if (e.key === 'ArrowDown') {
-    state.commentSel = Math.min(list.length - 1, state.commentSel + 1)
-    if (list[state.commentSel]) openChat(list[state.commentSel], false)
-  } else if (e.key === 'Enter') {
-    if (state.commentSel >= 0 && list[state.commentSel]) openChat(list[state.commentSel], true)
-    else focusComposer()
-  } else if (e.key === 'Escape') state.focus = 'steps'
-  else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-    state.focus = 'steps'
-    goStep(state.step + (e.key === 'ArrowRight' ? 1 : -1))
-  } else if (e.key === '/' || e.key === 'c') focusComposer()
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  const main = document.querySelector('[data-testid=qa-columns]')
+  if (e.key === 'ArrowRight') goStep(state.step + 1)
+  else if (e.key === 'ArrowLeft') goStep(state.step - 1)
+  else if (e.key === 'Enter') state.cardFull = !state.cardFull
+  else if (e.key === 'Escape' && state.cardFull) state.cardFull = false
+  // Full height: ↑/↓ scroll the columns first; ↓ at the bottom opens the dock.
+  else if (e.key === 'ArrowUp' && state.cardFull && main) main.scrollBy({ top: -main.clientHeight * 0.8, behavior: 'smooth' })
+  else if (e.key === 'ArrowDown' && state.cardFull && main && main.scrollTop + main.clientHeight < main.scrollHeight - 2) {
+    main.scrollBy({ top: main.clientHeight * 0.8, behavior: 'smooth' })
+  } else if (e.key === 'ArrowDown') openDock()
+  else if (e.key === '/' || e.key === 'c') focusComposer()
   else return
   e.preventDefault()
 }
@@ -759,7 +730,7 @@ function imagesHTML(images) {
 }
 
 function colCls(i, width) {
-  return 'flex shrink-0 snap-start flex-col overflow-hidden ' + (state.cardFull ? 'h-auto ' : '') + width + ' ' + CARD + (state.step === i && state.focus === 'steps' ? CARD_FOCUS : CARD_IDLE)
+  return 'flex shrink-0 snap-start flex-col overflow-hidden ' + (state.cardFull ? 'h-auto ' : '') + width + ' ' + CARD + (state.step === i && !dockOpen() ? CARD_FOCUS : CARD_IDLE)
 }
 
 function bodyCls() {
@@ -775,7 +746,7 @@ function fullToggle(i) {
     class="${() => (state.step === i ? 'rounded px-1.5 text-[11px] text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800' : 'hidden')}"
     @click="${(e) => {
       e.stopPropagation()
-      state.focus = 'steps'
+      leaveDock()
       state.cardFull = !state.cardFull
     }}"
   >${() => (state.cardFull ? t('↵ inklappen') : t('↵ volledige hoogte'))}</button>`
@@ -793,7 +764,7 @@ function stepColumn(s, i, groupLabel) {
       data-qa-col="${String(i)}"
       data-testid="qa-step"
       @click="${() => {
-        state.focus = 'steps'
+        leaveDock()
         if (state.step !== i) goStep(i)
       }}"
     >
@@ -839,7 +810,7 @@ function progressStatusText() {
   const p = state.progress
   if (!p) return ''
   if (p.waitingChoice) return t('Wacht op jouw werkmap-keuze…')
-  void state.chatTick
+  void state.tick
   const elapsed = p.startedAt ? Math.round((Date.now() - p.startedAt) / 1000) : 0
   return claudeStatusText(p.tool ? { ...p, tool: prettyTool(p.tool) } : p, elapsed)
 }
@@ -908,7 +879,7 @@ function overviewColumn() {
       data-qa-col="0"
       data-testid="qa-overview"
       @click="${() => {
-        state.focus = 'steps'
+        leaveDock()
         if (state.step !== 0) goStep(0)
       }}"
     >
@@ -968,7 +939,7 @@ function overviewBody() {
           (s, k) => html`<li>
             <button type="button" class="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-100 dark:hover:bg-zinc-800" @click="${(e) => {
               e.stopPropagation()
-              state.focus = 'steps'
+              leaveDock()
               goStep(k + 1)
             }}">
               <span class="w-6 shrink-0 font-mono text-[11px] text-slate-400">${String(k + 1)}</span>
@@ -1004,7 +975,6 @@ function roundButtons() {
       @click="${() => {
         state.roundRef = r.runId === state.rounds[state.rounds.length - 1].runId ? '' : r.runId
         state.step = 0
-        state.chatCommentId = ''
       }}"
     >${(cur ? '● ' : '○ ') + t('Ronde {r}', { r: r.round }) + word}</button>`.key('round:' + r.runId + ':' + (cur ? 1 : 0) + ':' + r.status)
   })
@@ -1023,87 +993,20 @@ function header() {
   </header>`
 }
 
-function replyBubble(r) {
-  const who = identityOf(r.source, r.author, r.avatarUrl)
-  const mine = isOwn(r)
-  return html`<div class="${'flex flex-col gap-0.5 ' + (mine ? 'items-end' : 'items-start')}" data-testid="qa-reaction">
-    <div class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-zinc-400">
-      <span .innerHTML="${avatarHtmlString(who.name, who.avatarUrl, 'h-4 w-4', '')}"></span>
-      <span>${who.name || ''}</span>
-      <span>${relativeTime(r.createdAt)}</span>
-    </div>
-    <div class="${'markdown-body max-w-[92%] rounded-lg border px-2 py-1 text-[13px] [overflow-wrap:anywhere] ' + (mine ? 'border-indigo-200 bg-indigo-50/60 dark:border-indigo-500/30 dark:bg-indigo-500/10' : 'border-slate-200 bg-slate-50 dark:border-zinc-800 dark:bg-zinc-800/50')}" .innerHTML="${renderMarkdown(r.body || '')}"></div>
-  </div>`.key('qr:' + r.id)
-}
-
-// One comment as a thread card: author line, body, the replies (GitHub ones
-// included) and a reply field — expanded only for the selected comment.
-function commentRow(c, k) {
-  const msgs = threadMsgs(c)
-  return html`<li
-    data-testid="qa-comment"
-    class="${() => 'flex cursor-pointer flex-col gap-1.5 rounded-lg border p-2 text-[13px] ' + (state.commentSel === k ? (state.focus !== 'steps' ? CARD_FOCUS : 'border-indigo-300 dark:border-indigo-500/50') : 'border-slate-200 dark:border-zinc-800')}"
-    @click="${() => {
-      state.commentSel = k
-      state.focus = 'comments'
-      openChat(c, false)
-    }}"
-  >
-    <div class="flex items-center gap-2 text-[11px] text-slate-500 dark:text-zinc-400">
-      <span .innerHTML="${() => avatarHtmlString(identityOf(c.source, c.author, c.avatarUrl).name, identityOf(c.source, c.author, c.avatarUrl).avatarUrl, 'h-4 w-4', '')}"></span>
-      <span>${identityOf(c.source, c.author, c.avatarUrl).name || ''}</span>
-      <span>${relativeTime(c.createdAt)}</span>
-      <span class="ml-auto rounded bg-slate-100 px-1.5 dark:bg-zinc-800">${c.githubId ? t('op GitHub') : t('lokaal')}</span>
-    </div>
-    <div class="${() => 'markdown-body [overflow-wrap:anywhere] ' + (state.commentSel === k ? '' : 'line-clamp-2')}" .innerHTML="${() => renderMarkdown(c.body === CHAT_ANCHOR_PLACEHOLDER ? '' : c.body || '')}"></div>
-    <div class="${() => (state.commentSel === k ? 'flex flex-col gap-1.5' : 'hidden')}" data-testid="qa-thread">
-      ${msgs.filter((m) => m.id !== 'origin:' + c.id).map((r) => replyBubble(r))}
-      <textarea
-        data-testid="qa-reply-compose"
-        rows="1"
-        placeholder="${t('Reageer… (Enter plaatst)')}"
-        class="w-full resize-none rounded border border-slate-300 bg-white px-2 py-1 text-[12px] dark:border-zinc-700 dark:bg-zinc-950"
-        .value="${replyDrafts[c.id] || ''}"
-        @focus="${() => {
-          state.focus = 'comments'
-        }}"
-        @input="${(e) => {
-          replyDrafts[c.id] = e.target.value
-        }}"
-        @keydown="${(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-            e.preventDefault()
-            e.stopPropagation()
-            const v = e.target.value
-            e.target.value = ''
-            sendReply(c, v)
-          }
-        }}"
-      ></textarea>
-    </div>
-  </li>`
-}
-
-function rowKey(c) {
-  const rs = c.reactions || []
-  return 'qc:' + c.id + ':' + rs.length + ':' + (rs.length ? rs[rs.length - 1].id : '') + ':' + (c.githubId ? 1 : 0) + ':' + (c.body || '').length
-}
-
-// rowCls: collapsed while the columns own the keyboard; open, a step with no
-// comment and no chat gets only the two input fields' worth of height.
-function rowCls() {
-  const base = 'flex min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 '
-  if (!dockOpen()) return 'hidden'
-  return base + (visibleComments().length || state.chatMessages.length ? 'h-[38vh]' : 'h-[12rem]')
-}
-
+// The dock: RelatedPanel's merged comment + Claude card, the shared status
+// footer and the code-preview row, the same composition as the tree's
+// comments-and-related column (home.mjs). It stays MOUNTED while collapsed
+// (InlineComments starts the comment poll from its own body, see the
+// comment-claude-row note in home.mjs) — collapsing is a CSS `hidden`.
+// data-testid=detail-panel: RelatedPanel's exitRelated only blurs a field
+// inside that element.
 function dock() {
   return html`<div class="flex shrink-0 flex-col gap-2 border-t border-slate-200 bg-slate-100/60 px-5 py-2 dark:border-zinc-800 dark:bg-zinc-900/40" data-testid="qa-dock" data-open="${() => (dockOpen() ? 'true' : 'false')}">
     <button
       type="button"
       data-testid="qa-dock-bar"
       class="flex items-center gap-2 text-left"
-      @click="${() => (dockOpen() ? (state.focus = 'steps') : openDock())}"
+      @click="${() => (dockOpen() ? leaveDock() : openDock())}"
     >
       <span class="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400" data-testid="qa-dock-title"
         >${() => t('Comments · {step}', { step: state.step === 0 ? t('Overzicht') : state.step + '. ' + stepTitle(state.step) })}</span
@@ -1111,43 +1014,42 @@ function dock() {
       <span class="text-[11px] text-slate-400 dark:text-zinc-500">${() => commentBadge(state.step)}</span>
       <span class="ml-auto shrink-0 text-[11px] text-slate-400 dark:text-zinc-500">${() => (dockOpen() ? t('▾ Esc inklappen') : t('▴ ↓ openen'))}</span>
     </button>
-    <div class="${() => rowCls()}" data-testid="qa-comment-claude-row">
-    <div class="flex min-w-0 flex-1 flex-col gap-2 p-3">
-      <ul class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto" data-testid="qa-comments">
-        ${() => {
-          const list = visibleComments()
-          return list.length
-            ? list.map((c, k) => commentRow(c, k).key(rowKey(c) + ':' + k))
-            : [html`<li class="text-[12px] text-slate-400 dark:text-zinc-500">${t('Nog geen comments op deze stap.')}</li>`.key('qc-empty')]
-        }}
-      </ul>
-      <textarea
-        data-testid="qa-comment-compose"
-        rows="2"
-        placeholder="${t('Comment op deze stap… (Cmd+Enter plaatst op GitHub)')}"
-        class="w-full resize-none rounded border border-slate-300 bg-white px-2 py-1.5 text-[13px] dark:border-zinc-700 dark:bg-zinc-950"
-        @focus="${() => {
-          state.focus = 'comments'
-          state.commentSel = -1
-        }}"
-        @keydown="${(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault()
-            placeComment(false)
-          }
-        }}"
-      ></textarea>
-      <div class="flex items-center gap-2">
-        <button type="button" data-testid="qa-comment-send" disabled="${() => state.composeBusy || !currentRound()}" class="rounded bg-indigo-600 px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-50" @click="${() => placeComment(false)}">${t('Plaats op GitHub')}</button>
-        <button type="button" data-testid="qa-comment-local" disabled="${() => state.composeBusy || !currentRound()}" class="rounded border border-slate-300 px-2.5 py-1 text-[12px] hover:bg-white disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800" @click="${() => placeComment(true)}">${t('Alleen voor mij')}</button>
-        <span class="text-[12px] text-rose-600 dark:text-rose-400">${() => state.composeError}</span>
+    <div
+      class="${() => (dockOpen() ? 'flex max-h-[55vh] min-h-0 flex-col gap-3 overflow-y-auto' : 'hidden')}"
+      data-testid="detail-panel"
+    >
+      <div
+        class="${() =>
+          !claudeChatVisible() && !hasCommentClaudeFooter() && !hasAnyComments()
+            ? 'hidden'
+            : 'flex w-fit max-w-full flex-col rounded-xl border border-slate-300 bg-white ring-1 ring-black/5 dark:border-zinc-700 dark:bg-zinc-900'}"
+        data-testid="comment-claude-row"
+      >
+        <div class="flex items-stretch overflow-hidden" data-testid="comment-claude-columns">
+          ${() =>
+            InlineComments(
+              rpState,
+              commentTarget,
+              // The composer's own "Plaats…" button: the same menu Enter opens.
+              () => {
+                if (composeHasText()) openMenu(isConvertingAiWarning() ? 'compose' : 'qaCompose')
+              },
+              (opts) => openMenu('comment', opts),
+              (opts) => openMenu('prComment', opts),
+            ).key('inline-comments')}
+          ${() =>
+            claudeColumnVisible()
+              ? html`<div
+                  class="w-3 shrink-0 self-stretch border-l border-dashed border-slate-300 dark:border-zinc-700"
+                  data-testid="comment-claude-connector"
+                ></div>`
+              : ''}
+          ${() => ClaudeChatPanel(rpState, commentTarget).key('claude-chat')}
+        </div>
+        ${() => CommentClaudeFooter()}
+        ${ShortcutHintBar(commentClaudeShortcutHints)}
       </div>
-    </div>
-    <div class="relative flex min-w-0 flex-1 flex-col border-l border-slate-200 dark:border-zinc-800" data-testid="qa-chat">
-      ${() => html`<div class="flex min-h-0 flex-1 flex-col">
-              ${claudeChatColumn(chatView(), chatCallbacks(), false, () => {}, { inOverlay: true })}
-            </div>`.key('qa-chat:' + state.chatCommentId)}
-    </div>
+      ${() => CodePreviewPanel(rpState, commentTarget)}
     </div>
   </div>`
 }
@@ -1162,6 +1064,22 @@ function App() {
   </div>`
 }
 
+// claudeTaskJump — a row of the footer's "Andere chats in deze PR": a QA
+// conversation of this page jumps to its round/step and selects it; any other
+// one lives in the review tree.
+function jumpToConversation(c) {
+  if (!c) return
+  const m = /^qa:([0-9a-f]+):(\d+)$/.exec(c.seg || '')
+  const r = m && state.rounds.find((x) => x.runId === m[1])
+  if (!r) {
+    location.href = `/pr/${PR}?sel=${encodeURIComponent('comment:' + c.id)}`
+    return
+  }
+  state.roundRef = r.runId === state.rounds[state.rounds.length - 1].runId ? '' : r.runId
+  goStep(Number(m[2]))
+  requestAnimationFrame(() => selectComment(c.id))
+}
+
 // ---------------------------------------------------------------- boot
 
 if (!PR) {
@@ -1169,57 +1087,66 @@ if (!PR) {
 } else {
   const app = document.getElementById('app')
   html`${App()}`(app)
+  MenuHost()(app)
   ImageLightboxHost()(app)
   initWorkDirOverlay(state, sendCheckoutAction)
   WorkDirOverlayHost()(app)
   initDebugLog()
   initImageLightbox()
+  initMarkdownCodeCopy()
   initSelfUpdate()
+  initDictation({
+    openChat: () => {
+      if (!relatedActive()) openDock()
+      if (claudeColumnVisible()) enterClaudeChatOrFromNew(PR)
+    },
+  })
+  setClaudeMenuOpener((opts) => openMenu('claude', opts))
+  setCommentMenuOpener(() => openMenu('comment'))
+  setPrCommentMenuOpener(() => openMenu('prComment'))
+  setReplyPublishMenuOpener(() => openMenu('replyPublish'))
+  setClaudeTaskJump(jumpToConversation)
+  setCheckoutRefresher(() => loadCheckout())
   document.addEventListener('keydown', onKeydown)
+  window.addEventListener('resize', () => menu.open && positionMenu())
 
   ensureEvents(PR)
   onEvent('qa.progress', (ev) => {
     const wasRunning = isRunning()
     state.progress = ev.data || null
-    if (wasRunning && !isRunning()) loadQA()
+    if (wasRunning && !isRunning()) {
+      loadQA()
+      setTimeout(loadQA, 2000)
+    }
     if (state.progress && state.progress.waitingChoice) loadCheckout()
-  })
-  onEvent('chat.progress', (ev) => {
-    if (ev.key) setTurnProgress(ev.key, ev.data || null)
-  })
-  onEvent('chat.message', (ev) => {
-    if (ev.key && ev.key === state.chatCommentId) loadChat()
   })
   onEvent('checkout.changed', () => loadCheckout())
   onEventsResync(() => {
     loadQA()
-    loadComments()
     loadCheckout()
-    loadChat()
   })
-  // The elapsed-seconds counters (QA status line, chat status line).
+  // The QA status line's elapsed-seconds counter.
   setInterval(() => {
-    if (isRunning() || (turnProgress(state.chatCommentId) || {}).running) state.chatTick++
+    if (isRunning()) state.tick++
   }, 1000)
   // Safety net next to the SSE stream: an event is never the source of truth.
+  // A round the store still lists as running is polled too: the progress
+  // snapshot flips to "not running" (and its event's loadQA fires) a moment
+  // BEFORE the run's result is recorded, so that one reload can still read
+  // the round as running — the round button then said "loopt" forever.
   setInterval(() => {
-    if (isRunning()) loadQA()
-    loadComments()
+    if (isRunning() || state.rounds.some((r) => r.status === 'running')) loadQA()
   }, 15000)
-  // A newly selected round/step must keep the dock's selection in range.
+  // Push the focused step into RelatedPanel as its comment scope. Deps inline
+  // in the getter (arrowjs-pitfalls.md's watch rule).
   watch(
-    () => [state.step, state.roundRef],
-    () => {
-      if (state.commentSel >= visibleComments().length) state.commentSel = -1
-    },
-  )
-  watch(
-    () => [state.step, state.roundRef, state.comments, state.rounds, state.focus],
-    () => syncAutoChat(),
+    () => [state.step, state.roundRef, state.rounds],
+    () => setCommentScope(commentScope()),
   )
   loadPrTitle()
   loadCheckout()
-  Promise.all([loadQA(), loadComments()]).then(() => {
+  loadQA().then(() => {
+    setCommentScope(commentScope())
     if (state.step) goStep(state.step)
   })
 }

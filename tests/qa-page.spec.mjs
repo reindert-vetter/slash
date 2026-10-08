@@ -2,9 +2,11 @@ import { test, expect, appReady, seededPr } from './_fixtures.mjs'
 
 // The /qa/<pr> page (src/qa.mjs, .claude/docs/qa-page.md): a QA report of the
 // qa_run workflow as columns that continue to the right, with a comments dock
-// at the bottom scoped to the focused step. The report itself is mocked (a
-// real qa_run drives a browser against the local admin); the comment is a
-// real write through task_code_comment against the per-worker server.
+// at the bottom scoped to the focused step — the review tree's own
+// RelatedPanel comment + Claude block, with the tree's own menus. The report
+// itself is mocked (a real qa_run drives a browser against the local admin);
+// the comment is a real write through task_code_comment against the
+// per-worker server.
 const RUN = 'abcdef0123456789abcdef01'
 
 function mockQA(page, pr) {
@@ -43,6 +45,20 @@ function mockQA(page, pr) {
   )
 }
 
+// placeLocal: Enter on the filled composer opens the QA compose menu; pick
+// "Alleen voor mij" and return the task_code_comment POST body.
+async function placeLocal(page, text) {
+  await page.getByTestId('comment-compose').fill(text)
+  await page.getByTestId('comment-compose').press('Enter')
+  const rows = page.getByTestId('command-row')
+  await expect(rows.filter({ hasText: 'Plaats op GitHub' })).toBeVisible()
+  const req = page.waitForRequest((r) => r.method() === 'POST' && (r.url().includes('/api/workflows/task_code_comment') || r.url().includes('/signals/reply')))
+  await rows.filter({ hasText: 'Alleen voor mij' }).click()
+  return (await req).postDataJSON()
+}
+
+const comments = (page) => page.getByTestId('inline-comments').getByTestId('comment-item')
+
 test('steps are columns to the right, the comments dock follows the step, and the step survives a refresh', async ({ page }, testInfo) => {
   const pr = seededPr(testInfo)
   await mockQA(page, pr)
@@ -62,35 +78,51 @@ test('steps are columns to the right, the comments dock follows the step, and th
 
   // A local comment on step 1 lands in the dock of step 1 only.
   await page.keyboard.press('ArrowDown')
-  await page.getByTestId('qa-comment-compose').fill('Klopt het label?')
-  const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')
-  await page.getByTestId('qa-comment-local').click()
-  const posted = (await postPromise).postDataJSON()
+  await expect(page.getByTestId('comment-compose')).toBeFocused()
+  const posted = await placeLocal(page, 'Klopt het label?')
   expect(posted.kind).toBe('issue')
   expect(posted.local).toBe(true)
+  expect(posted.gran).toBe('qa')
   expect(posted.seg).toBe(`qa:${RUN}:1`)
-  await expect(page.getByTestId('qa-comment')).toHaveCount(1)
-  await expect(page.getByTestId('qa-comment')).toContainText('Klopt het label?')
+  expect(posted.body).toContain('QA ronde 1 · stap 1')
+  // Placing hands the keyboard back to the columns (like the tree hands it
+  // back to the diff); ↓ then lands on the new comment.
+  await expect(comments(page)).toHaveCount(1)
+  await expect(page.getByTestId('qa-dock')).toHaveAttribute('data-open', 'false')
+  await page.keyboard.press('ArrowDown')
+  await expect(comments(page)).toContainText('Klopt het label?')
+  await expect(page.getByTestId('reaction-compose')).toBeFocused()
 
+  // The tree's own comment menu (Enter on an empty reply field).
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('command-row').filter({ hasText: 'Resolve comment' })).toBeVisible()
+  await expect(page.getByTestId('command-row').filter({ hasText: 'Bewerk bericht' })).toBeVisible()
   await page.keyboard.press('Escape')
+
+  for (let i = 0; i < 4 && (await page.getByTestId('qa-dock').getAttribute('data-open')) === 'true'; i++) await page.keyboard.press('Escape')
+  await expect(page.getByTestId('qa-dock')).toHaveAttribute('data-open', 'false')
   await page.keyboard.press('ArrowRight')
   await expect(page.getByTestId('qa-dock-title')).toContainText('2. Cron een dag later')
-  await expect(page.getByTestId('qa-comment')).toHaveCount(0)
+  await page.keyboard.press('ArrowDown')
+  await expect(comments(page)).toHaveCount(0)
 
   await page.reload()
   await appReady(page)
   await expect(page.getByTestId('qa-dock-title')).toContainText('2. Cron een dag later')
+  for (let i = 0; i < 4 && (await page.getByTestId('qa-dock').getAttribute('data-open')) === 'true'; i++) await page.keyboard.press('Escape')
   await page.keyboard.press('ArrowLeft')
-  await expect(page.getByTestId('qa-comment')).toHaveCount(1)
+  await page.keyboard.press('ArrowDown')
+  await expect(comments(page)).toHaveCount(1)
 })
 
-test('the Claude chat sits right of the comment thread, opens by itself, and a first message on an empty step makes a local anchor', async ({ page }, testInfo) => {
+test('the Claude chat sits right of the comment thread; a first message on an empty step makes a local anchor carrying the step context', async ({ page }, testInfo) => {
   const pr = seededPr(testInfo)
   await mockQA(page, pr)
   // Never reach a real Claude turn: only the message Signal is intercepted.
   let sent = null
   await page.route('**/api/workflows/*/signals/message', (route) => {
-    sent = route.request().postDataJSON()
+    const body = route.request().postDataJSON()
+    if (body.body) sent = body
     return route.fulfill({ json: { ok: true } })
   })
   await page.goto(`/qa/${pr}`)
@@ -99,31 +131,25 @@ test('the Claude chat sits right of the comment thread, opens by itself, and a f
   await expect(page.getByTestId('qa-dock-title')).toContainText('1.')
   await page.keyboard.press('ArrowDown')
 
-  // No comment yet: the chat card is there anyway (no hint text instead).
-  const chat = page.getByTestId('qa-chat')
-  await expect(chat.getByTestId('claude-chat-compose')).toBeVisible()
+  // No comment yet: the composer and the Claude column sit side by side.
+  const compose = page.getByTestId('claude-chat-compose')
+  await expect(compose).toBeVisible()
   const anchorReq = page.waitForRequest((r) => r.url().includes('/api/workflows/task_code_comment') && r.method() === 'POST')
-  await chat.getByTestId('claude-chat-compose').fill('Wat doet deze stap?')
-  await chat.getByTestId('claude-chat-compose').press('Enter')
+  await compose.fill('Wat doet deze stap?')
+  await compose.press('Enter')
   const anchor = (await anchorReq).postDataJSON()
   expect(anchor.local).toBe(true)
+  expect(anchor.kind).toBe('issue')
   expect(anchor.body).toContain('gesprek met Claude gestart')
   expect(anchor.seg).toBe(`qa:${RUN}:1`)
   await expect.poll(() => sent && sent.body).toBe('Wat doet deze stap?')
   expect(sent.context).toContain('stap 1')
-  // The bare placeholder has no row of its own.
-  await expect(page.getByTestId('qa-comment')).toHaveCount(0)
-
-  // A real comment on that step takes the placeholder over and publishes as a reply.
-  await page.getByTestId('qa-comment-compose').fill('Echte comment')
-  const replyReq = page.waitForRequest((r) => r.url().includes('/signals/reply'))
-  await page.getByTestId('qa-comment-local').click()
-  const reply = (await replyReq).postDataJSON()
-  expect(reply.body).toContain('Echte comment')
-  await expect(page.getByTestId('qa-comment')).toHaveCount(1)
-  await expect(page.getByTestId('qa-comment')).toContainText('Echte comment')
-  // The chat stays open on the same conversation, right of the thread.
-  await expect(page.getByTestId('qa-chat').getByTestId('claude-chat-compose')).toBeVisible()
+  // The tree's Claude menu, with "Comment hiervan maken" on the bare anchor.
+  await compose.focus()
+  await compose.press('Enter')
+  await expect(page.getByTestId('command-row').filter({ hasText: 'Wis Claude-gesprek' })).toBeVisible()
+  await expect(page.getByTestId('command-row').filter({ hasText: 'Comment hiervan maken' })).toBeVisible()
+  await page.keyboard.press('Escape')
 })
 
 test('the dock stays collapsed until ↓, and Enter shows the cards at full height', async ({ page }, testInfo) => {
@@ -137,27 +163,24 @@ test('the dock stays collapsed until ↓, and Enter shows the cards at full heig
   await appReady(page)
 
   const dock = page.getByTestId('qa-dock')
-  const row = page.getByTestId('qa-comment-claude-row')
+  const panel = dock.getByTestId('detail-panel')
   await expect(dock).toHaveAttribute('data-open', 'false')
-  await expect(row).toBeHidden()
-  // Only the bar: far less than the old fixed 42vh.
+  await expect(panel).toBeHidden()
+  // Only the bar while collapsed.
   expect((await dock.boundingBox()).height).toBeLessThan(60)
 
   // Browsing the columns selects nothing and starts no chat.
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
   await expect(page.getByTestId('qa-dock-title')).toContainText('2.')
-  await expect(row).toBeHidden()
+  await expect(panel).toBeHidden()
 
-  // ↓ opens it; an empty step only gets the input fields' height.
+  // ↓ opens it on the new-comment composer of this step.
   await page.keyboard.press('ArrowDown')
   await expect(dock).toHaveAttribute('data-open', 'true')
-  await expect(row).toBeVisible()
-  await expect(page.getByTestId('qa-comment-compose')).toBeVisible()
-  const vh = page.viewportSize().height
-  expect((await row.boundingBox()).height).toBeLessThan(vh * 0.3)
+  await expect(page.getByTestId('comment-compose')).toBeFocused()
   await page.keyboard.press('Escape')
-  await expect(row).toBeHidden()
+  await expect(panel).toBeHidden()
   expect(chatStarts).toBe(0)
 
   // Enter: full height (no inner scroll), the column row scrolls instead.

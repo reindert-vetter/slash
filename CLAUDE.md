@@ -138,8 +138,10 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
   rather than a PR number.
 - `qa-page.md` — the `/qa/<pr>` QA page: Claude tests a PR in the local admin
   (`qa_run`, Playwright + laravel-boost MCP — the one reviewer-approved MCP
-  exception), the report as step columns to the right, the comments dock with
-  a chat per comment, rounds, and the werkmap-choice wait.
+  exception), the report as step columns to the right, the comments dock
+  (the tree's own RelatedPanel comment + Claude block under a QA `seg` scope,
+  with the shared menus from `commentCommands.mjs`), rounds, and the
+  werkmap-choice wait.
 - `pr-overview.md` — the `/pr-overview` GitHub inbox in full (sections, the
   per-row popover, filters, failed tasks, its client).
 - `debug-mode.md` — the settings-page "Debug mode" switch: it records every

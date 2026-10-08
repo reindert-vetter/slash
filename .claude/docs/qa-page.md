@@ -112,11 +112,13 @@ are not recorded one by one. Only the report is.
 
 ## The page (`src/qa.mjs`)
 
-Like `plan.mjs`, this is its own code: nothing from `home.mjs`/`Block.mjs`.
-It reuses `claudeChatColumn` (fed by a small chat engine of its own, the same
-shape as `plan.mjs`'s `chatView`/`chatCallbacks`), `workDirOverlay.mjs`,
-`imageLightbox.mjs`, `markdown.mjs`, `theme.mjs`, `settingsLink.mjs` and
-`urlState.mjs`.
+Nothing from `home.mjs`/`Block.mjs`. The comments dock **is the review tree's
+own comment + Claude block** (`RelatedPanel.mjs`), not a copy — reviewer
+request: *"is het eigenlijk ook niet handig als je de comment en chat blok
+hergebruikt hierin, zodat alles features aanwezig zijn zoals afbeelding
+uploading enzo"*. Also reused: `workDirOverlay.mjs`, `imageLightbox.mjs`,
+`markdown.mjs`, `codeCopy.mjs`, `dictation.mjs`, `CommandMenu.mjs`,
+`theme.mjs`, `settingsLink.mjs`, `urlState.mjs`.
 
 - **Header:** a back link to `/pr/<pr>`, the PR title, one button per round
   (`○`/`●` plus a word: `loopt`, `mislukt`, `geen verslag`), a `n / N` counter,
@@ -134,44 +136,68 @@ shape as `plan.mjs`'s `chatView`/`chatCallbacks`), `workDirOverlay.mjs`,
     lightbox opens them with ←/→.
   - **Live progress per round:** the progress snapshot is PR-wide, so it shows
     only on the round whose `runId` it names.
+  - **A round that just ended:** the snapshot flips to "not running" a moment
+    before the run's result is recorded, so the reload it triggers can still
+    read the round as running. The page reloads again 2s later and keeps
+    polling while any round is `running` (it used to say "loopt" forever
+    after a Stop).
 - **Full height:** Enter on the columns (or the `↵` hint in the focused card's
   header, `qa-card-full`) toggles `state.cardFull`: every card drops its inner
   scroll and `<main>` scrolls vertically instead; ↑/↓ scroll it (↓ at the
   bottom opens the dock), Enter/Escape close it. Not in the URL.
-- **Comments dock** (`qa-dock`, bottom), scoped to the focused column. It is
-  **collapsed to one bar** (`qa-dock-bar`: title, comment count, "↓ openen")
-  whenever the columns own the keyboard. Only ↓ (or a click on the bar, or
-  `/`/`c`) opens it; nothing is selected and no chat is started before that
-  (`dockOpen()` gates `syncAutoChat`). Open, a step with no comment and no
-  chat messages gets a compact `12rem`; otherwise `38vh`.
-  - **Comments:** PR-wide comments (`kind:'issue'`) through the tree's own
-    `task_code_comment` workflow, with `gran:'qa'`, `seg:'qa:<runId>:<step>'`
-    (step 0 = Overzicht) and a body prefixed with
-    `**QA ronde R · stap N — titel**`, so a reader on GitHub knows what it is
-    about. "Plaats op GitHub" (Cmd+Enter) or "Alleen voor mij" (local). These
-    comments also show in the review tree's comment index.
-  - **Layout:** one merged card like the tree's `comment-claude-row`
-    (`qa-comment-claude-row`): thread cards + composer on the left, the Claude
-    chat (`claudeChatColumn`) on the right. The selected comment expands into
-    its thread (GitHub replies, `qa-reply-compose`, Enter sends the `reply`
-    Signal).
-  - **Chat:** opens by itself on the selected comment (first of the step;
-    ↑/↓ and clicks follow, `syncAutoChat`). Its **first** turn carries the
-    step as invisible `context`. On a step without a comment the chat card is
-    still there: the first message creates a local placeholder comment
-    (`ensureStepAnchor`, same body as RelatedPanel's
-    `CLAUDE_ANCHOR_PLACEHOLDER`, no row of its own). A real comment typed
-    later takes it over as a `reply` Signal with `publish:'reply'` (like
-    `placeComment` in the tree).
-- **Keyboard:**
-  - **Columns:** →/← change step, ↓ enters the dock, `/` or `c` focuses the
-    composer.
-  - **Dock:** ↑/↓ walk the comments (↑ from the top goes back to the columns),
-    Enter focuses the chat composer on a comment (or the comment composer),
-    Escape leaves the dock.
-  - **Order:** the lightbox and the werkmap overlay get the keyboard first.
+- **Comments dock** (`qa-dock`, bottom), scoped to the focused column.
+  - **What is mounted:** the same composition as the tree's
+    `comments-and-related` column: `InlineComments` + `ClaudeChatPanel` in one
+    `comment-claude-row`, `CommentClaudeFooter`, the shortcut bar and
+    `CodePreviewPanel`, inside a `data-testid=detail-panel` wrapper
+    (`exitRelated` only blurs a field inside that). They render against
+    `rpState`, the tree's state shape reduced to what that block reads (the
+    PR, one synthetic block so its "is there something to anchor on" guards
+    pass, column widths). So everything the tree's block does works here:
+    pasting/dragging images (also before the first turn), drafts, F5
+    dictation, retry/"ook andere", cancel + cleanup choice, edit a message,
+    queue/steer, question options, code previews with Kopieer, the "Andere
+    chats in deze PR" footer, resolve/delete/edit, mentions and real names.
+  - **The QA scope:** a watch pushes `setCommentScope({ qa: true, seg })` per
+    step; `recomputeView` then shows the comments whose `seg` is
+    `'qa:<runId>:<step>'` (step 0 = Overzicht). qa.mjs's `commentTarget()`
+    returns a target with `qa: true`, `kind: 'issue'`, `gran: 'qa'`, that seg,
+    `label` = `QA ronde R · stap N — titel`, `bodyPrefix` (that label in bold)
+    and `context` (`stepContext()`). Three small `t.qa` branches in
+    RelatedPanel use it: `placeComment` posts a PR-wide comment with the
+    prefix (so a reader on GitHub knows which step), `ensureClaudeAnchorForNew`
+    creates the local placeholder anchor as `kind:'issue'`, and
+    `claudeContextBlock` sends the step as the first turn's invisible context.
+    The label must stay stable: the placeholder is found again by
+    `draftKeyFor` (file/label/gran/rows/seg). These comments also show in the
+    review tree's comment index.
+  - **Placing a comment:** Enter on the filled composer (or its "Plaats…"
+    button) opens a QA-only menu: "Plaats op GitHub" or "Alleen voor mij"
+    (`opts.local`). The tree removed its local option; the QA page keeps it.
+    Like the tree, placing hands the keyboard back to the columns. A reply on
+    a still-local thread opens the tree's own publish menu (GitHub only).
+  - **Menus:** `CommandMenu.mjs` with the tree's own lists from
+    `commentCommands.mjs` (see "The shared comment/Claude menus" in
+    `command-palette.md`). `qaCommandHost`: after a resolve/delete/publish the
+    keyboard stays in the dock, no Ignore item (no index here).
+  - **Collapsed** to one bar (`qa-dock-bar`) exactly while RelatedPanel does
+    not own the keyboard (`dockOpen() = relatedActive()`); the block stays
+    mounted (it runs its own comment poll), only CSS-hidden. ↓ (or a click on
+    the bar) opens it: the first open comment (`enterCommentsOrRelated`), or
+    the new-comment composer with the Claude column next to it
+    (`startComment`) on a step without comments. `/`/`c` open the composer.
+  - **"Andere chats in deze PR":** `setClaudeTaskJump` jumps to a QA
+    conversation's round/step and selects it; any other conversation opens in
+    the review tree.
+- **Keyboard:** the columns own →/←/Enter/↓. While the block owns the
+  keyboard, `onKeydown` routes exactly like `home.mjs`'s relatedActive branch
+  (`handleRelatedKey` for the arrows/Escape unless the caret can still move,
+  via `editableKeys.mjs`; Enter opens the comment/Claude menu, sends the
+  highlighted question option, toggles a code preview). Order: dictation,
+  lightbox, werkmap overlay, the open menu, then the rest.
 - **URL state:** `?round=<runId>` (omitted for the newest round) and `?step=`
-  (omitted at 0), via `bindUrlState`.
+  (omitted at 0), via `bindUrlState`; RelatedPanel adds its own `rel.*`
+  cursor params, so a refresh lands on the same comment/turn.
 
 ## Endpoints
 
@@ -188,8 +214,10 @@ shape as `plan.mjs`'s `chatView`/`chatCallbacks`), `workDirOverlay.mjs`,
   or carry a path are dropped), the MCP config being valid JSON with both
   servers, and the image endpoint refusing unsafe paths.
 - `tests/qa-page.spec.mjs` (mocked `/api/qa`): the deviations block on page 1,
-  → to the next column, a local comment landing on its own step only, and the
-  step surviving a refresh.
+  → to the next column, a local comment ("Alleen voor mij") landing on its own
+  step only with the tree's comment menu, the step surviving a refresh, the
+  lazy local anchor of a first Claude turn carrying the step context plus the
+  tree's Claude menu, and the collapsed dock / full-height cards.
 
 **Not covered by an automated test:** a real end-to-end QA run (a live Opus
 run against the local admin).

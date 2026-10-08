@@ -605,6 +605,11 @@ function recomputeView() {
   // is exactly this — show nothing".
   if (s && s.none) {
     cs.view = []
+  } else if (s && s.qa) {
+    // A QA-page step (qa.mjs): its comments are PR-wide (kind 'issue') rows
+    // carrying the step in `seg` ('qa:<runId>:<step>'), so they match on seg
+    // alone, never on file/row. See "The comments dock" in qa-page.md.
+    cs.view = cs.list.filter((c) => c.seg === s.seg)
   } else if (!s) {
     cs.view = anchored
   } else {
@@ -3519,7 +3524,10 @@ function claudeContextBlock(commentTarget, force = false) {
     parts.push(claudeRangeContextBlock(rangeComposeItems))
   } else {
     const t = commentTarget && commentTarget()
-    if (t && t.file && t.code) {
+    if (t && t.qa) {
+      // A QA-page step: what the QA run reported for it (qa.mjs's stepContext).
+      if (t.context) parts.push(t.context)
+    } else if (t && t.file && t.code) {
       const lines = ['Context van de reviewer-selectie (niet door de reviewer getypt):', 'Bestand: ' + t.file]
       if (t.oldStartLine)
         lines.push('Oude regels: ' + t.oldStartLine + (t.oldEndLine > t.oldStartLine ? '-' + t.oldEndLine : ''))
@@ -7668,6 +7676,9 @@ async function ensureClaudeAnchorForNew(state, commentTarget) {
     line: anchorLineFor(t, b),
     body: typed || CLAUDE_ANCHOR_PLACEHOLDER,
     code: t ? t.code : '',
+    // A QA-page step target (t.qa) anchors a PR-wide ('issue') comment: it
+    // has no file, and createComment only accepts that for a PR-wide kind.
+    kind: (t && t.kind) || '',
     gran: t ? t.gran : '',
     label: t ? t.label : '',
     rowStart: t ? t.rowStart : -1,
@@ -7934,6 +7945,37 @@ export async function placeComment(state, commentTarget, opts = {}) {
       }
       return
     }
+  }
+
+  // A QA-page step (qa.mjs's commentTarget, t.qa): a PR-wide ('issue')
+  // comment that carries the step in seg and names it on top of the body
+  // (t.bodyPrefix), so a reader on GitHub knows which QA step it is about.
+  // opts.local keeps it private ("Alleen voor mij", the QA compose menu).
+  if (t && t.qa) {
+    el.value = ''
+    exitRelated()
+    const ok = await createComment({
+      pr: state.pr,
+      repo: repoField(),
+      file: '',
+      line: 0,
+      body: (t.bodyPrefix || '') + body,
+      kind: 'issue',
+      gran: t.gran,
+      label: t.label,
+      rowStart: -1,
+      rowEnd: -1,
+      seg: t.seg,
+      local: !!opts.local,
+    })
+    if (ok) {
+      deleteComposeDraft(draftKey)
+      clearSendFailed('new:' + draftKey)
+    } else {
+      markSendFailed('new:' + draftKey)
+      setComposeDraft(draftKey, body)
+    }
+    return
   }
 
   // cs.pendingComment — the optimistic local echo (see its own doc comment

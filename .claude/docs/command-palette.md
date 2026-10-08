@@ -1406,6 +1406,21 @@ list + endpoint, and the "own unresolved comments" case in
 `tests/review-submit-menu.spec.mjs`, which seeds a third, praise-carrying
 comment and still expects `✅ met 2 comments`.
 
+## The shared comment/Claude menus (`commentCommands.mjs`)
+
+`commentCommandsFor`, `claudeChatCommandsFor`, `prCommentCommandsFor`,
+`composeCommandsFor` (formerly the `COMPOSE_COMMANDS` constant),
+`replyPublishCommandsFor`, `publishThreadCommand`, `withClose` and the
+`isResolvedComment`/`isAiComment`/`isOwnComment` helpers live in
+`src/commentCommands.mjs`, so the QA page (`qa.mjs`, see
+`.claude/docs/qa-page.md`) offers exactly the same menus on the same
+RelatedPanel block. Whatever is page-specific comes in through a `host`
+object (where the keyboard lands after a resolve/delete/publish, the PR URL,
+the tree-only Ignore toggle — the list is in the module header).
+`home.mjs` passes `treeCommandHost` through thin `commentCommandsFor()`/… 
+wrappers, so `rootCommandsFor` and everything below is unchanged. The sections
+below still describe the lists themselves.
+
 ## The comment-scoped menu (`comment`, `commentCommandsFor`)
 
 If the keyboard is on a placed comment row in `RelatedPanel`
