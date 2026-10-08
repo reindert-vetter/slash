@@ -1655,6 +1655,18 @@ function ingestedActions(pr) {
   `
 }
 
+// qaAction — "QA-test in admin": opens the separate /qa/<pr> page, where a
+// QA round is started (or the existing rounds are read). Primary repo only —
+// the QA run tests against the local plug-and-pay stack. See
+// .claude/docs/qa-page.md.
+function qaAction(pr) {
+  return html`
+    <button type="button" data-testid="open-qa" class="${popoverRowCls()}" @click="${() => (location.href = '/qa/' + pr.number)}">
+      ${icon('check', 'h-3.5 w-3.5')} ${t('QA-test in admin')}
+    </button>
+  `
+}
+
 // regenerateAction — "Opnieuw genereren", always the LAST item of the popover
 // (reviewer request), so popover() renders it after everything else.
 function regenerateAction(pr) {
@@ -2389,6 +2401,7 @@ function popover(pr, compact) {
                     ${icon('external-link', 'h-3.5 w-3.5')} ${t('Open Jira-ticket')}
                   </a>`
                 : ''}
+            ${() => (!pr.repo && treeSupported(pr) ? qaAction(pr) : '')}
             ${() => (compact ? '' : snoozeAction(pr))}
             ${() => (canRemoveSelf(pr) ? removeReviewerAction(pr) : '')}
             ${() => (pr.isDraft ? [readyForReviewSection(pr).key('ready-section')] : [])}

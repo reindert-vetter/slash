@@ -165,6 +165,17 @@ This carve-out covers **only** the chat turn. Everywhere else the rule stands
 unchanged: no module write outside a workflow Activity, no direct write from an
 HTTP handler or the UI.
 
+## Exception: the QA run may act through a shell and MCP
+
+Same shape as the chat carve-out above, also granted by Reindert: a `qa_run`
+Activity (`qa_run.go`) runs Claude with `Bash` plus Playwright/laravel-boost
+MCP against the LOCAL stack, and may change local data there (Nova actions,
+artisan, DB updates, simulated time) the way a human tester does. Those side
+effects are not recorded one by one; only the report is (the run's own
+result). No Edit tool, no repo/`.env` writes. Its live snapshot
+(`qa_run_progress.go`) and its cancel (`POST /api/qa/cancel`) are in-memory,
+like `test_run`'s. See `.claude/docs/qa-page.md`.
+
 ## Why
 
 The workflow event history is the **source of truth**: durable, replayable,

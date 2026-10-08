@@ -34,6 +34,7 @@ export const WORKFLOW_LABELS = {
   plan: 'Plan',
   plan_execute: 'Plan uitvoeren',
   claude_chat: 'Claude-chat',
+  qa_run: 'QA-test in admin',
 }
 
 // labelForWorkflow names a Workflow Type, falling back to the raw type name

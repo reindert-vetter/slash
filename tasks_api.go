@@ -1043,6 +1043,13 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// per-PR id (testRunCancelID) — same reasoning as POST /api/chat/cancel
 	// above: never a workflow Signal, purely an in-memory context.CancelFunc.
 	mux.HandleFunc("/api/test-run/cancel", s.handleTestRunCancel)
+	// The /qa/<pr> page (qa_api.go): start a QA round (a workflow start), read
+	// every round + the live snapshot, serve one screenshot, and cancel the
+	// running round (in-memory, like /api/test-run/cancel).
+	mux.HandleFunc("/api/workflows/qa_run", s.handleQARunStart)
+	mux.HandleFunc("/api/qa", s.handleQA)
+	mux.HandleFunc("/api/qa/image", s.handleQAImage)
+	mux.HandleFunc("/api/qa/cancel", s.handleQACancel)
 	// GET /api/chat?commentId=X → read-only chat transcript for one conversation
 	// (see modules/chat; the conversation id IS the comment thread's id, so pr
 	// isn't needed to scope the read).

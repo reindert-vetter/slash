@@ -139,6 +139,17 @@ type RunRequest struct {
 	// write-turn slot) wants exactly this, not OnEvent's coarser
 	// classification. Purely observational, same contract as OnEvent.
 	OnHeartbeat func()
+	// MCPConfig, when non-empty, is passed verbatim to the CLI's own
+	// --mcp-config (a JSON string). Together with coldStartArgs'
+	// --strict-mcp-config this loads EXACTLY these MCP servers and nothing
+	// configured elsewhere on the machine. Exactly one caller sets it: the
+	// qa_run workflow (qa_run.go), which needs a real browser (Playwright
+	// MCP) and laravel-boost to test a PR in the local admin — a deliberate,
+	// reviewer-approved exception to "this module never loads an MCP server",
+	// see .claude/docs/qa-page.md. Its tools still have to be allow-listed via
+	// Tools (e.g. "mcp__playwright"); agenticToolUniverse keeps those names
+	// out of --tools, which only knows built-in tools. RunChat only.
+	MCPConfig string
 }
 
 // ChatEventKind labels what a streamed ChatEvent reports. Deliberately a tiny,
@@ -429,6 +440,9 @@ func (m *Module) RunChat(ctx context.Context, req RunRequest) (ChatResult, error
 		args = append(args, "--input-format", "stream-json")
 	}
 	args = append(args, coldStartArgs()...)
+	if req.MCPConfig != "" {
+		args = append(args, "--mcp-config", req.MCPConfig)
+	}
 	if req.OnEvent != nil {
 		args = append(args, "--include-partial-messages")
 	}
@@ -799,8 +813,9 @@ func newSessionID() string {
 // .claude/docs/workflows-comments.md, "Cold-start cost of a brand-new
 // conversation"):
 //
-//   - --strict-mcp-config: this module never passes --mcp-config, so this
-//     simply makes sure NO MCP server configured anywhere on the machine
+//   - --strict-mcp-config: this module passes --mcp-config only for qa_run
+//     (RunRequest.MCPConfig), so this makes sure NO OTHER MCP server
+//     configured anywhere on the machine
 //     (project or personal, e.g. a personal Atlassian/Jira MCP server) is
 //     loaded into a review-chat turn. Review-chat never needs an MCP tool, so
 //     this can only remove content, never behaviour.
@@ -859,8 +874,19 @@ func coldStartArgs() []string {
 // already work today (available in the default, unrestricted universe,
 // without being explicitly allow-listed), so this change doesn't alter
 // skill-permission behaviour, only removes what was never reachable.
+//
+// An "mcp__<server>" entry (only qa_run passes one, see RunRequest.MCPConfig)
+// is an --allowedTools permission, not a built-in tool, so it is left out of
+// the universe here — MCP tools are loaded via --mcp-config regardless of
+// --tools (verified with a manual `claude -p` run).
 func agenticToolUniverse(tools []string) []string {
-	universe := append([]string{}, tools...)
+	universe := make([]string, 0, len(tools)+1)
+	for _, t := range tools {
+		if strings.HasPrefix(t, "mcp__") {
+			continue
+		}
+		universe = append(universe, t)
+	}
 	return append(universe, "Skill")
 }
 

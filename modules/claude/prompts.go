@@ -181,6 +181,16 @@ var CommentBatchSystemPrompt string
 //go:embed prompts/test_run.md
 var TestRunSystemPrompt string
 
+// QARunSystemPrompt is the static instruction block for the qa_run
+// workflow's ONE agentic run (qa_run.go): test a PR by hand in the locally
+// running admin through a real browser (Playwright MCP) and laravel-boost,
+// and answer with one JSON QA report (steps with explanation + screenshots).
+// No Edit tool. It fixes the `[slash:qa-plan]`/`[slash:qa-step]` progress
+// lines (qa_run_progress.go) and the report's JSON shape (parseQAReport).
+//
+//go:embed prompts/qa_run.md
+var QARunSystemPrompt string
+
 // ChatConflictSystemPrompt is the static instruction block for chat_merge's
 // one begrensde Claude attempt when an automatic `git merge` of two chat
 // conversations' shadow-worktree edits leaves real conflicts. A one-shot,

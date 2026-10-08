@@ -333,6 +333,12 @@ const (
 	// Edit tool, no landing step, no fixed per-repo test command. One-shot,
 	// signal-less. See test_run.go.
 	WorkflowTestRun = "test_run"
+	// WorkflowQARun is the Workflow Type behind "QA-test in admin" (the
+	// /qa/<pr> page): ONE agentic run that tests a PR by hand in the local
+	// stack through a real browser and answers with a QA report (steps,
+	// explanation, screenshots) — its recorded result IS the report. One run
+	// per round, signal-less. See qa_run.go and .claude/docs/qa-page.md.
+	WorkflowQARun = "qa_run"
 	// WorkflowSummarizeChat is the Workflow Type that generates a short Dutch
 	// summary (at most 2 sentences) of an embedded Claude conversation — the
 	// prefill for "Comment hiervan maken" on a still-CLAUDE_ANCHOR_PLACEHOLDER
@@ -3702,6 +3708,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		return json.Marshal(runTestRun(ctx, m, m.claude, m.dataDir, arg))
 	})
+	// Activity: the ONE agentic QA run of a PR in the local admin (side
+	// effects: the claude CLI with Playwright/laravel-boost MCP, screenshots
+	// under data/qa/<pr>/<runID>/ — see qa_run.go). Returns the QA report.
+	engine.RegisterActivity("runQARun", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg qaRunArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(runQARun(ctx, m, m.claude, m.dataDir, arg))
+	})
 	// Activity: hand one conversation's "commit deze wijziging" request off to
 	// the PR's own chat_merge queue (write: ensures + signals a DIFFERENT
 	// Workflow Execution — the same cross-workflow Ensure+Signal shape
@@ -3955,6 +3971,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	engine.RegisterWorkflow(WorkflowChatSteer, chatSteerWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentBatch, commentBatchWorkflow)
 	engine.RegisterWorkflow(WorkflowTestRun, testRunWorkflow)
+	engine.RegisterWorkflow(WorkflowQARun, qaRunWorkflow)
 	engine.RegisterWorkflow(WorkflowSummarizeChat, summarizeChatWorkflow)
 	engine.RegisterWorkflow(WorkflowCommentTitles, commentTitlesWorkflow)
 	m.registerTouchAI(engine)
@@ -3992,6 +4009,8 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 	// reasoning, plus this is what makes StartTestRun's StartWorkflowDeferLow
 	// hand the run off to the background instead of holding the HTTP request.
 	engine.SetWorkflowPriority(WorkflowTestRun, tembed.PriorityLow)
+	// qa_run: same reasoning — one long agentic run.
+	engine.SetWorkflowPriority(WorkflowQARun, tembed.PriorityLow)
 	// plan_execute's middle Activity IS a long agentic run (minutes) that also
 	// pushes and opens a PR — same reasoning, plus this is what makes
 	// StartPlanExecute's StartWorkflowDeferLow hand the run off to the

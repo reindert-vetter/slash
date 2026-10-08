@@ -551,6 +551,13 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 	}
 	res.PlanArtifactsRemoved = planDirs
 
+	// The QA rounds' screenshots (qa_run.go); the runs themselves already went
+	// with deletePRWorkflowRuns above. Same "inside the existing Activity"
+	// reasoning as the plan artifacts.
+	if err := removeQAArtifactsForPR(d.dataDir, pr); err != nil {
+		return res, fmt.Errorf("remove qa artifacts: %w", err)
+	}
+
 	log.Printf("cleanup pr %d: worktrees=%d workflow_runs=%d plan_artifacts=%d rows=%v",
 		pr, res.WorktreesRemoved, res.WorkflowRunsDeleted, res.PlanArtifactsRemoved, res.RowsDeleted)
 	return res, nil

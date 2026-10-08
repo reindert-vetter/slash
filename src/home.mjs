@@ -14696,6 +14696,18 @@ const PR_COMMANDS = withClose([
     },
   },
   {
+    id: 'pr-qa',
+    // "QA-test in admin": the separate /qa/<pr> page (src/qa.mjs) where Claude
+    // tests this PR in the local admin and reports steps + screenshots;
+    // starting a round happens there. Primary repo only. See
+    // .claude/docs/qa-page.md.
+    label: t('QA-test in admin'),
+    hint: 'qa',
+    run: () => {
+      if (!REPO) location.href = '/qa/' + state.pr
+    },
+  },
+  {
     id: 'pr-approve-all',
     // Bulk submenu for the whole-PR approval actions (reviewer request:
     // "Alles keuren" met daarna "Alle code aanpassingen goedkeuren" en

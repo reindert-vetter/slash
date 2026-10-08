@@ -38,6 +38,10 @@ Every route is a static HTML shell with no build step; the Go server
   (`/plan/PAYM-813`, a bare number is accepted too), like `/pr/<id>`; an
   unparseable path does a `location.replace('/pr-overview')`. See
   `.claude/docs/plan-page.md`.
+- **`/qa/<pr>`** — the **QA page** (`qa.html` → `src/qa.mjs`): Claude tests
+  the PR in the local admin and reports steps with screenshots; reached via
+  the `/`-menu on `/pr/<id>` and the row popover on `/pr-overview`. See
+  `.claude/docs/qa-page.md`.
 - **`/settings`** — the one general **settings page** (`settings.html` →
   `src/settings.mjs`), reached via a gear-icon entry button on both `/pr/<id>`
   and `/pr-overview`; `←` returns to wherever the reviewer came from via a

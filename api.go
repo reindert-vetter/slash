@@ -100,6 +100,7 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	// request yet (src/plan.mjs) — reached from the "Planning"/"Todo" rows on
 	// /pr-overview. See .claude/docs/plan-page.md.
 	mux.HandleFunc("/plan/", serveFile(staticDir, "plan.html"))
+	mux.HandleFunc("/qa/", serveFile(staticDir, "qa.html"))
 	// /settings is the one general settings page (src/settings.mjs), reached
 	// from a gear-icon entry button next to the theme toggle on both /pr/<id>
 	// and /pr-overview — see .claude/docs/settings-page.md.

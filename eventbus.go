@@ -114,6 +114,10 @@ const (
 	// run's per-test state exists ONLY in this volatile snapshot
 	// (test_run_progress.go), and GET /api/test-run is its resync read.
 	eventTestRunProgress = "testrun.progress"
+	// eventQAProgress carries a volatile qaRunProgress snapshot of a running
+	// qa_run (qa_run_progress.go) — same shape/reasoning as
+	// eventTestRunProgress; GET /api/qa is its resync read.
+	eventQAProgress = "qa.progress"
 	// eventResync is emitted by the connection itself after it had to drop an
 	// event: "you may have missed something, refetch everything you track".
 	eventResync = "resync"
