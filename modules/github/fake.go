@@ -63,6 +63,7 @@ type Fake struct {
 	reviewerFacts    map[int]ReviewerFacts // returned by ReviewerFacts (SetReviewerFacts seeds it)
 	readyPRs         []int                 // PRs flipped to ready-for-review, in order
 	editedPRs        []EditedPR            // EditPullRequest calls, in order
+	changesRequested map[int][]string      // seeded by SetChangesRequested
 	requestedRevs    [][]string            // reviewer login sets requested, in order
 	removedRevs      []removedReviewer     // reviewers dropped from a PR, in order
 
@@ -710,6 +711,23 @@ func (f *Fake) RequestReviewers(_ context.Context, pr int, logins []string) erro
 	defer f.mu.Unlock()
 	f.requestedRevs = append(f.requestedRevs, append([]string(nil), logins...))
 	return nil
+}
+
+// ChangesRequestedReviewers returns whatever SetChangesRequested seeded for pr.
+func (f *Fake) ChangesRequestedReviewers(_ context.Context, pr int) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.changesRequested[pr]...), nil
+}
+
+// SetChangesRequested seeds the ChangesRequestedReviewers answer for pr.
+func (f *Fake) SetChangesRequested(pr int, logins ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.changesRequested == nil {
+		f.changesRequested = map[int][]string{}
+	}
+	f.changesRequested[pr] = logins
 }
 
 func (f *Fake) RemoveReviewer(_ context.Context, pr int, login string) error {

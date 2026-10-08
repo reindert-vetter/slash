@@ -16,6 +16,7 @@ import (
 	"github.com/reindert-vetter/tembed"
 	"slash/modules/chat"
 	"slash/modules/claude"
+	"slash/modules/github"
 )
 
 // pending_push_test.go covers the deferred push: the read model that feeds the
@@ -664,4 +665,22 @@ func runInDir(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// After a successful push, only reviewers whose latest verdict is "changes
+// requested" get a fresh review request.
+func TestPushPendingPRReRequestsChangesRequestedReviewers(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	landOneEdit(t, dataDir, 3010, "conv-r", "feature/x", "foo.txt", "edited by claude\n")
+
+	fake := &github.Fake{}
+	fake.SetChangesRequested(3010, "ricky-imu")
+	tm := &TaskManager{gh: fake}
+	pushPendingPR(context.Background(), tm, "", 3010)
+
+	got := fake.LastRequestedReviewers()
+	if len(got) != 1 || got[0] != "ricky-imu" {
+		t.Fatalf("re-requested %v, want [ricky-imu]", got)
+	}
 }

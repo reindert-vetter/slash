@@ -49,6 +49,16 @@ Mechanics of the chat turn itself (the shared checkout, the `chat_merge`
 queue, conflict resolution) live in `.claude/docs/workflows-comments.md`; this
 file is about the landing target, the visibility, and the push.
 
+## After a successful push: re-request changes-requested reviewers
+
+`pushPendingPR` ends with `reRequestChangesRequestedReviews`
+(`pending_push.go`): `Client.ChangesRequestedReviewers` (latest
+APPROVED/CHANGES_REQUESTED/DISMISSED review per login; COMMENTED ignored) and
+then `RequestReviewers` for exactly those logins — GitHub's re-request icon.
+Always on, no UI, best effort (a failure is only logged; the push already
+succeeded). It runs inside the same Activity, so it stays inside the write
+boundary. Test: `TestPushPendingPRReRequestsChangesRequestedReviewers`.
+
 ## Durable checkout dir/branch: which directory survives a restart
 
 `chatCheckoutAssignment` (`chat_checkout.go`) — which local directory a PR's

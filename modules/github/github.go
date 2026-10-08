@@ -190,6 +190,10 @@ type Client interface {
 	MarkReadyForReview(ctx context.Context, pr int) error
 	// RequestReviewers requests the given user logins as reviewers on pr.
 	RequestReviewers(ctx context.Context, pr int, logins []string) error
+	// ChangesRequestedReviewers returns the logins whose latest verdict
+	// (APPROVED/CHANGES_REQUESTED/DISMISSED; COMMENTED does not count) on pr is
+	// CHANGES_REQUESTED. Read-only; used to re-request their review after a push.
+	ChangesRequestedReviewers(ctx context.Context, pr int) ([]string, error)
 	// RemoveReviewer drops one requested reviewer from pr. Removing someone who
 	// is not (or no longer) a requested reviewer is a no-op on GitHub's side,
 	// never an error worth surfacing.
@@ -1050,6 +1054,36 @@ func (m *Module) RequestReviewers(ctx context.Context, pr int, logins []string) 
 		args...,
 	)
 	return err
+}
+
+// ChangesRequestedReviewers implements the Client method of the same name.
+func (m *Module) ChangesRequestedReviewers(ctx context.Context, pr int) ([]string, error) {
+	var reviews []struct {
+		User  ghUser `json:"user"`
+		State string `json:"state"`
+	}
+	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/pulls/%d/reviews", m.repo, pr), &reviews); err != nil {
+		return nil, err
+	}
+	// GitHub returns reviews oldest first, so the last verdict per login wins.
+	latest := map[string]string{}
+	var order []string
+	for _, r := range reviews {
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
+			if _, seen := latest[r.User.Login]; !seen {
+				order = append(order, r.User.Login)
+			}
+			latest[r.User.Login] = r.State
+		}
+	}
+	var out []string
+	for _, l := range order {
+		if latest[l] == "CHANGES_REQUESTED" {
+			out = append(out, l)
+		}
+	}
+	return out, nil
 }
 
 // RemoveReviewer drops one requested reviewer from pr — the mirror image of

@@ -414,6 +414,25 @@ func pushPendingPR(ctx context.Context, tm *TaskManager, repo string, pr int) {
 	}
 	setPendingPushState(repo, pr, "", "")
 	publishPendingPushChanged(repo, pr)
+	reRequestChangesRequestedReviews(ctx, tm, repo, pr)
+}
+
+// reRequestChangesRequestedReviews asks every reviewer whose latest verdict is
+// "changes requested" for a fresh review (GitHub's re-request icon), because
+// the push just gave them new commits to look at. Best effort: a failure is
+// only logged, the push itself already succeeded.
+func reRequestChangesRequestedReviews(ctx context.Context, tm *TaskManager, repo string, pr int) {
+	if tm == nil || tm.ghFor(repo) == nil {
+		return
+	}
+	gh := tm.ghFor(repo)
+	logins, err := gh.ChangesRequestedReviewers(ctx, pr)
+	if err == nil && len(logins) > 0 {
+		err = gh.RequestReviewers(ctx, pr, logins)
+	}
+	if err != nil && tm.logf != nil {
+		tm.logf("pending push: pr %d re-request review failed: %v", pr, err)
+	}
 }
 
 // pushFailureReason reduces a git push failure to one short line for the todo
