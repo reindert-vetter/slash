@@ -63,7 +63,12 @@ The reviewer's answers to the plan questions:
   `qaMCPConfig(runDir)`. The idle timeout is 20 min, heartbeat-based.
   `AddDirs` holds the screenshot dir.
 - **Screenshots:** `data/qa/<pr>/<runID>/` (gitignored). The prompt makes
-  Claude pass an absolute `filename` into that dir. Playwright runs with
+  Claude pass an absolute `filename` into that dir, and asks for MANY of them
+  (at least one per step with something visible in a browser, before/after).
+  `qaRunDir` is **always absolute**: the server's data dir is the relative
+  `"data"`, but Claude runs with the PR checkout as cwd, so a relative dir put
+  every screenshot inside that checkout (PR 14116 round 1: 10 shots made, all
+  dropped by the sanitizer, and staged in the plug-and-pay repo). Playwright runs with
   `--allow-unrestricted-file-access`, because without it an explicit filename
   resolves against the workspace root (the checkout).
 - **The report:** the LAST ` ```json ` fence of the answer (`parseQAReport`).
@@ -129,7 +134,16 @@ shape as `plan.mjs`'s `chatView`/`chatCallbacks`), `workDirOverlay.mjs`,
     lightbox opens them with ←/→.
   - **Live progress per round:** the progress snapshot is PR-wide, so it shows
     only on the round whose `runId` it names.
-- **Comments dock** (`qa-dock`, bottom, 36vh), scoped to the focused column:
+- **Full height:** Enter on the columns (or the `↵` hint in the focused card's
+  header, `qa-card-full`) toggles `state.cardFull`: every card drops its inner
+  scroll and `<main>` scrolls vertically instead; ↑/↓ scroll it (↓ at the
+  bottom opens the dock), Enter/Escape close it. Not in the URL.
+- **Comments dock** (`qa-dock`, bottom), scoped to the focused column. It is
+  **collapsed to one bar** (`qa-dock-bar`: title, comment count, "↓ openen")
+  whenever the columns own the keyboard. Only ↓ (or a click on the bar, or
+  `/`/`c`) opens it; nothing is selected and no chat is started before that
+  (`dockOpen()` gates `syncAutoChat`). Open, a step with no comment and no
+  chat messages gets a compact `12rem`; otherwise `38vh`.
   - **Comments:** PR-wide comments (`kind:'issue'`) through the tree's own
     `task_code_comment` workflow, with `gran:'qa'`, `seg:'qa:<runId>:<step>'`
     (step 0 = Overzicht) and a body prefixed with

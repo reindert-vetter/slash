@@ -51,6 +51,9 @@ const state = reactive({
   step: 0,
   // focus — who owns the keyboard: the columns, the comments dock, or chat.
   focus: 'steps',
+  // cardFull — Enter on the columns: every card shows its full height (no
+  // inner scroll) and the column row scrolls vertically instead.
+  cardFull: false,
   comments: [],
   commentSel: -1, // -1 = the composer row, otherwise an index into stepComments()
   composeBusy: false,
@@ -416,10 +419,17 @@ async function sendReply(c, text) {
   }
 }
 
+function dockOpen() {
+  return state.focus !== 'steps'
+}
+
 // syncAutoChat: like the tree, the chat is simply there next to the selected
 // comment — open it on the first comment of the step (or the placeholder of a
 // chat that was started without one) unless one of this step's is already open.
 function syncAutoChat() {
+  // The dock is collapsed while the columns own the keyboard: nothing is
+  // selected and no chat is started until ↓ (or a click) opens it.
+  if (!dockOpen()) return
   if (state.chatCommentId && stepComments().some((c) => c.id === state.chatCommentId)) return
   const target = visibleComments()[Math.max(state.commentSel, 0)] || stepPlaceholder()
   if (target) openChat(target, false)
@@ -613,6 +623,14 @@ function goStep(n) {
   })
 }
 
+// openDock: ↓ from the columns (or a click on the collapsed dock bar) — the
+// only way the dock expands and its first comment gets selected.
+function openDock() {
+  state.focus = 'comments'
+  state.commentSel = visibleComments().length ? 0 : -1
+  syncAutoChat()
+}
+
 function focusComposer() {
   state.focus = 'comments'
   state.commentSel = -1
@@ -635,12 +653,17 @@ function onKeydown(e) {
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return
   if (state.focus === 'steps') {
+    const main = document.querySelector('[data-testid=qa-columns]')
     if (e.key === 'ArrowRight') goStep(state.step + 1)
     else if (e.key === 'ArrowLeft') goStep(state.step - 1)
-    else if (e.key === 'ArrowDown') {
-      state.focus = 'comments'
-      state.commentSel = stepComments().length ? 0 : -1
-    } else if (e.key === '/' || e.key === 'c') focusComposer()
+    else if (e.key === 'Enter') state.cardFull = !state.cardFull
+    else if (e.key === 'Escape' && state.cardFull) state.cardFull = false
+    // Full height: ↑/↓ scroll the columns first; ↓ at the bottom opens the dock.
+    else if (e.key === 'ArrowUp' && state.cardFull && main) main.scrollBy({ top: -main.clientHeight * 0.8, behavior: 'smooth' })
+    else if (e.key === 'ArrowDown' && state.cardFull && main && main.scrollTop + main.clientHeight < main.scrollHeight - 2) {
+      main.scrollBy({ top: main.clientHeight * 0.8, behavior: 'smooth' })
+    } else if (e.key === 'ArrowDown') openDock()
+    else if (e.key === '/' || e.key === 'c') focusComposer()
     else return
     e.preventDefault()
     return
@@ -736,7 +759,26 @@ function imagesHTML(images) {
 }
 
 function colCls(i, width) {
-  return 'flex shrink-0 snap-start flex-col overflow-hidden ' + width + ' ' + CARD + (state.step === i && state.focus === 'steps' ? CARD_FOCUS : CARD_IDLE)
+  return 'flex shrink-0 snap-start flex-col overflow-hidden ' + (state.cardFull ? 'h-auto ' : '') + width + ' ' + CARD + (state.step === i && state.focus === 'steps' ? CARD_FOCUS : CARD_IDLE)
+}
+
+function bodyCls() {
+  return state.cardFull ? 'flex flex-col gap-3 px-4 py-3' : 'no-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3'
+}
+
+// fullToggle: the Enter hint on the focused card, clickable (a click runs the
+// same function the key runs). Always the same element, only its text/class move.
+function fullToggle(i) {
+  return html`<button
+    type="button"
+    data-testid="qa-card-full"
+    class="${() => (state.step === i ? 'rounded px-1.5 text-[11px] text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800' : 'hidden')}"
+    @click="${(e) => {
+      e.stopPropagation()
+      state.focus = 'steps'
+      state.cardFull = !state.cardFull
+    }}"
+  >${() => (state.cardFull ? t('↵ inklappen') : t('↵ volledige hoogte'))}</button>`
 }
 
 function commentBadge(i) {
@@ -760,8 +802,9 @@ function stepColumn(s, i, groupLabel) {
           >${String(i) + '. ' + (s.eyebrow || groupLabel || '')}</span
         >
         <span class="ml-auto text-[11px] text-slate-400 dark:text-zinc-500" data-testid="qa-step-comments">${() => commentBadge(i)}</span>
+        ${fullToggle(i)}
       </div>
-      <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+      <div class="${() => bodyCls()}">
         <h2 class="text-lg font-bold leading-snug text-slate-900 dark:text-zinc-100" data-testid="qa-step-title">${s.title || ''}</h2>
         <div>${chip(s.status)}</div>
         <div class="markdown-body text-[14px] leading-relaxed" .innerHTML="${() => renderMarkdown(s.body || '')}"></div>
@@ -872,8 +915,9 @@ function overviewColumn() {
       <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2 dark:border-zinc-800/60">
         <span class="font-mono text-[11px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">${() => '0. ' + t('Overzicht')}</span>
         <span class="ml-auto text-[11px] text-slate-400 dark:text-zinc-500">${() => commentBadge(0)}</span>
+        ${fullToggle(0)}
       </div>
-      <div class="no-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+      <div class="${() => bodyCls()}">
         ${progressBlock()}
         <div class="contents">${() => overviewBody()}</div>
         ${startCard()}
@@ -1045,13 +1089,30 @@ function rowKey(c) {
   return 'qc:' + c.id + ':' + rs.length + ':' + (rs.length ? rs[rs.length - 1].id : '') + ':' + (c.githubId ? 1 : 0) + ':' + (c.body || '').length
 }
 
+// rowCls: collapsed while the columns own the keyboard; open, a step with no
+// comment and no chat gets only the two input fields' worth of height.
+function rowCls() {
+  const base = 'flex min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 '
+  if (!dockOpen()) return 'hidden'
+  return base + (visibleComments().length || state.chatMessages.length ? 'h-[38vh]' : 'h-[12rem]')
+}
+
 function dock() {
-  return html`<div class="flex h-[42vh] shrink-0 gap-0 border-t border-slate-200 bg-slate-100/60 px-5 py-3 dark:border-zinc-800 dark:bg-zinc-900/40" data-testid="qa-dock">
-    <div class="flex min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-900" data-testid="qa-comment-claude-row">
-    <div class="flex min-w-0 flex-1 flex-col gap-2 p-3">
-      <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400" data-testid="qa-dock-title"
+  return html`<div class="flex shrink-0 flex-col gap-2 border-t border-slate-200 bg-slate-100/60 px-5 py-2 dark:border-zinc-800 dark:bg-zinc-900/40" data-testid="qa-dock" data-open="${() => (dockOpen() ? 'true' : 'false')}">
+    <button
+      type="button"
+      data-testid="qa-dock-bar"
+      class="flex items-center gap-2 text-left"
+      @click="${() => (dockOpen() ? (state.focus = 'steps') : openDock())}"
+    >
+      <span class="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400" data-testid="qa-dock-title"
         >${() => t('Comments · {step}', { step: state.step === 0 ? t('Overzicht') : state.step + '. ' + stepTitle(state.step) })}</span
       >
+      <span class="text-[11px] text-slate-400 dark:text-zinc-500">${() => commentBadge(state.step)}</span>
+      <span class="ml-auto shrink-0 text-[11px] text-slate-400 dark:text-zinc-500">${() => (dockOpen() ? t('▾ Esc inklappen') : t('▴ ↓ openen'))}</span>
+    </button>
+    <div class="${() => rowCls()}" data-testid="qa-comment-claude-row">
+    <div class="flex min-w-0 flex-1 flex-col gap-2 p-3">
       <ul class="no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto" data-testid="qa-comments">
         ${() => {
           const list = visibleComments()
@@ -1094,7 +1155,7 @@ function dock() {
 function App() {
   return html`<div class="fixed inset-0 flex flex-col">
     ${header()}
-    <main class="flex min-h-0 flex-1 snap-x items-stretch gap-5 overflow-x-auto overflow-y-hidden p-5" data-testid="qa-columns">
+    <main class="${() => 'flex min-h-0 flex-1 snap-x gap-5 overflow-x-auto p-5 ' + (state.cardFull ? 'items-start overflow-y-auto' : 'items-stretch overflow-y-hidden')}" data-testid="qa-columns" data-full="${() => (state.cardFull ? 'true' : 'false')}">
       ${() => columns()}
     </main>
     ${dock()}
@@ -1153,7 +1214,7 @@ if (!PR) {
     },
   )
   watch(
-    () => [state.step, state.roundRef, state.comments, state.rounds],
+    () => [state.step, state.roundRef, state.comments, state.rounds, state.focus],
     () => syncAutoChat(),
   )
   loadPrTitle()

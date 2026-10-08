@@ -111,9 +111,17 @@ type qaRunResult struct {
 
 func qaRunCancelID(pr int) string { return fmt.Sprintf("qarun-%d", pr) }
 
-// qaRunDir is where one run's screenshots (and its MCP output) live.
+// qaRunDir is where one run's screenshots (and its MCP output) live. Always
+// absolute: the server's default data dir is the relative "data", but Claude
+// and the Playwright MCP run with the PR checkout as cwd, so a relative path
+// would land the screenshots inside that checkout (and the sanitizer, looking
+// here, would drop every one of them) — measured on PR 14116, round 1.
 func qaRunDir(dataDir string, pr int, runID string) string {
-	return filepath.Join(dataDir, "qa", fmt.Sprint(pr), runID)
+	dir := filepath.Join(dataDir, "qa", fmt.Sprint(pr), runID)
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
 }
 
 // qaRunIDRe / qaImageFileRe validate the two path segments GET /api/qa/image

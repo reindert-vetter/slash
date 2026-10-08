@@ -61,6 +61,7 @@ test('steps are columns to the right, the comments dock follows the step, and th
   await expect(page.getByTestId('qa-dock-title')).toContainText('1. Pauzeren midden in het traject')
 
   // A local comment on step 1 lands in the dock of step 1 only.
+  await page.keyboard.press('ArrowDown')
   await page.getByTestId('qa-comment-compose').fill('Klopt het label?')
   const postPromise = page.waitForRequest('**/api/workflows/task_code_comment')
   await page.getByTestId('qa-comment-local').click()
@@ -96,6 +97,7 @@ test('the Claude chat sits right of the comment thread, opens by itself, and a f
   await appReady(page)
   await page.keyboard.press('ArrowRight')
   await expect(page.getByTestId('qa-dock-title')).toContainText('1.')
+  await page.keyboard.press('ArrowDown')
 
   // No comment yet: the chat card is there anyway (no hint text instead).
   const chat = page.getByTestId('qa-chat')
@@ -122,4 +124,51 @@ test('the Claude chat sits right of the comment thread, opens by itself, and a f
   await expect(page.getByTestId('qa-comment')).toContainText('Echte comment')
   // The chat stays open on the same conversation, right of the thread.
   await expect(page.getByTestId('qa-chat').getByTestId('claude-chat-compose')).toBeVisible()
+})
+
+test('the dock stays collapsed until ↓, and Enter shows the cards at full height', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  await mockQA(page, pr)
+  let chatStarts = 0
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().includes('/api/workflows/claude_chat')) chatStarts++
+  })
+  await page.goto(`/qa/${pr}`)
+  await appReady(page)
+
+  const dock = page.getByTestId('qa-dock')
+  const row = page.getByTestId('qa-comment-claude-row')
+  await expect(dock).toHaveAttribute('data-open', 'false')
+  await expect(row).toBeHidden()
+  // Only the bar: far less than the old fixed 42vh.
+  expect((await dock.boundingBox()).height).toBeLessThan(60)
+
+  // Browsing the columns selects nothing and starts no chat.
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('qa-dock-title')).toContainText('2.')
+  await expect(row).toBeHidden()
+
+  // ↓ opens it; an empty step only gets the input fields' height.
+  await page.keyboard.press('ArrowDown')
+  await expect(dock).toHaveAttribute('data-open', 'true')
+  await expect(row).toBeVisible()
+  await expect(page.getByTestId('qa-comment-compose')).toBeVisible()
+  const vh = page.viewportSize().height
+  expect((await row.boundingBox()).height).toBeLessThan(vh * 0.3)
+  await page.keyboard.press('Escape')
+  await expect(row).toBeHidden()
+  expect(chatStarts).toBe(0)
+
+  // Enter: full height (no inner scroll), the column row scrolls instead.
+  const cols = page.getByTestId('qa-columns')
+  await expect(cols).toHaveAttribute('data-full', 'false')
+  await page.keyboard.press('Enter')
+  await expect(cols).toHaveAttribute('data-full', 'true')
+  await expect(page.getByTestId('qa-card-full').filter({ visible: true })).toHaveText(/inklappen/)
+  await page.keyboard.press('Enter')
+  await expect(cols).toHaveAttribute('data-full', 'false')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Escape')
+  await expect(cols).toHaveAttribute('data-full', 'false')
 })

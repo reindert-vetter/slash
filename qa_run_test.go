@@ -91,3 +91,16 @@ func TestQAImageRejectsUnsafePaths(t *testing.T) {
 		}
 	}
 }
+
+// TestQARunDirIsAbsoluteForARelativeDataDir pins the fix for screenshots that
+// landed in the PR checkout (Claude's cwd) instead of slash's own data dir.
+func TestQARunDirIsAbsoluteForARelativeDataDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	dir := qaRunDir("data", 7, "0123456789abcdef01234567")
+	if !filepath.IsAbs(dir) {
+		t.Fatalf("qaRunDir = %q, want an absolute path", dir)
+	}
+	if !strings.Contains(qaMCPConfig(dir), dir) {
+		t.Errorf("the MCP --output-dir must carry the absolute run dir")
+	}
+}

@@ -60,6 +60,19 @@ het absolute pad in de screenshotmap hieronder, bijvoorbeeld
 letters, cijfers, `-`, `_` en `.` met extensie `.png` of `.jpg`. Een element-
 screenshot (alleen een kaart of blok) is vaak duidelijker dan de hele pagina.
 
+Maak VEEL screenshots — de reviewer wil het verloop kunnen zien zonder het zelf
+na te spelen. Liever te veel dan te weinig:
+
+- elke stap waarin iets in een browser te zien is (de admin, maar ook bijv. een
+  Temporal-UI, mailpit, een publieke pagina) krijgt minstens één screenshot, en
+  bij een verandering bij voorkeur een vóór- én een na-toestand;
+- leg ook tussentoestanden vast (formulier ingevuld, bevestigingsdialoog,
+  melding na opslaan, detailpagina, lijst met filter);
+- elke screenshot die je maakt hoort in `images` van de stap waar hij bij
+  hoort — maak er geen die je niet gebruikt;
+- een stap met alleen shell-uitvoer mag zonder screenshot, maar zet de
+  relevante uitvoer dan in `pre`.
+
 ## Voortgang
 
 Meld tijdens het werk, elk op een eigen regel:
