@@ -136,16 +136,25 @@ shape as `plan.mjs`'s `chatView`/`chatCallbacks`), `workDirOverlay.mjs`,
     `**QA ronde R · stap N — titel**`, so a reader on GitHub knows what it is
     about. "Plaats op GitHub" (Cmd+Enter) or "Alleen voor mij" (local). These
     comments also show in the review tree's comment index.
-  - **Chat:** a click or Enter on a comment opens the `claude_chat`
-    conversation anchored on it (`POST /api/workflows/claude_chat`, the
-    `message` Signal, the `chat.progress`/`chat.message` SSE). Its **first**
-    turn carries the step as invisible `context`.
+  - **Layout:** one merged card like the tree's `comment-claude-row`
+    (`qa-comment-claude-row`): thread cards + composer on the left, the Claude
+    chat (`claudeChatColumn`) on the right. The selected comment expands into
+    its thread (GitHub replies, `qa-reply-compose`, Enter sends the `reply`
+    Signal).
+  - **Chat:** opens by itself on the selected comment (first of the step;
+    ↑/↓ and clicks follow, `syncAutoChat`). Its **first** turn carries the
+    step as invisible `context`. On a step without a comment the chat card is
+    still there: the first message creates a local placeholder comment
+    (`ensureStepAnchor`, same body as RelatedPanel's
+    `CLAUDE_ANCHOR_PLACEHOLDER`, no row of its own). A real comment typed
+    later takes it over as a `reply` Signal with `publish:'reply'` (like
+    `placeComment` in the tree).
 - **Keyboard:**
   - **Columns:** →/← change step, ↓ enters the dock, `/` or `c` focuses the
     composer.
   - **Dock:** ↑/↓ walk the comments (↑ from the top goes back to the columns),
-    Enter opens the chat on a comment (or focuses the composer), Escape closes
-    the chat or leaves the dock.
+    Enter focuses the chat composer on a comment (or the comment composer),
+    Escape leaves the dock.
   - **Order:** the lightbox and the werkmap overlay get the keyboard first.
 - **URL state:** `?round=<runId>` (omitted for the newest round) and `?step=`
   (omitted at 0), via `bindUrlState`.

@@ -82,3 +82,44 @@ test('steps are columns to the right, the comments dock follows the step, and th
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('qa-comment')).toHaveCount(1)
 })
+
+test('the Claude chat sits right of the comment thread, opens by itself, and a first message on an empty step makes a local anchor', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  await mockQA(page, pr)
+  // Never reach a real Claude turn: only the message Signal is intercepted.
+  let sent = null
+  await page.route('**/api/workflows/*/signals/message', (route) => {
+    sent = route.request().postDataJSON()
+    return route.fulfill({ json: { ok: true } })
+  })
+  await page.goto(`/qa/${pr}`)
+  await appReady(page)
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('qa-dock-title')).toContainText('1.')
+
+  // No comment yet: the chat card is there anyway (no hint text instead).
+  const chat = page.getByTestId('qa-chat')
+  await expect(chat.getByTestId('claude-chat-compose')).toBeVisible()
+  const anchorReq = page.waitForRequest((r) => r.url().includes('/api/workflows/task_code_comment') && r.method() === 'POST')
+  await chat.getByTestId('claude-chat-compose').fill('Wat doet deze stap?')
+  await chat.getByTestId('claude-chat-compose').press('Enter')
+  const anchor = (await anchorReq).postDataJSON()
+  expect(anchor.local).toBe(true)
+  expect(anchor.body).toContain('gesprek met Claude gestart')
+  expect(anchor.seg).toBe(`qa:${RUN}:1`)
+  await expect.poll(() => sent && sent.body).toBe('Wat doet deze stap?')
+  expect(sent.context).toContain('stap 1')
+  // The bare placeholder has no row of its own.
+  await expect(page.getByTestId('qa-comment')).toHaveCount(0)
+
+  // A real comment on that step takes the placeholder over and publishes as a reply.
+  await page.getByTestId('qa-comment-compose').fill('Echte comment')
+  const replyReq = page.waitForRequest((r) => r.url().includes('/signals/reply'))
+  await page.getByTestId('qa-comment-local').click()
+  const reply = (await replyReq).postDataJSON()
+  expect(reply.body).toContain('Echte comment')
+  await expect(page.getByTestId('qa-comment')).toHaveCount(1)
+  await expect(page.getByTestId('qa-comment')).toContainText('Echte comment')
+  // The chat stays open on the same conversation, right of the thread.
+  await expect(page.getByTestId('qa-chat').getByTestId('claude-chat-compose')).toBeVisible()
+})
