@@ -6220,12 +6220,17 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// publishRootBody is the text a Publish posts as the thread's root: the
 	// comment's own body, quoted with an attribution marker when it is an
 	// automated finding (Source "ai") — a PR reader must never mistake the
-	// AI check's wording for the reviewer's own.
+	// AI check's wording for the reviewer's own. rootBody follows the root's
+	// "edit" Action below, so publishing after rewording a still-local root
+	// posts the CURRENT text, not the Execution's original input body (which
+	// once put a Claude-chat placeholder sentence on GitHub, PR 14116). Driven
+	// by history only, so replay-deterministic.
+	rootBody := in.Body
 	publishRootBody := func() string {
 		if in.Source == "ai" {
-			return aiQuoteBody(in.Body)
+			return aiQuoteBody(rootBody)
 		}
-		return in.Body
+		return rootBody
 	}
 
 	for {
@@ -6360,6 +6365,7 @@ func taskCodeCommentWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 				}, nil); err != nil {
 					return nil, fmt.Errorf("edit comment body: %w", err)
 				}
+				rootBody = r.Body
 				// rootPublished, not just a non-zero RootID: after a Publish
 				// "reply" the GitHub comment at posted.RootID holds the
 				// reviewer's REPLY, not this body — PATCHing it would rewrite
@@ -7819,6 +7825,7 @@ func (m *TaskManager) importPRComments(ctx context.Context, repo string, pr int)
 
 	m.applyGithubResolves(ctx, repo, pr, existing)
 	m.applyGithubDeletes(ctx, repo, pr, existing, inputs)
+	m.applyGithubReplies(ctx, repo, pr, existing)
 }
 
 // applyGithubDeletes mirrors a comment's deletion on github.com onto the
@@ -7958,6 +7965,66 @@ func (m *TaskManager) applyGithubResolves(ctx context.Context, repo string, pr i
 	}
 }
 
+// applyGithubReplies imports GitHub replies on RESOLVED threads. A resolved
+// thread has no reply poller (poll exits while resolved, see poll), so a reply
+// that lands on GitHub after — or just before — the resolve was never fetched.
+// Only replies not already stored as a reaction are signalled: a reaction with
+// ID gh-<id> (imported earlier) or GithubID == id (our own mirrored reply), so
+// a steady state sends no Signal and adds no history. Open threads are left to
+// their own poller. One PR-wide listing per tick, and only when a candidate
+// thread exists. Runs at the end of importPRComments, on its cadence.
+func (m *TaskManager) applyGithubReplies(ctx context.Context, repo string, pr int, existing []comments.Comment) {
+	if m.comments == nil || m.gh == nil {
+		return
+	}
+	byRoot := map[int64]comments.Comment{}
+	for _, c := range existing {
+		if c.Status == "resolved" && c.GithubID != 0 {
+			byRoot[c.GithubID] = c
+		}
+	}
+	if len(byRoot) == 0 {
+		return
+	}
+	replies, err := m.ghFor(repo).FetchAllReplies(ctx, pr)
+	if err != nil {
+		m.logf("import comments: fetch replies pr=%d: %v", pr, err)
+		return
+	}
+	missing := map[string][]github.Reply{}
+	var order []string
+	for _, r := range replies {
+		c, ok := byRoot[r.InReplyTo]
+		if !ok || hasGithubReaction(c, r.ID) {
+			continue
+		}
+		if _, ok := missing[c.ID]; !ok {
+			order = append(order, c.ID)
+		}
+		missing[c.ID] = append(missing[c.ID], r)
+	}
+	for _, runID := range order {
+		// A terminal run can never accept a Signal again (same check as
+		// applyGithubResolves).
+		if status, err := m.engine.Status(runID); err != nil || status == tembed.StatusFailed || status == tembed.StatusCompleted {
+			continue
+		}
+		m.signalReplies(runID, missing[runID], map[int64]bool{})
+	}
+}
+
+// hasGithubReaction reports whether GitHub comment id is already stored on c,
+// either imported (reaction ID gh-<id>) or mirrored from the UI (GithubID).
+func hasGithubReaction(c comments.Comment, id int64) bool {
+	gid := fmt.Sprintf("gh-%d", id)
+	for _, r := range c.Reactions {
+		if r.ID == gid || r.GithubID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // knownGithubIDs returns the set of GitHub comment IDs already represented by
 // one of pr's task_code_comment threads, so importPRComments never re-imports an
 // app-created comment (or an app-posted PR-wide reply) as a duplicate. It reads,
@@ -8063,7 +8130,18 @@ func (m *TaskManager) poll(ctx context.Context, runID string, repo string, pr in
 		// taskCodeCommentWorkflow), so this is what keeps a resolved thread from
 		// polling GitHub forever. The reopenComment Activity starts a fresh
 		// poller when the thread is unresolved.
+		//
+		// Drain the thread ONE last time before exiting: the PR-level import
+		// (applyGithubResolves) mirrors a GitHub resolve on the PR page's fast
+		// cadence, while this poller usually sits on the slow one, so a reply
+		// posted shortly before the resolve was otherwise never fetched at all
+		// (PR 14116: two replies lost exactly this way).
 		if m.resolvedComment(runID) {
+			if replies, err := m.ghFor(repo).FetchReplies(ctx, pr, rootID); err != nil {
+				m.logf("task_code_comment: final fetch replies pr=%d root=%d: %v", pr, rootID, err)
+			} else {
+				m.signalReplies(runID, replies, seen)
+			}
 			return
 		}
 		// Stop once the PR is no longer open — another poller for the same PR may
@@ -8130,19 +8208,7 @@ func (m *TaskManager) poll(ctx context.Context, runID string, repo string, pr in
 			continue
 		}
 		repoAccessLogged = false
-		for _, r := range replies {
-			if seen[r.ID] {
-				continue
-			}
-			seen[r.ID] = true
-			sig := ReactionSignal{
-				ID: fmt.Sprintf("gh-%d", r.ID), Source: "github",
-				Author: r.Author, AvatarURL: r.AvatarURL, Body: r.Body, Done: r.Done,
-			}
-			if err := m.engine.SignalWorkflow(runID, SignalReply, sig); err != nil {
-				m.logf("task_code_comment: signal run=%s: %v", runID, err)
-			}
-		}
+		m.signalReplies(runID, replies, seen)
 
 		// Slow cadence only: check whether the PR merged/closed. Record it on the
 		// pr_status tracker (best-effort) and stop polling this thread.
@@ -8159,6 +8225,25 @@ func (m *TaskManager) poll(ctx context.Context, runID string, repo string, pr in
 				m.logf("task_code_comment: pr #%d %s — stop polling run=%s", pr, state, runID)
 				return
 			}
+		}
+	}
+}
+
+// signalReplies delivers each GitHub reply not yet in seen to thread runID as
+// a "reply" Signal (the only write; the workflow's saveReaction is idempotent
+// on the gh-<id> reaction id). seen is updated in place.
+func (m *TaskManager) signalReplies(runID string, replies []github.Reply, seen map[int64]bool) {
+	for _, r := range replies {
+		if seen[r.ID] {
+			continue
+		}
+		seen[r.ID] = true
+		sig := ReactionSignal{
+			ID: fmt.Sprintf("gh-%d", r.ID), Source: "github",
+			Author: r.Author, AvatarURL: r.AvatarURL, Body: r.Body, Done: r.Done,
+		}
+		if err := m.engine.SignalWorkflow(runID, SignalReply, sig); err != nil {
+			m.logf("task_code_comment: signal run=%s: %v", runID, err)
 		}
 	}
 }

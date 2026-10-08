@@ -63,6 +63,9 @@ type Reply struct {
 	// "/reopen" and not "/unresolve" — the latter would match here and be read
 	// back as a resolve (see resolveSentinel/reopenSentinel in workflows.go).
 	Done bool `json:"done"`
+	// InReplyTo is the root comment this reply belongs to (in_reply_to_id).
+	// Set by FetchAllReplies, which returns the replies of every thread at once.
+	InReplyTo int64 `json:"inReplyTo,omitempty"`
 }
 
 // ReviewComment is a top-level (thread-root) review comment on the diff of a PR:
@@ -113,6 +116,10 @@ type Client interface {
 	// thread on GitHub) is mirrored: as a new conversation entry.
 	PostIssueComment(ctx context.Context, pr int, body string) (int64, error)
 	FetchReplies(ctx context.Context, pr int, rootID int64) ([]Reply, error)
+	// FetchAllReplies returns every reply (in_reply_to != 0) on every review
+	// thread of pr in one paginated listing, each tagged with its InReplyTo
+	// root — so a caller covering many threads makes one call, not one per thread.
+	FetchAllReplies(ctx context.Context, pr int) ([]Reply, error)
 	// FetchReviewComments returns the thread-root review comments of pr (those
 	// not in reply to another comment) — the existing comments on the diff,
 	// including ones made outside this app, so they can be imported as live
@@ -359,20 +366,33 @@ func (m *Module) PostIssueComment(ctx context.Context, pr int, body string) (int
 	return c.ID, nil
 }
 
-// FetchReplies returns every reply on the thread rooted at rootID.
+// FetchReplies returns every reply on the thread rooted at rootID. Paginated
+// (via FetchAllReplies): a single per_page=100 page silently dropped every
+// reply past the PR's first 100 review comments.
 func (m *Module) FetchReplies(ctx context.Context, pr int, rootID int64) ([]Reply, error) {
-	out, err := m.api(ctx, "GET",
-		fmt.Sprintf("repos/%s/pulls/%d/comments?per_page=100", m.repo, pr))
+	all, err := m.FetchAllReplies(ctx, pr)
 	if err != nil {
 		return nil, err
 	}
+	var replies []Reply
+	for _, r := range all {
+		if r.InReplyTo == rootID {
+			replies = append(replies, r)
+		}
+	}
+	return replies, nil
+}
+
+// FetchAllReplies returns every reply on every review thread of pr. See the
+// Client interface doc.
+func (m *Module) FetchAllReplies(ctx context.Context, pr int) ([]Reply, error) {
 	var comments []ghComment
-	if err := json.Unmarshal(out, &comments); err != nil {
+	if err := m.apiPaginate(ctx, fmt.Sprintf("repos/%s/pulls/%d/comments", m.repo, pr), &comments); err != nil {
 		return nil, err
 	}
 	var replies []Reply
 	for _, c := range comments {
-		if c.InReplyTo != rootID {
+		if c.InReplyTo == 0 {
 			continue
 		}
 		replies = append(replies, Reply{
@@ -381,6 +401,7 @@ func (m *Module) FetchReplies(ctx context.Context, pr int, rootID int64) ([]Repl
 			AvatarURL: c.User.AvatarURL,
 			Body:      c.Body,
 			Done:      strings.Contains(strings.ToLower(c.Body), "/resolve"),
+			InReplyTo: c.InReplyTo,
 		})
 	}
 	return replies, nil

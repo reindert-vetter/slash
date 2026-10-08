@@ -104,10 +104,12 @@ weight "Plaats…" already has.
   comment behind it" and, since there is no "edit body" Signal (a comment's
   body is fixed at Execution start), "updating" it means posting the
   reviewer's typed text as a **reply** on that same thread (the same Signal
-  `sendReaction` uses) instead of starting a new Execution. The anchor's own
-  local-ness (always `true`, fixed at creation) wins over `opts.local` here —
-  chatting with Claude first already made this thread private, and there is
-  no Signal to flip a comment from private to public after the fact.
+  `sendReaction` uses) instead of starting a new Execution. That reply carries
+  `publish: 'reply'` (unless `opts.local`), exactly like `sendReaction`'s
+  bare-anchor branch: the typed text is a real comment and becomes the
+  thread's GitHub root, the placeholder root stays local. It used to send no
+  `publish` (from before the Publish Signal existed), so such a comment
+  silently stayed local-only (PR 14116).
   `claudeAutoAnchor` is cleared on every fresh `toNew` (a stale pointer from a
   different unit's draft must never be reused; `draftKeyFor`'s own
   unit-scoped compare in `placeComment` is a second safety net on top of

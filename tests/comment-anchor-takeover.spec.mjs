@@ -64,6 +64,9 @@ test('typing a first real comment on a line that only has a Claude conversation 
     page.keyboard.press('Enter'), // posts directly — an ordinary composer, no comment-kind menu
   ])
   expect(replyRes.postDataJSON().body).toBe('Dit moet echt anders.')
+  // A real comment goes to GitHub: only this text, as the thread's GitHub
+  // root (the placeholder root stays local) — PR 14116 regression.
+  expect(replyRes.postDataJSON().publish).toBe('reply')
 
   // Still exactly ONE comment card — the reply landed on the existing
   // anchor's thread, no second, unrelated comment was created next to it.

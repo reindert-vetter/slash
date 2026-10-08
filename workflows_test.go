@@ -1821,3 +1821,30 @@ func TestTriggerIngestRefreshCheckFiresImmediately(t *testing.T) {
 		return signalReceivedCount(t, m, prRunID, SignalPRState) > before
 	})
 }
+
+// TestPublishAfterRootEditPostsEditedBody: rewording a still-local root and
+// then publishing it posts the edited text, not the Execution's original input
+// body (PR 14116: a Claude-chat anchor's placeholder sentence reached GitHub).
+func TestPublishAfterRootEditPostsEditedBody(t *testing.T) {
+	m, gh, _ := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runID, err := m.StartCodeComment(ctx, CodeCommentInput{
+		PR: 42, File: "src/Order.php", Line: 10, Author: "reviewer",
+		Body: "(placeholder)", Local: true, RowStart: -1, RowEnd: -1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{ID: runID, Source: "ui", Author: "reviewer", Action: "edit", Body: "the real comment"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Signal(runID, ReactionSignal{ID: "ui-2", Source: "ui", Author: "reviewer", Action: "publish"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return gh.PostedCount() == 1 })
+	if got := gh.PostedBodies()[0]; got != "the real comment" {
+		t.Fatalf("posted root = %q, want the edited body", got)
+	}
+}

@@ -162,8 +162,32 @@ func (f *Fake) FetchReplies(_ context.Context, pr int, rootID int64) ([]Reply, e
 	if f.repliesErr != nil {
 		return nil, f.repliesErr
 	}
-	out := make([]Reply, len(f.replies))
-	copy(out, f.replies)
+	// A reply that names its thread (InReplyTo) only shows on that thread; one
+	// enqueued without it shows on every thread, as before.
+	var out []Reply
+	for _, r := range f.replies {
+		if r.InReplyTo == 0 || r.InReplyTo == rootID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// FetchAllReplies returns every enqueued reply that names its thread
+// (InReplyTo != 0) — the PR-wide listing the importer uses. A reply enqueued
+// without InReplyTo is only visible to the per-thread FetchReplies above.
+func (f *Fake) FetchAllReplies(_ context.Context, pr int) ([]Reply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.repliesErr != nil {
+		return nil, f.repliesErr
+	}
+	var out []Reply
+	for _, r := range f.replies {
+		if r.InReplyTo != 0 {
+			out = append(out, r)
+		}
+	}
 	return out, nil
 }
 

@@ -840,3 +840,108 @@ func TestImportNonKiloCommentNeverAutoStartsChat(t *testing.T) {
 		t.Fatalf("chat messages = %+v, want none (author is not kilo)", msgs)
 	}
 }
+
+// TestImportPullsRepliesOnResolvedThreads covers PR 14116: a GitHub reply that
+// landed around the time its thread was resolved on GitHub was never imported,
+// because the per-thread reply poller exits while a thread is resolved. The
+// PR-level import now picks such replies up — once, without re-signalling a
+// reply that is already stored.
+func TestImportPullsRepliesOnResolvedThreads(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 100, Author: "colleague", Body: "root", Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+	})
+	m.importPRComments(ctx, "", pr)
+	gh.SetResolvedOnGithub(100)
+	m.importPRComments(ctx, "", pr)
+
+	reactionIDs := func() []string {
+		c, _, _ := cs.Get(ctx, "gh-100")
+		var ids []string
+		for _, r := range c.Reactions {
+			ids = append(ids, r.ID)
+		}
+		return ids
+	}
+	list, _ := cs.List(ctx, "", pr)
+	if len(list) != 1 || list[0].Status != "resolved" {
+		t.Fatalf("thread not resolved: %+v", list)
+	}
+
+	// The reply shows up on GitHub only now, after the resolve.
+	gh.EnqueueReply(github.Reply{ID: 9001, Author: "ricky", Body: "Goeie!", InReplyTo: 100})
+	list, _ = cs.List(ctx, "", pr)
+	m.applyGithubReplies(ctx, "", pr, list)
+
+	c, _, _ := cs.Get(ctx, "gh-100")
+	found := false
+	for _, r := range c.Reactions {
+		if r.ID == "gh-9001" && r.Body == "Goeie!" && r.Author == "ricky" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reply gh-9001 not imported on the resolved thread; reactions = %v", reactionIDs())
+	}
+	if c.Status != "resolved" {
+		t.Fatalf("status = %q, want still resolved (a reply does not reopen)", c.Status)
+	}
+
+	// A second pass sends nothing: the reply is already stored.
+	before := len(c.Reactions)
+	hist, _ := m.engine.History("gh-100")
+	list, _ = cs.List(ctx, "", pr)
+	m.applyGithubReplies(ctx, "", pr, list)
+	hist2, _ := m.engine.History("gh-100")
+	c, _, _ = cs.Get(ctx, "gh-100")
+	if len(c.Reactions) != before || len(hist2) != len(hist) {
+		t.Fatalf("second pass changed state: reactions %d->%d, history %d->%d", before, len(c.Reactions), len(hist), len(hist2))
+	}
+}
+
+// TestPollDrainsRepliesBeforeExitingOnResolve: a poller that finds its thread
+// resolved still fetches the replies one last time before it exits, so a reply
+// posted just before the resolve is not lost (PR 14116).
+func TestPollDrainsRepliesBeforeExitingOnResolve(t *testing.T) {
+	m, gh, cs := newTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr := 42
+
+	gh.SetReviewComments([]github.ReviewComment{
+		{ID: 100, Author: "colleague", Body: "root", Path: "src/Order.php", Line: 10, Side: "RIGHT"},
+	})
+	m.importPRComments(ctx, "", pr)
+	gh.SetResolvedOnGithub(100)
+	m.importPRComments(ctx, "", pr)
+
+	// Wait for the import's own poller to notice the resolve and exit.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		m.mu.Lock()
+		busy := m.polling["gh-100"]
+		m.mu.Unlock()
+		if !busy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("poller for gh-100 never exited after the resolve")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	gh.EnqueueReply(github.Reply{ID: 9002, Author: "ricky", Body: "late", InReplyTo: 100})
+	m.poll(ctx, "gh-100", "", pr, 100, "") // returns once it sees the resolve
+
+	c, _, _ := cs.Get(ctx, "gh-100")
+	for _, r := range c.Reactions {
+		if r.ID == "gh-9002" {
+			return
+		}
+	}
+	t.Fatalf("final drain did not import gh-9002; reactions = %+v", c.Reactions)
+}

@@ -7890,9 +7890,13 @@ export async function placeComment(state, commentTarget, opts = {}) {
   // body is fixed at Execution start), so "updating" it means posting the
   // reviewer's own typed text as a reply on that same thread — the same
   // Signal an ordinary thread reply (sendReaction) already uses — instead of
-  // creating a new one. The anchor's own local-ness (fixed at creation,
-  // always private, see ensureClaudeAnchorForNew) wins over opts.local here:
-  // chatting with Claude first already made this a private thread.
+  // creating a new one. The reviewer's typed text is a real comment, so it
+  // goes to GitHub exactly like sendReaction's bare-anchor branch does:
+  // `publish:'reply'` posts only this text as the thread's GitHub root, the
+  // placeholder root stays local. (This used to send no `publish` at all, on
+  // the old "chatting with Claude first made it private" reading — from
+  // before the Publish signal existed — so the comment silently stayed
+  // local-only; PR 14116.) opts.local still keeps it private.
   if (claudeAutoAnchor && claudeAutoAnchor.draftKey === draftKey) claudeAutoAnchor = null
   const placeholderAnchor = placeholderAnchorFor(draftKey)
   if (placeholderAnchor) {
@@ -7908,7 +7912,12 @@ export async function placeComment(state, commentTarget, opts = {}) {
           res = await fetch('/api/workflows/' + encodeURIComponent(c.runId) + '/signals/reply', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ author: 'reviewer', body, done: false }),
+            body: JSON.stringify({
+              author: 'reviewer',
+              body,
+              done: false,
+              publish: needsPublishChoice(c) && !opts.local ? 'reply' : undefined,
+            }),
           })
         } catch (_) {
           res = null

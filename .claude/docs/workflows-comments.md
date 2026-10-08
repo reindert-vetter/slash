@@ -254,7 +254,9 @@ become public, and the answer rides along on that same `reply` Signal as
   `ai`/system notes in the thread are never mirrored.
 
 **`Action: "publish"`** is the same thing without a message: it publishes the
-thread **as it stands** (the root, plus the earlier local replies with
+thread **as it stands** — the root's CURRENT body, so an earlier `edit` of the
+local root is honoured (`rootBody`; it used to post the Execution's original
+input body, `TestPublishAfterRootEditPostsEditedBody`) — (the root, plus the earlier local replies with
 `PublishHistory`) and stores no reaction — the reviewer moving an
 already-written local conversation over without typing a new reply first
 (`Enter` on an empty reply field, see the comment menu's "Zet op GitHub"). It
@@ -505,6 +507,21 @@ is in-memory only — no read-model, no history, gone after a restart — so it
 falls under the same operational carve-out as the heartbeat map
 (`.claude/rules/workflows-write-boundary.md`); the actual write is still the
 Activity.
+
+**A resolved thread still gets its GitHub replies (PR 14116).** The PR-level
+import mirrors a GitHub resolve on the PR page's fast cadence
+(`applyGithubResolves`), while a thread's own poller usually sits on the slow
+10-min one (its heartbeat is per thread) — so a reply posted shortly before the
+resolve was never fetched, and after the resolve no poller ran at all. Two
+fixes: `poll` does **one last `FetchReplies`** before it exits on `resolved`,
+and **`applyGithubReplies`** (end of every `importPRComments`) takes one
+PR-wide `FetchAllReplies` listing — only when a resolved thread with a
+`GithubID` exists — and signals each reply on a resolved, non-terminal thread
+that is not yet stored (reaction id `gh-<id>`, or `GithubID == id` for our own
+mirrored reply), so a steady state sends nothing. `FetchReplies` is now
+paginated via `FetchAllReplies` (it used to read only the first 100 review
+comments). Tests: `TestImportPullsRepliesOnResolvedThreads`,
+`TestPollDrainsRepliesBeforeExitingOnResolve`.
 
 **Only threads resolved after this change can be reopened.** One resolved
 earlier already completed its Execution, and nothing can signal it again — the
