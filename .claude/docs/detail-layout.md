@@ -1285,7 +1285,7 @@ and `title` are for tests/screen readers. Test: `tests/tree-clock.spec.mjs`.
 
 ## File-type filter above the index (Alles / Backend / Frontend)
 
-`state.fileFilter` (`'all'|'backend'|'frontend'`, ephemeral, not in the URL)
+`state.fileFilter` (`'all'|'backend'|'frontend'`, a PER-PR setting, not in the URL; see "Per-PR persistence" below)
 drives three buttons under the "Start" header in `BlockList.mjs`
 (`data-testid=file-filter-<mode>`, active one gets a check mark). Backend hides
 vue/ts/js-family files (`FRONTEND_FILE_RE` in `home.mjs`: `.vue`, `.js/.mjs/.cjs/.jsx`,
@@ -1294,3 +1294,17 @@ vue/ts/js-family files (`FRONTEND_FILE_RE` in `home.mjs`: `.vue`, `.js/.mjs/.cjs
 files' extension; the PR-description block and comment items are never
 filtered. Changing it goes through `setFileFilter` (re-runs `setSearch`, which
 resets the selection). Not a stop of the keyboard chain: mouse only.
+
+### Per-PR persistence and "ignored" in the progress bars
+
+The filter is stored per PR in `<appDataDir>/file-filters.json` (`filefilter.go`,
+keyed by `statusKey`). Read: `GET /api/filefilters` (home.mjs `loadFileFilter`).
+Write: Signal Kind `"fileFilter"` on the `app_settings` tracker (Activity
+`saveFileFilter`), sent by `setFileFilter`. Blocks hidden by the filter are
+**ignored and count as done**: `prWideApproveTotal` returns `{done,total,ignored}`
+(done includes ignored) and `/api/approvalsummary` does the same server-side
+(`approvalRollup`, tested in `filefilter_test.go`). The bottom `ProgressBar.mjs`
+draws ignored as a separate sky, hatched segment after the approved fill; the
+`/pr-overview` ring (`approvalPill`) draws a dashed sky arc after the approved
+arc and says "N ignored" in its title. Never colour alone: hatch/dash plus the
+text. Keep `fileFilterIgnores` (Go) in sync with `FRONTEND_FILE_RE` (JS).

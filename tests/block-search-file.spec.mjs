@@ -71,4 +71,18 @@ test.describe('PR Review Tree — searching startpunten by file path', () => {
     await page.getByTestId('file-filter-all').click()
     await expect(rows).toHaveCount(11)
   })
+
+  // The filter is a per-PR setting persisted through the app_settings tracker:
+  // it survives a reload, and everything it hides counts as done (ignored fill).
+  test('the file filter persists per PR and ignored rows fill the progress bar', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row')).toHaveCount(11)
+    await page.getByTestId('file-filter-frontend').click()
+    await expect(page.getByTestId('review-progress-ignored')).toHaveAttribute('class', /w-\[100\.00%\]/)
+    await expect.poll(async () => (await (await page.request.get('/api/filefilters')).json()).filters['12903']).toBe('frontend')
+    await page.reload()
+    await expect(page.getByTestId('file-filter-frontend')).toContainText('✓')
+    await page.getByTestId('file-filter-all').click()
+    await expect.poll(async () => (await (await page.request.get('/api/filefilters')).json()).filters['12903']).toBeUndefined()
+  })
 })

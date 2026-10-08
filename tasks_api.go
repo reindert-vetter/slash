@@ -1814,6 +1814,11 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				// A plain boolean; nothing to validate (nil = default shown).
 			case "touchedSection":
 				// A plain boolean; nothing to validate (nil = default off).
+			case "fileFilter":
+				if _, n := parseStatusKey(body.FileFilterKey); n == 0 || !validFileFilterMode(body.FileFilterMode) {
+					http.Error(w, "invalid file filter", http.StatusBadRequest)
+					return
+				}
 			case "jiraCreds":
 				// The Jira notification feed needs an e-mail address AND a
 				// token; a half-filled form would only produce a failing

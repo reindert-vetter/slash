@@ -669,6 +669,9 @@ function approvalPill(pr) {
   const hasData = !!(a0 && a0.total)
   const a = hasData ? a0 : { done: 0, total: 0 }
   const done = a.done || 0
+  // ignored = rows hidden by the PR's file filter; they count as done (inside
+  // `done`) but are drawn as a separate dashed sky arc after the approved one.
+  const ignored = Math.min(a.ignored || 0, done)
   const full = hasData && done >= a.total
   // Never round an unfinished PR to 0% or 100%: min 1%, max 99% until really done.
   const pct = full ? 100 : done <= 0 ? 0 : Math.min(99, Math.max(1, Math.round((done / a.total) * 100)))
@@ -685,15 +688,22 @@ function approvalPill(pr) {
   const track = '<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" opacity="0.25"/>'
   const arc = `<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 9 9)"/>`
   const disc = '<circle cx="9" cy="9" r="8" fill="currentColor"/>'
+  const apprFrac = hasData && a.total ? (done - ignored) / a.total : 0
+  const ignFrac = hasData && a.total ? ignored / a.total : 0
+  const ignArc = ignored
+    ? `<circle cx="9" cy="9" r="7" fill="none" stroke-width="2" class="stroke-sky-500 dark:stroke-sky-400" stroke-dasharray="${((C * ignFrac) / 4).toFixed(2)} ${((C * ignFrac) / 4).toFixed(2)}" transform="rotate(${(-90 + 360 * apprFrac).toFixed(2)} 9 9)" data-testid="ignored-arc"/>`
+    : ''
+  const apprArc = `<circle cx="9" cy="9" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - apprFrac)).toFixed(2)}" transform="rotate(-90 9 9)"/>`
   // The open (unresolved) comment count sits INSIDE the ring as a number; 0
   // leaves the ring empty. Smaller digits for 2+ digits so the ring keeps its size.
   const n = Number(pr.comments) || 0
   const fs = String(n).length >= 3 ? 6 : String(n).length === 2 ? 7.5 : 9.5
-  const numCls = pct === 100 ? 'fill-white dark:fill-zinc-900' : 'fill-slate-600 dark:fill-zinc-300'
+  const numCls = pct === 100 && !ignored ? 'fill-white dark:fill-zinc-900' : 'fill-slate-600 dark:fill-zinc-300'
   const num = n
     ? `<text x="9" y="9" text-anchor="middle" dominant-baseline="central" font-size="${fs}" font-weight="600" class="${numCls}" data-testid="row-comment-count">${n}</text>`
     : ''
-  const ring = `<svg viewBox="0 0 18 18" class="h-6 w-6" aria-hidden="true">${pct === 100 ? disc : pct > 0 ? track + arc : track}${num}</svg>`
+  const body = ignored ? track + apprArc + ignArc : pct === 100 ? disc : pct > 0 ? track + arc : track
+  const ring = `<svg viewBox="0 0 18 18" class="h-6 w-6" aria-hidden="true">${body}${num}</svg>`
   if (!hasData)
     return [
       html`<span
@@ -712,10 +722,10 @@ function approvalPill(pr) {
       data-pct="${String(pct)}"
       data-comments="${String(n)}"
       role="img"
-      title="${done + '/' + a.total}"
-      aria-label="${pct + '% (' + done + '/' + a.total + ')'}"
+      title="${done + '/' + a.total + (ignored ? ' (' + t('{n} genegeerd', { n: ignored }) + ')' : '')}"
+      aria-label="${pct + '% (' + done + '/' + a.total + (ignored ? ', ' + t('{n} genegeerd', { n: ignored }) : '') + ')'}"
       .innerHTML="${ring}"
-    ></span>`.key('approval:' + pct + ':' + done + '/' + a.total + ':' + n),
+    ></span>`.key('approval:' + pct + ':' + done + '/' + a.total + ':' + ignored + ':' + n),
   ]
 }
 

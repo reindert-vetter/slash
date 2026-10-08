@@ -617,7 +617,7 @@ const state = reactive({
   // the "Start" header. Summed over every top-level block's subtree count in the
   // same off-render watch that fills approvalSummaries (a plain snapshot, so the
   // header never co-subscribes to any block's b.code).
-  approvalTotal: { done: 0, total: 0 },
+  approvalTotal: { done: 0, total: 0, ignored: 0 },
   // commentActivity — per state.blocks id → { count, last: {name, avatarUrl} }
   // for every OPEN comment thread anchored on the block itself or anywhere in
   // its PR-block subtree (see commentScopeKeys + the decoupled watch further
@@ -5078,7 +5078,43 @@ function setFileFilter(mode) {
   if (state.fileFilter === mode) return
   state.fileFilter = mode
   setSearch(state.search)
+  saveFileFilter(mode)
 }
+
+// The filter is a PER-PR setting: read from GET /api/filefilters on load, written
+// by signalling the app_settings tracker (Kind "fileFilter") — never directly.
+let appSettingsRunId = null
+async function saveFileFilter(mode) {
+  try {
+    if (!appSettingsRunId) {
+      const r = await fetch('/api/workflows/app_settings', { method: 'POST' })
+      if (r.ok) appSettingsRunId = (await r.json()).runId || null
+    }
+    if (!appSettingsRunId) return
+    await fetch('/api/workflows/' + encodeURIComponent(appSettingsRunId) + '/signals/app_settings_update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'fileFilter', fileFilterKey: prUidHere(), fileFilterMode: mode }),
+    })
+  } catch (err) {
+    console.error('save file filter failed:', err)
+  }
+}
+
+async function loadFileFilter() {
+  try {
+    const res = await fetch('/api/filefilters')
+    if (!res.ok) return
+    const mode = ((await res.json()).filters || {})[prUidHere()]
+    if (mode === 'backend' || mode === 'frontend') {
+      state.fileFilter = mode
+      setSearch(state.search)
+    }
+  } catch (err) {
+    console.error('load file filter failed:', err)
+  }
+}
+loadFileFilter()
 
 function setSearch(q) {
   state.search = q
@@ -7756,6 +7792,9 @@ function prWideApproveTotal() {
   const seen = new Set()
   let done = 0
   let total = 0
+  let ignored = 0
+  const isIgnored = (x) =>
+    state.fileFilter !== 'all' && x.kind !== 'comment' && !!x.file && !isPrDescriptionBlock(x) && !fileFilterAllows(state.fileFilter, x.file)
   const add = (x) => {
     // Every entry that can reach here carries a unique id: a real block id, a
     // test method's block id, or a comment item's 'comment:<id>'.
@@ -7764,8 +7803,14 @@ function prWideApproveTotal() {
       seen.add(x.id)
     }
     const c = blockApproveCount(x)
-    done += c.done
     total += c.total
+    // A block hidden by the per-PR file filter counts as done ("ignored").
+    if (isIgnored(x)) {
+      done += c.total
+      ignored += c.total
+      return
+    }
+    done += c.done
   }
   const walk = (b) => {
     // A comment-index item has no nested PR blocks — just its own 0/1 or 1/1.
@@ -7789,7 +7834,12 @@ function prWideApproveTotal() {
     if (state.underlyingIds[b.id]) continue
     walk(b)
   }
-  return { done, total }
+  // Blocks the filter removed from the index never reach state.blocks; they
+  // still count (as ignored = done) so a PR can reach 100%.
+  if (state.fileFilter !== 'all') {
+    for (const b of state.allBlocks) if (isIgnored(b)) add(b)
+  }
+  return { done, total, ignored }
 }
 
 // subtreeApproveCount aggregates blockApproveCount over b and every PR block

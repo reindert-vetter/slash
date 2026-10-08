@@ -47,20 +47,19 @@ func (s *server) handleApprovalSummary(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		baseDir, headDir := worktreeDirs(s.dataDir, key.Repo, pr)
-		done, total := 0, 0
+		var files []string
+		var rowCounts, approvedCounts []int
 		plan := planImportInlining(baseDir, headDir, blocks)
 		for _, b := range blocks {
 			rows, _, _ := blockAlignedRows(baseDir, headDir, b)
 			t := countChangedRows(applyImportPlan(rows, b, plan))
-			total += t
-			if d := approvedByID[b.ID()]; d > 0 {
-				if d > t {
-					d = t
-				}
-				done += d
-			}
+			files = append(files, b.File)
+			rowCounts = append(rowCounts, t)
+			approvedCounts = append(approvedCounts, approvedByID[b.ID()])
 		}
-		summaries[statusKey(key.Repo, pr)] = map[string]int{"done": done, "total": total}
+		// Blocks hidden by the PR's file filter count as done ("ignored").
+		done, total, ignored := approvalRollup(fileFilterFor(key.Repo, pr), files, rowCounts, approvedCounts)
+		summaries[statusKey(key.Repo, pr)] = map[string]int{"done": done, "total": total, "ignored": ignored}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "summaries": summaries})
 }

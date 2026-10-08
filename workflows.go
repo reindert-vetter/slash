@@ -815,6 +815,10 @@ type AppSettingsSignal struct {
 	// ShowTouchedSection carries the "Migrations & API changes" section setting
 	// (Kind "touchedSection"); nil means the default (off). See touchedsection.go.
 	ShowTouchedSection *bool `json:"showTouchedSection,omitempty"`
+	// FileFilterKey + FileFilterMode carry one PR's file filter (Kind
+	// "fileFilter"): the statusKey and "all"|"backend"|"frontend". See filefilter.go.
+	FileFilterKey  string `json:"fileFilterKey,omitempty"`
+	FileFilterMode string `json:"fileFilterMode,omitempty"`
 	// JiraCreds carries the Atlassian notification-feed credentials of the
 	// settings page's auth row (Kind "jiraCreds"). They land in the gitignored
 	// .env, NOT in settings.json — that file is served verbatim to the browser
@@ -2752,6 +2756,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, saveTouchedSectionFile(m.appDataDirOrDefault(), show)
 	})
 
+	// Activity: persist one PR's file filter into file-filters.json —
+	// setFileFilterFile (filefilter.go) is the only writer of that file.
+	engine.RegisterActivity("saveFileFilter", func(ctx context.Context, in []byte) ([]byte, error) {
+		var v struct{ Key, Mode string }
+		if err := json.Unmarshal(in, &v); err != nil {
+			return nil, err
+		}
+		return nil, setFileFilterFile(m.appDataDirOrDefault(), v.Key, v.Mode)
+	})
+
 	// Activity: persist the settings page's Jira-credential edit into the
 	// gitignored .env (write, workflow-driven) — saveEnvValues (env.go) is that
 	// file's only programmatic writer. Deliberately .env and not settings.json:
@@ -4048,6 +4062,7 @@ func (m *TaskManager) SetAppDataDir(dir string) {
 	m.appDataDir = dir
 	loadBlankRowsFile(dir)
 	loadTouchedSectionFile(dir)
+	loadFileFiltersFile(dir)
 }
 
 // appDataDirOrDefault resolves the settings.json/praise-words.json directory
@@ -5109,6 +5124,11 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			show := sig.ShowTouchedSection != nil && *sig.ShowTouchedSection
 			if err := w.ExecuteActivity("saveTouchedSection", show, nil); err != nil {
 				return nil, fmt.Errorf("save touched section: %w", err)
+			}
+		case "fileFilter":
+			in := struct{ Key, Mode string }{sig.FileFilterKey, sig.FileFilterMode}
+			if err := w.ExecuteActivity("saveFileFilter", in, nil); err != nil {
+				return nil, fmt.Errorf("save file filter: %w", err)
 			}
 		case "jiraCreds":
 			if err := w.ExecuteActivity("saveJiraCredentials", sig.JiraCreds, nil); err != nil {

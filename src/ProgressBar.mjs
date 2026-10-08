@@ -37,16 +37,31 @@ export default function ProgressBar(state) {
       }}"
       data-testid="review-progress-bar"
     >
+      <div class="flex h-full w-full" data-testid="review-progress-segments">
       <div
         class="${() => {
           const t = state.approvalTotal || { done: 0, total: 0 }
-          const pct = t.total > 0 ? Math.min(100, Math.max(0, (t.done / t.total) * 100)) : 0
+          const pct = t.total > 0 ? Math.min(100, Math.max(0, ((t.done - (t.ignored || 0)) / t.total) * 100)) : 0
           const complete = t.total > 0 && t.done >= t.total
           const colorCls = complete ? 'bg-emerald-600 dark:bg-emerald-400' : 'bg-indigo-600 dark:bg-indigo-400'
           return `h-full ${colorCls} w-[${pct.toFixed(2)}%]`
         }}"
         data-testid="review-progress-fill"
       ></div>
+      <div
+        class="${() => {
+          const t = state.approvalTotal || { done: 0, total: 0 }
+          const pct = t.total > 0 ? Math.min(100, Math.max(0, ((t.ignored || 0) / t.total) * 100)) : 0
+          // Diagonal hatch + a different hue: shape, not colour alone, marks "ignored".
+          return `h-full bg-sky-400 dark:bg-sky-500 [background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.6)_0_1px,transparent_1px_3px)] w-[${pct.toFixed(2)}%]`
+        }}"
+        data-testid="review-progress-ignored"
+        title="${() => {
+          const t = state.approvalTotal || { ignored: 0 }
+          return t.ignored ? 'Genegeerd (filter): ' + t.ignored : ''
+        }}"
+      ></div>
+      </div>
     </div>
   `
 }
