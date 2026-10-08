@@ -4617,6 +4617,10 @@ function claudeChatView() {
 // before for both cases; only the already-anchored, cs.focus !== 'new' case
 // gets a mouse-click equivalent here.
 function onClaudeComposeFocus() {
+  // The composer owns the keyboard now: no code-preview card / "other chats"
+  // row may stay highlighted (a click into the input leaves them stale).
+  if (cs.previewPos !== 0) cs.previewPos = 0
+  if (cs.claudeTasksPos !== 0) cs.claudeTasksPos = 0
   if (cs.focus === 'claude' || cs.focus === 'new') return
   if (chatAnchorComment()) enterClaudeChat(cs.pr)
 }

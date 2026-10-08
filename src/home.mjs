@@ -15940,7 +15940,7 @@ function onKeydown(e) {
     // that branch for the same reason as the option/task branches above: a
     // highlighted card also blurs the composer, so it would otherwise match
     // that branch's own DOM-focus check too.
-    if (e.key === 'Enter' && isClaudeChatFocused()) {
+    if (e.key === 'Enter' && !e.shiftKey && isClaudeChatFocused()) {
       const key = activeCodePreviewKey()
       if (key != null) {
         e.preventDefault()

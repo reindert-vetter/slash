@@ -5661,3 +5661,12 @@ instead, and `ensureOverlayPreviewObserver` gives that card its own MutationObse
 The overlay's preview column is a fixed `w-full max-w-[760px]` (the tree's
 `commentClaudeRowWidthCls` fell back to a narrow ~250px tree column there), and
 the card prose carries `[overflow-wrap:anywhere]` so long identifiers wrap.
+
+### The composer's focus clears the card/task-row selection
+
+`onClaudeComposeFocus` (`RelatedPanel.mjs`) resets `cs.previewPos` and
+`cs.claudeTasksPos` to 0: a click into the input used to leave a code-preview
+card highlighted at the same time as the focused input. Keyboard ↑ already
+resets them on its way back to the composer. In `home.mjs` the Enter branch
+that toggles the active card ignores Shift+Enter, so Shift+Enter in the input
+always inserts a newline. Test: `tests/claude-composer-clears-card-selection.spec.mjs`.
