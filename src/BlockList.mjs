@@ -10,6 +10,7 @@ import { batch, batchItemFor, BATCH_STATE_LABEL } from './commentBatch.mjs'
 import { claudeTurnFor } from './claudeTurns.mjs'
 import { isChatUnread, ensureChatUnread } from './chatUnread.mjs'
 import { t } from './i18n.mjs'
+import { keyboardHints } from './keyboardHints.mjs'
 
 // Tailwind classes per category tag, so the pills read like the screenshot.
 const CATEGORY_STYLE = {
@@ -176,12 +177,14 @@ export default function BlockList(state, isPrWideComposing = () => false, onReve
             ${t('Start — waar wil je beginnen?')}
           </h1>
         </div>
-        <p class="mt-1 text-xs text-slate-500 dark:text-zinc-500">
-          <span class="font-medium text-slate-700 dark:text-zinc-300"
-            >${() => state.blocks.length}</span
-          >
-          ${t('startpunten')} &nbsp;·&nbsp; ${t('↑ ↓ om te kiezen · → om de diff in te stappen · ← om te zoeken')}
-        </p>
+        <div class="contents">
+          ${() =>
+            keyboardHints.enabled
+              ? html`<p class="mt-1 text-xs text-slate-500 dark:text-zinc-500">
+                  ${t('↑ ↓ om te kiezen · → om de diff in te stappen · ← om te zoeken')}
+                </p>`
+              : ''}
+        </div>
         ${() => approvalSummaryLine(state)}
         <div class="mt-2 flex gap-1" data-testid="file-filter" role="group">
           ${() =>

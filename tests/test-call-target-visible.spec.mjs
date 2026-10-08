@@ -26,7 +26,6 @@ test.describe('PR Review Tree — a resolved call from a TEST caller keeps its t
 
     const rows = page.getByTestId('block-row')
     await expect(rows).toHaveCount(2)
-    await expect(page.getByText('2 startpunten')).toBeVisible()
 
     // The test sorts at its ordinary TEST rank; the action — now an
     // "Onderliggende code" row, rank 3 — sorts after it, mirroring how a

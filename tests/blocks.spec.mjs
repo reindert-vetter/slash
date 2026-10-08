@@ -50,7 +50,6 @@ test.describe('PR Review Tree — block list', () => {
 
   test('renders header and all blocks in deterministic order', async ({ page }) => {
     await expect(page.getByText('Start — waar wil je beginnen?')).toBeVisible()
-    await expect(page.getByText(`${EXPECTED_LABELS.length} startpunten`)).toBeVisible()
 
     const rows = page.getByTestId('block-row')
     for (let i = 0; i < EXPECTED_ROW_LABELS.length; i++) {
