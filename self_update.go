@@ -101,19 +101,49 @@ func classifySelfUpdateEnv(offEnv, runningRev, exePath, toplevel string) selfUpd
 	return env
 }
 
-// buildRevision returns the vcs.revision the Go toolchain stamped into this
-// binary ("" for `go run`/tests).
+// selfUpdateRev is the revision a self-update build stamps in via
+// `-ldflags "-X main.selfUpdateRev=<sha>"` (realSelfUpdateBuild). Needed
+// because buildNew compiles inside a temporary `git worktree`, where the Go
+// toolchain stamps NO vcs.revision — without this fallback the new binary had
+// no readable revision, shouldExecRestart never fired, and the status hung on
+// "restarting" (with the bell's badge stuck on 1) until the next 6-hour check.
+var selfUpdateRev string
+
+// selfUpdateRevLdflag is the -X target realSelfUpdateBuild sets.
+const selfUpdateRevLdflag = "main.selfUpdateRev"
+
+// revisionFromSettings picks a binary's revision from its build settings:
+// the toolchain's vcs.revision, else the selfUpdateRev -ldflags stamp.
+func revisionFromSettings(settings []debug.BuildSetting) string {
+	ldRev := ""
+	for _, s := range settings {
+		switch s.Key {
+		case "vcs.revision":
+			if s.Value != "" {
+				return s.Value
+			}
+		case "-ldflags":
+			for _, f := range strings.Fields(s.Value) {
+				if v, ok := strings.CutPrefix(strings.Trim(f, `"'`), selfUpdateRevLdflag+"="); ok {
+					ldRev = v
+				}
+			}
+		}
+	}
+	return ldRev
+}
+
+// buildRevision returns the revision stamped into this binary ("" for
+// `go run`/tests): vcs.revision, else the self-update -ldflags stamp.
 func buildRevision() string {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		return ""
+		return selfUpdateRev
 	}
-	for _, s := range bi.Settings {
-		if s.Key == "vcs.revision" {
-			return s.Value
-		}
+	if r := revisionFromSettings(bi.Settings); r != "" {
+		return r
 	}
-	return ""
+	return selfUpdateRev
 }
 
 func detectSelfUpdateEnv() selfUpdateEnv {
@@ -143,7 +173,7 @@ func detectSelfUpdateEnv() selfUpdateEnv {
 // ── the updater: every git/build step, behind injectable funcs ──────────────
 
 type selfUpdateGitFunc func(ctx context.Context, dir string, args ...string) (string, error)
-type selfUpdateBuildFunc func(ctx context.Context, srcDir, outPath string) (string, error)
+type selfUpdateBuildFunc func(ctx context.Context, srcDir, outPath, rev string) (string, error)
 
 func realSelfUpdateGit(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, selfUpdateGitTimeout)
@@ -153,10 +183,15 @@ func realSelfUpdateGit(ctx context.Context, dir string, args ...string) (string,
 	return strings.TrimSpace(string(out)), err
 }
 
-func realSelfUpdateBuild(ctx context.Context, srcDir, outPath string) (string, error) {
+func realSelfUpdateBuild(ctx context.Context, srcDir, outPath, rev string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, selfUpdateBuildTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", outPath, ".")
+	args := []string{"build", "-o", outPath}
+	if rev != "" {
+		// See selfUpdateRev: a worktree build carries no vcs.revision.
+		args = append(args, "-ldflags", "-X "+selfUpdateRevLdflag+"="+rev)
+	}
+	cmd := exec.CommandContext(ctx, "go", append(args, ".")...)
 	cmd.Dir = srcDir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -313,7 +348,7 @@ func (u *selfUpdater) buildNew(ctx context.Context, p selfUpdatePlan) (selfUpdat
 		return selfUpdateBuilt{}, fmt.Errorf("git rev-parse (build): %v: %s", err, target)
 	}
 	newBin := u.env.ExePath + ".new"
-	if out, err := u.build(ctx, wt, newBin); err != nil {
+	if out, err := u.build(ctx, wt, newBin, target); err != nil {
 		_ = os.Remove(newBin)
 		return selfUpdateBuilt{}, fmt.Errorf("go build van de nieuwe versie faalde — de huidige versie blijft draaien:\n%s", compactLines(out, selfUpdateMaxBuildLines))
 	}
@@ -787,19 +822,14 @@ func (m *TaskManager) selfUpdateTick(now time.Time) {
 	}
 }
 
-// binaryRevision returns the vcs.revision stamped into the binary at path
-// ("" when unreadable or unstamped).
+// binaryRevision returns the revision stamped into the binary at path ("" when
+// unreadable or unstamped) — same rule as buildRevision.
 func binaryRevision(path string) string {
 	bi, err := buildinfo.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	for _, s := range bi.Settings {
-		if s.Key == "vcs.revision" {
-			return s.Value
-		}
-	}
-	return ""
+	return revisionFromSettings(bi.Settings)
 }
 
 // shouldExecRestart: restart only into a binary whose revision is known and

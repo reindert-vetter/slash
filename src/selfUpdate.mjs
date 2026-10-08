@@ -41,17 +41,21 @@ function phase() {
   return (su.status && su.status.enabled && su.status.phase) || 'idle'
 }
 
-// selfUpdateNeedsAttention — drives the bell's dot: a version is ready, being
-// applied, or the tab has to reload.
+// selfUpdateNeedsAttention — drives the +1 on the bell's badge (and its
+// tooltip): only something the reviewer can act on — a version waiting for a
+// decision ("notice"), or a reload held back while typing. An update that is
+// merely in progress ("waiting"/"restarting") is not counted: the row still
+// shows inside the panel, but the badge stays at the Jira unread count
+// (Reindert: a lone "1" on the bell with nothing to read was confusing).
 export function selfUpdateNeedsAttention() {
-  const p = phase()
-  return su.reloadPending || p === 'notice' || p === 'waiting' || p === 'restarting'
+  return su.reloadPending || phase() === 'notice'
 }
 
 // selfUpdateHasSomething — the small bells on /pr and /plan only render when
 // there is something to click; this widens that gate with the update row.
 export function selfUpdateHasSomething() {
-  return selfUpdateNeedsAttention() || phase() === 'failed'
+  const p = phase()
+  return selfUpdateNeedsAttention() || p === 'waiting' || p === 'restarting' || p === 'failed'
 }
 
 function isTyping() {

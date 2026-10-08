@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -82,7 +83,7 @@ func newFakeUpdater(t *testing.T, g *fakeSUGit, running string) (*selfUpdater, *
 			return nil
 		},
 		tempDir: func() (string, error) { return t.TempDir(), nil },
-		build:   func(context.Context, string, string) (string, error) { return "", nil },
+		build:   func(context.Context, string, string, string) (string, error) { return "", nil },
 	}
 	return u, &renamed
 }
@@ -159,7 +160,7 @@ func TestSelfUpdateBuildFailureLeavesEverythingAlone(t *testing.T) {
 	ctx := context.Background()
 	g := &fakeSUGit{head: "A", origin: "B", ancestors: map[string]bool{"A<B": true}}
 	u, renamed := newFakeUpdater(t, g, "A")
-	u.build = func(context.Context, string, string) (string, error) {
+	u.build = func(context.Context, string, string, string) (string, error) {
 		return "./x.go:1: syntax error", errors.New("exit 1")
 	}
 	p, _ := u.prepare(ctx)
@@ -272,5 +273,39 @@ func TestShouldExecRestart(t *testing.T) {
 	}
 	if !shouldExecRestart("B", "A") {
 		t.Fatal("a different disk revision must exec")
+	}
+}
+
+// A self-update build runs inside a temporary git worktree, where Go stamps no
+// vcs.revision: the target must reach the build so it can stamp it via
+// -ldflags, and binaryRevision must read that stamp back — otherwise the
+// supervisor never restarts and the status hangs on "restarting".
+func TestSelfUpdateBuildStampsTargetRevision(t *testing.T) {
+	ctx := context.Background()
+	g := &fakeSUGit{head: "A", origin: "B", ancestors: map[string]bool{"A<B": true}}
+	u, _ := newFakeUpdater(t, g, "A")
+	gotRev := ""
+	u.build = func(_ context.Context, _, _, rev string) (string, error) {
+		gotRev = rev
+		return "", nil
+	}
+	p, _ := u.prepare(ctx)
+	b, err := u.buildNew(ctx, p)
+	if err != nil || b.Target == "" || gotRev != b.Target {
+		t.Fatalf("build must receive the target revision: rev=%q target=%q err=%v", gotRev, b.Target, err)
+	}
+}
+
+func TestRevisionFromSettings(t *testing.T) {
+	ld := debug.BuildSetting{Key: "-ldflags", Value: `"-X main.selfUpdateRev=abc123"`}
+	if r := revisionFromSettings([]debug.BuildSetting{ld}); r != "abc123" {
+		t.Fatalf("ldflags stamp: got %q", r)
+	}
+	vcs := debug.BuildSetting{Key: "vcs.revision", Value: "def456"}
+	if r := revisionFromSettings([]debug.BuildSetting{ld, vcs}); r != "def456" {
+		t.Fatalf("vcs.revision must win: got %q", r)
+	}
+	if r := revisionFromSettings([]debug.BuildSetting{{Key: "-ldflags", Value: "-s -w"}}); r != "" {
+		t.Fatalf("unrelated ldflags: got %q", r)
 	}
 }

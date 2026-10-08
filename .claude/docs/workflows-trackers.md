@@ -901,6 +901,15 @@ commit only. Backend `self_update.go`, frontend `src/selfUpdate.mjs`.
   binary ON DISK carries a different `vcs.revision` than the running one. A
   manual `go build` (revision never equals the old target) or a finished
   self-update therefore cannot re-exec every ~56s.
+- **The new binary is stamped via `-ldflags`:** Go stamps NO `vcs.revision`
+  into a build made inside a `git worktree`, so `selfUpdateBuild`'s
+  `slash.new` carried no readable revision, `shouldExecRestart` never fired,
+  and the status hung on `restarting` until the next 6-hour check (seen as a
+  stuck "1" on the bell). `realSelfUpdateBuild` therefore builds with
+  `-ldflags "-X main.selfUpdateRev=<target>"`; `revisionFromSettings` (used by
+  both `buildRevision` and `binaryRevision`) prefers `vcs.revision` and falls
+  back to that stamp, so the restarted process also reports `running` and
+  stays self-update-enabled.
 - **Status is derived, not stored:** `GET /api/update/status`
   (`deriveSelfUpdateStatus`) reads the latest `self_update` run's status and
   history — `checking`/`building`/`notice`/`waiting`/`restarting`/`failed`/
@@ -917,12 +926,14 @@ commit only. Backend `self_update.go`, frontend `src/selfUpdate.mjs`.
   general chat overlay do not, and an unfocused half-typed field there is still
   lost on reload (accepted, known risk).
 - **UI:** the row sits at the top of both bells' dropdowns
-  (`selfUpdateSection`); the bell dot also lights for `notice`/`waiting`/
-  `restarting`, and `/pr/<id>`'s bell (hidden without Jira notifications)
-  also shows for those phases and for `failed`. Words carry the state, never
+  (`selfUpdateSection`); the bell's badge adds 1 only for something to act on
+  — `notice` or a held-back reload (`selfUpdateNeedsAttention`), never for
+  `waiting`/`restarting` (in progress, nothing to do: Reindert didn't want a
+  lone "1" on the bell next to "0 ongelezen"). Words carry the state, never
   colour alone.
 - Tests: `self_update_test.go` (fakes, no network: the prepare cases, build
-  failure, rebase conflict, apply guard, the workflow end to end incl. skip),
+  failure, rebase conflict, apply guard, the workflow end to end incl. skip,
+  the target reaching the build + `revisionFromSettings`),
   `tests/self-update-bell.spec.mjs` (stubbed status: the notice + skip, the
   reload on a new `running`).
 

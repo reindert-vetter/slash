@@ -52,6 +52,8 @@ test.describe('Self-update row in the bell', () => {
     await stubStatus(page, () => ({ ok: true, enabled: true, running, phase: 'restarting', target: 'bbbbbbb2222', busy: 0 }))
     await page.goto('/pr-overview')
     await appReady(page)
+    // An update that is only restarting needs no action: no badge on the bell.
+    await expect(page.locator('[data-testid="jira-bell-dot"]')).toHaveCount(0)
     await page.evaluate(() => (window.__beforeReload = true))
     running = 'bbbbbbb2222'
     // restarting polls every 3s; the reload wipes the marker.
