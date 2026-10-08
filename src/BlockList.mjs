@@ -183,6 +183,24 @@ export default function BlockList(state, isPrWideComposing = () => false, onReve
           ${t('startpunten')} &nbsp;·&nbsp; ${t('↑ ↓ om te kiezen · → om de diff in te stappen · ← om te zoeken')}
         </p>
         ${() => approvalSummaryLine(state)}
+        <div class="mt-2 flex gap-1" data-testid="file-filter" role="group">
+          ${() =>
+            [['all', 'Alles'], ['backend', 'Backend'], ['frontend', 'Frontend']].map(([m, label]) =>
+              html`<button
+                type="button"
+                data-testid="${'file-filter-' + m}"
+                aria-pressed="${() => String(state.fileFilter === m)}"
+                class="${() =>
+                  'rounded border px-2 py-0.5 text-xs ' +
+                  (state.fileFilter === m
+                    ? 'border-indigo-400 bg-indigo-50 font-bold text-indigo-700 dark:border-indigo-500 dark:bg-indigo-500/15 dark:text-indigo-300'
+                    : 'border-slate-300 text-slate-600 hover:bg-slate-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800')}"
+                @click="${() => state.onFileFilter && state.onFileFilter(m)}"
+              >
+                ${() => (state.fileFilter === m ? '✓ ' : '') + label}
+              </button>`.key(m),
+            )}
+        </div>
         <input
           id="block-search"
           data-testid="block-search"

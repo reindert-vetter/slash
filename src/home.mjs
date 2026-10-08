@@ -643,6 +643,10 @@ const state = reactive({
   // from the starting-points list, revealed by the "Toon N goedgekeurde blokken"
   // button at the bottom. Ephemeral UI state, not bound to the URL.
   showApproved: false,
+  // fileFilter — 'all' | 'backend' | 'frontend': hides vue/ts/js-family files
+  // (backend) or everything else (frontend) from the index. Ephemeral, not in the URL.
+  fileFilter: 'all',
+  onFileFilter: setFileFilter,
   // lineCommentsCollapsed — when true, hides the rows of the "Comments op
   // regels" section (BlockList.mjs's lineCommentHeading/renderList) without
   // touching any other toggle. Shown expanded by default (false), the
@@ -4064,7 +4068,10 @@ function recomputeLeftList() {
   // total 0 (see the general "zero changed rows" case in
   // .claude/docs/approval.md), which keeps its own index slot as before.
   const visibleBlocks = state.allBlocks.filter(
-    (b) => !hidden.has(b.id) && !(testTargetIds.has(b.id) && state.blockTotals[b.id] === 0),
+    (b) =>
+      !hidden.has(b.id) &&
+      !(testTargetIds.has(b.id) && state.blockTotals[b.id] === 0) &&
+      (isPrDescriptionBlock(b) || fileFilterAllows(state.fileFilter, b.file)),
   )
   // groupedRows is the non-comment half of the list (real blocks + the
   // synthetic test_class rows), already TEST-partitioned-last by
@@ -5060,6 +5067,19 @@ function clampSelectedToVisible() {
 
 // setSearch is the search box's input handler: refilter the left list and jump
 // the selection to the top match so ↑/↓ walk the results from the first hit.
+const FRONTEND_FILE_RE = /\.(vue|[cm]?[jt]sx?)$/i
+function fileFilterAllows(mode, file) {
+  if (mode !== 'backend' && mode !== 'frontend') return true
+  const fe = FRONTEND_FILE_RE.test(file || '')
+  return mode === 'backend' ? !fe : fe
+}
+
+function setFileFilter(mode) {
+  if (state.fileFilter === mode) return
+  state.fileFilter = mode
+  setSearch(state.search)
+}
+
 function setSearch(q) {
   state.search = q
   recomputeLeftList()

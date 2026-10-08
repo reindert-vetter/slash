@@ -1282,3 +1282,15 @@ always-visible analog clock left of the Jira bell, same size/style. Colour by
 local time: normal, orange 14:30-15:00, red 15:00-17:00, normal again from
 17:00 (`clockState`); on Tuesday/Thursday instead orange from 16:45 and red from 17:00 until midnight. Colour is the only signal by request; `data-state`
 and `title` are for tests/screen readers. Test: `tests/tree-clock.spec.mjs`.
+
+## File-type filter above the index (Alles / Backend / Frontend)
+
+`state.fileFilter` (`'all'|'backend'|'frontend'`, ephemeral, not in the URL)
+drives three buttons under the "Start" header in `BlockList.mjs`
+(`data-testid=file-filter-<mode>`, active one gets a check mark). Backend hides
+vue/ts/js-family files (`FRONTEND_FILE_RE` in `home.mjs`: `.vue`, `.js/.mjs/.cjs/.jsx`,
+`.ts/.tsx`), Frontend keeps only those. Applied in `recomputeLeftList` on
+`state.allBlocks` before `groupTestClasses`, so a test_class row follows its
+files' extension; the PR-description block and comment items are never
+filtered. Changing it goes through `setFileFilter` (re-runs `setSearch`, which
+resets the selection). Not a stop of the keyboard chain: mouse only.
