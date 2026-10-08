@@ -92,6 +92,20 @@ type qaStep struct {
 	Images  []qaImage  `json:"images"`
 	Pre     string     `json:"pre,omitempty"`
 	Table   [][]string `json:"table,omitempty"`
+	// Compare is an optional before/after pair ("Voorheen" / "Nu"), each side
+	// a mermaid diagram and/or a screenshot — see qa-page.md.
+	Compare *qaCompare `json:"compare,omitempty"`
+}
+
+type qaCompare struct {
+	Before *qaCompareSide `json:"before,omitempty"`
+	After  *qaCompareSide `json:"after,omitempty"`
+}
+
+type qaCompareSide struct {
+	Mermaid string `json:"mermaid,omitempty"`
+	Image   string `json:"image,omitempty"`
+	Caption string `json:"caption,omitempty"`
 }
 
 type qaImage struct {
@@ -430,6 +444,7 @@ const (
 	qaMaxShort     = 300
 	qaMaxTableRows = 40
 	qaMaxTableCols = 8
+	qaMaxMermaid   = 4000
 )
 
 var qaStatuses = map[string]bool{"ok": true, "warn": true, "fail": true, "info": true}
@@ -483,16 +498,14 @@ func sanitizeQAReport(rep *qaReport, runDir string) {
 		st.Body, st.Pre = cut(st.Body, qaMaxText), cut(st.Pre, qaMaxText)
 		imgs := []qaImage{}
 		for _, im := range st.Images {
-			name := filepath.Base(strings.TrimSpace(im.File))
-			if !qaImageFileRe.MatchString(name) || len(imgs) >= qaMaxImages {
-				continue
-			}
-			if fi, err := os.Stat(filepath.Join(runDir, name)); err != nil || fi.IsDir() {
+			name := qaRunImage(im.File, runDir)
+			if name == "" || len(imgs) >= qaMaxImages {
 				continue
 			}
 			imgs = append(imgs, qaImage{File: name, Caption: cut(im.Caption, qaMaxShort)})
 		}
 		st.Images = imgs
+		st.Compare = sanitizeQACompare(st.Compare, runDir, cut)
 		if len(st.Table) > qaMaxTableRows {
 			st.Table = st.Table[:qaMaxTableRows]
 		}
@@ -505,6 +518,47 @@ func sanitizeQAReport(rep *qaReport, runDir string) {
 			}
 		}
 	}
+}
+
+// qaRunImage returns the plain file name when it names a screenshot present in
+// the run dir, else "" (a path, a missing file, a wrong extension).
+func qaRunImage(file, runDir string) string {
+	name := filepath.Base(strings.TrimSpace(file))
+	if !qaImageFileRe.MatchString(name) {
+		return ""
+	}
+	if fi, err := os.Stat(filepath.Join(runDir, name)); err != nil || fi.IsDir() {
+		return ""
+	}
+	return name
+}
+
+// sanitizeQACompare bounds a step's before/after pair. A mermaid source over
+// qaMaxMermaid is DROPPED rather than cut: a truncated diagram never parses.
+// An empty side becomes nil, a pair without sides nil.
+func sanitizeQACompare(c *qaCompare, runDir string, cut func(string, int) string) *qaCompare {
+	if c == nil {
+		return nil
+	}
+	side := func(sd *qaCompareSide) *qaCompareSide {
+		if sd == nil {
+			return nil
+		}
+		m := strings.TrimSpace(sd.Mermaid)
+		if len(m) > qaMaxMermaid {
+			m = ""
+		}
+		out := &qaCompareSide{Mermaid: m, Image: qaRunImage(sd.Image, runDir), Caption: cut(sd.Caption, qaMaxShort)}
+		if out.Mermaid == "" && out.Image == "" {
+			return nil
+		}
+		return out
+	}
+	c.Before, c.After = side(c.Before), side(c.After)
+	if c.Before == nil && c.After == nil {
+		return nil
+	}
+	return c
 }
 
 // removeQAArtifactsForPR deletes a purged PR's screenshot directories

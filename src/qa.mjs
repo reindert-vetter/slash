@@ -1,6 +1,7 @@
 // qa.mjs — the /qa/<pr> page: "laat deze PR testen in de admin". A QA report
-// produced by the qa_run workflow (qa_run.go), shown as a step viewer whose
-// steps are COLUMNS that continue to the right (→/←), with a comments dock at
+// produced by the qa_run workflow (qa_run.go), shown as a step viewer that
+// shows ONE step at a time (→/←, a dot strip in the header, before/after
+// pairs with mermaid diagrams), with a comments dock at
 // the bottom (comment per step + a Claude chat on a comment). Reviewer request
 // + the example it was modelled on: see .claude/docs/qa-page.md.
 //
@@ -20,6 +21,7 @@ import { initSelfUpdate } from './selfUpdate.mjs'
 import { settingsButton } from './settingsLink.mjs'
 import { bindUrlState, num } from './urlState.mjs'
 import { claudeStatusText } from './ClaudeChat.mjs'
+import { diagramHTML } from './mermaidLoader.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 // The ONE global "er is werk mislukt" dialog (src/failedTasks.mjs) — also on
 // this page, so a failed GitHub post or review never goes unnoticed here.
@@ -116,9 +118,6 @@ const state = reactive({
   roundRef: '',
   // step — the focused column: 0 = Overzicht, n = step n of the round.
   step: 0,
-  // cardFull — Enter on the columns: every card shows its full height (no
-  // inner scroll) and the column row scrolls vertically instead.
-  cardFull: false,
   startBusy: false,
   startError: '',
   tick: 0, // the QA status line's elapsed-seconds counter
@@ -556,11 +555,10 @@ function dockOpen() {
 function goStep(n) {
   const max = stepCount()
   state.step = Math.max(0, Math.min(max, n))
+  // The stage shows one step at a time: a new step starts at its top.
   requestAnimationFrame(() => {
-    const el = document.querySelector(`[data-qa-col="${state.step}"]`)
-    // inline:'start' on purpose: this IS the one horizontal "follow the
-    // focused column" scroll (arrowjs-pitfalls.md's scrollIntoView rule).
-    if (el) el.scrollIntoView({ inline: 'start', block: 'nearest', behavior: 'smooth' })
+    const main = document.querySelector('[data-testid=qa-stage]')
+    if (main) main.scrollTop = 0
   })
 }
 
@@ -654,16 +652,14 @@ function onKeydown(e) {
     return
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return
-  const main = document.querySelector('[data-testid=qa-columns]')
+  const main = document.querySelector('[data-testid=qa-stage]')
+  const atBottom = !main || main.scrollTop + main.clientHeight >= main.scrollHeight - 2
   if (e.key === 'ArrowRight') goStep(state.step + 1)
   else if (e.key === 'ArrowLeft') goStep(state.step - 1)
-  else if (e.key === 'Enter') state.cardFull = !state.cardFull
-  else if (e.key === 'Escape' && state.cardFull) state.cardFull = false
-  // Full height: ↑/↓ scroll the columns first; ↓ at the bottom opens the dock.
-  else if (e.key === 'ArrowUp' && state.cardFull && main) main.scrollBy({ top: -main.clientHeight * 0.8, behavior: 'smooth' })
-  else if (e.key === 'ArrowDown' && state.cardFull && main && main.scrollTop + main.clientHeight < main.scrollHeight - 2) {
-    main.scrollBy({ top: main.clientHeight * 0.8, behavior: 'smooth' })
-  } else if (e.key === 'ArrowDown') openDock()
+  // ↑/↓ scroll the stage first; ↓ at its bottom opens the dock.
+  else if (e.key === 'ArrowUp' && main) main.scrollBy({ top: -main.clientHeight * 0.8, behavior: 'smooth' })
+  else if (e.key === 'ArrowDown' && !atBottom) main.scrollBy({ top: main.clientHeight * 0.8, behavior: 'smooth' })
+  else if (e.key === 'ArrowDown') openDock()
   else if (e.key === '/' || e.key === 'c') focusComposer()
   else return
   e.preventDefault()
@@ -671,9 +667,6 @@ function onKeydown(e) {
 
 // ---------------------------------------------------------------- rendering
 
-const CARD = 'rounded-xl border bg-white ring-1 ring-black/5 dark:bg-zinc-900 '
-const CARD_IDLE = 'border-slate-200 dark:border-zinc-800'
-const CARD_FOCUS = 'border-indigo-400 ring-2 ring-indigo-400/40 dark:border-indigo-500'
 
 // STATUS: glyph + word, never colour alone (Reindert is colourblind).
 const STATUS = {
@@ -723,11 +716,11 @@ function tableHTML(rows) {
 function imagesHTML(images) {
   if (!Array.isArray(images) || !images.length) return ''
   return (
-    '<div class="markdown-body flex flex-col gap-3">' +
+    '<div class="markdown-body flex flex-wrap items-start gap-3">' +
     images
       .map(
         (im) =>
-          '<figure class="m-0 flex flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-zinc-800 dark:bg-zinc-950">' +
+          '<figure class="m-0 flex min-w-0 max-w-full grow basis-[22rem] flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-2.5 dark:border-zinc-800 dark:bg-zinc-900">' +
           '<img data-md-image="true" data-testid="qa-image" class="block w-full cursor-zoom-in rounded border border-slate-200 bg-white dark:border-zinc-800" src="' +
           esc(imageUrl(im.file)) + '" alt="' + esc(im.caption || im.file) + '" loading="lazy">' +
           (im.caption ? '<figcaption class="text-[12px] text-slate-500 dark:text-zinc-400">' + esc(im.caption) + '</figcaption>' : '') +
@@ -738,62 +731,96 @@ function imagesHTML(images) {
   )
 }
 
-function colCls(i, width) {
-  return 'flex shrink-0 snap-start flex-col overflow-hidden ' + (state.cardFull ? 'h-auto ' : '') + width + ' ' + CARD + (state.step === i && !dockOpen() ? CARD_FOCUS : CARD_IDLE)
-}
-
-function bodyCls() {
-  return state.cardFull ? 'flex flex-col gap-3 px-4 py-3' : 'no-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3'
-}
-
-// fullToggle: the Enter hint on the focused card, clickable (a click runs the
-// same function the key runs). Always the same element, only its text/class move.
-function fullToggle(i) {
-  return html`<button
-    type="button"
-    data-testid="qa-card-full"
-    class="${() => (state.step === i ? 'rounded px-1.5 text-[11px] text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800' : 'hidden')}"
-    @click="${(e) => {
-      e.stopPropagation()
-      leaveDock()
-      state.cardFull = !state.cardFull
-    }}"
-  >${() => (state.cardFull ? t('↵ inklappen') : t('↵ volledige hoogte'))}</button>`
-}
-
 function commentBadge(i) {
   const n = commentCountFor(i)
   return n ? t(n === 1 ? '{n} comment' : '{n} comments', { n }) : ''
 }
 
-function stepColumn(s, i, groupLabel) {
-  return html`
-    <section
-      class="${() => colCls(i, 'w-[44rem]')}"
-      data-qa-col="${String(i)}"
-      data-testid="qa-step"
-      @click="${() => {
-        leaveDock()
-        if (state.step !== i) goStep(i)
-      }}"
-    >
-      <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2 dark:border-zinc-800/60">
-        <span class="font-mono text-[11px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400"
-          >${String(i) + '. ' + (s.eyebrow || groupLabel || '')}</span
-        >
-        <span class="ml-auto text-[11px] text-slate-400 dark:text-zinc-500" data-testid="qa-step-comments">${() => commentBadge(i)}</span>
-        ${fullToggle(i)}
-      </div>
-      <div class="${() => bodyCls()}">
-        <h2 class="text-lg font-bold leading-snug text-slate-900 dark:text-zinc-100" data-testid="qa-step-title">${s.title || ''}</h2>
-        <div>${chip(s.status)}</div>
-        <div class="markdown-body text-[14px] leading-relaxed" .innerHTML="${() => renderMarkdown(s.body || '')}"></div>
-        <div .innerHTML="${() => (s.pre ? '<pre class="overflow-x-auto rounded-lg bg-slate-100 p-3 text-[12px] leading-relaxed dark:bg-zinc-950">' + esc(s.pre) + '</pre>' : '')}"></div>
-        <div .innerHTML="${() => tableHTML(s.table)}"></div>
-        <div .innerHTML="${() => imagesHTML(s.images)}"></div>
-      </div>
-    </section>
-  `
+// The stage (qa-page.md, "the artifact look"): ONE step at a time over the
+// full width, like the example artifact — eyebrow · title · chip on one row,
+// then either the before/after pair ("Voorheen" / "Nu") with the notes below
+// it, or notes left and evidence right, or (no screenshots) one notes card.
+const PANEL = 'rounded-xl border border-slate-200 bg-white ring-1 ring-black/5 dark:border-zinc-800 dark:bg-zinc-900'
+
+function preHTML(pre) {
+  return pre ? '<pre class="overflow-x-auto rounded-lg bg-slate-100 p-3 text-[12px] leading-relaxed dark:bg-zinc-950">' + esc(pre) + '</pre>' : ''
+}
+
+function stepHead(s, i, groupLabel) {
+  return html`<div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+    <span class="font-mono text-[12px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">${String(i) + '. ' + (s.eyebrow || groupLabel || '')}</span>
+    <h2 class="text-2xl font-bold leading-snug text-slate-900 dark:text-zinc-100" data-testid="qa-step-title">${s.title || ''}</h2>
+    ${chip(s.status)}
+    <span class="${s.compare ? 'inline-flex shrink-0 items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300' : 'hidden'}" data-testid="qa-compare-chip"><span aria-hidden="true">⇄</span>${t('Voor/na')}</span>
+    <span class="ml-auto text-[12px] text-slate-400 dark:text-zinc-500" data-testid="qa-step-comments">${() => commentBadge(i)}</span>
+  </div>`
+}
+
+// notesCard: the explanation; `withEvidence` also carries pre + table (the
+// layouts without a separate evidence column).
+function notesCard(s, withEvidence, cls) {
+  return html`<section class="${'flex min-w-0 flex-col gap-3 p-5 ' + PANEL + ' ' + cls}" data-testid="qa-notes">
+    <div class="markdown-body text-[15px] leading-relaxed" .innerHTML="${() => renderMarkdown(s.body || '')}"></div>
+    <div .innerHTML="${() => (withEvidence ? preHTML(s.pre) : '')}"></div>
+    <div .innerHTML="${() => (withEvidence ? tableHTML(s.table) : '')}"></div>
+  </section>`
+}
+
+// compareSideHTML: one half of the before/after pair — a mermaid diagram
+// (rendered lazily, mermaidLoader.mjs) and/or a screenshot. A missing
+// "before" means the thing did not exist yet.
+function compareSideHTML(sd) {
+  if (!sd) return '<p class="py-6 text-center text-[13px] text-slate-400 dark:text-zinc-500">' + esc(t('Bestond nog niet')) + '</p>'
+  let out = ''
+  if (sd.mermaid) out += diagramHTML(sd.mermaid)
+  if (sd.image) {
+    out += '<img data-md-image="true" data-testid="qa-image" class="block w-full cursor-zoom-in rounded border border-slate-200 bg-white dark:border-zinc-800" src="' +
+      esc(imageUrl(sd.image)) + '" alt="' + esc(sd.caption || sd.image) + '" loading="lazy">'
+  }
+  if (sd.caption) out += '<p class="text-[12px] text-slate-500 dark:text-zinc-400">' + esc(sd.caption) + '</p>'
+  return out
+}
+
+function compareSide(label, side, sd) {
+  return html`<figure class="${'m-0 flex min-w-0 flex-col gap-2 p-3 ' + PANEL}" data-testid="qa-compare-side" data-side="${side}">
+    <figcaption class="text-[12px] font-semibold uppercase tracking-wide text-slate-600 dark:text-zinc-300">${label}</figcaption>
+    <div class="flex flex-col gap-2" .innerHTML="${() => compareSideHTML(sd)}"></div>
+  </figure>`
+}
+
+function compareLayout(s) {
+  const c = s.compare || {}
+  return html`<div class="flex flex-col gap-4">
+    <div class="markdown-body grid grid-cols-1 gap-4 md:grid-cols-2" data-testid="qa-compare">
+      ${compareSide(t('Voorheen'), 'before', c.before)} ${compareSide(t('Nu'), 'after', c.after)}
+    </div>
+    ${notesCard(s, true, '')}
+    <div .innerHTML="${() => imagesHTML(s.images)}"></div>
+  </div>`
+}
+
+function paneLayout(s) {
+  return html`<div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+    ${notesCard(s, false, '')}
+    <div class="flex min-w-0 flex-col gap-3">
+      <div .innerHTML="${() => imagesHTML(s.images)}"></div>
+      <div .innerHTML="${() => preHTML(s.pre)}"></div>
+      <div .innerHTML="${() => tableHTML(s.table)}"></div>
+    </div>
+  </div>`
+}
+
+function textLayout(s) {
+  return html`<div class="flex">${notesCard(s, true, 'w-full max-w-4xl')}</div>`
+}
+
+function stepPage(s, i, groupLabel) {
+  // The layout is picked through a function binding with a stable wrapper,
+  // never a static template↔template slot (arrowjs-pitfalls.md).
+  return html`<section class="mx-auto flex w-full max-w-[1440px] flex-col gap-4" data-qa-col="${String(i)}" data-testid="qa-step">
+    ${stepHead(s, i, groupLabel)}
+    <div class="contents">${() => (s.compare ? compareLayout(s) : (s.images || []).length ? paneLayout(s) : textLayout(s))}</div>
+  </section>`
 }
 
 // progressBlock: the outer slot only picks the SHAPE (running / error /
@@ -881,29 +908,15 @@ function startCard() {
   </div>`
 }
 
-function overviewColumn() {
-  return html`
-    <section
-      class="${() => colCls(0, 'w-[40rem]')}"
-      data-qa-col="0"
-      data-testid="qa-overview"
-      @click="${() => {
-        leaveDock()
-        if (state.step !== 0) goStep(0)
-      }}"
-    >
-      <div class="flex items-center gap-2 border-b border-slate-100 px-4 py-2 dark:border-zinc-800/60">
-        <span class="font-mono text-[11px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">${() => '0. ' + t('Overzicht')}</span>
-        <span class="ml-auto text-[11px] text-slate-400 dark:text-zinc-500">${() => commentBadge(0)}</span>
-        ${fullToggle(0)}
-      </div>
-      <div class="${() => bodyCls()}">
-        ${progressBlock()}
-        <div class="contents">${() => overviewBody()}</div>
-        ${startCard()}
-      </div>
-    </section>
-  `
+function overviewPage() {
+  return html`<section class="mx-auto flex w-full max-w-4xl flex-col gap-3" data-qa-col="0" data-testid="qa-overview">
+    <span class="font-mono text-[12px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">${() => '0. ' + t('Overzicht')}</span>
+    <div class="${'flex flex-col gap-3 p-5 ' + PANEL}">
+      ${progressBlock()}
+      <div class="contents">${() => overviewBody()}</div>
+      ${startCard()}
+    </div>
+  </section>`
 }
 
 function overviewBody() {
@@ -970,13 +983,51 @@ function overviewBody() {
   ]
 }
 
-function columns() {
-  const r = currentRound()
-  const rep = currentReport()
+function groupLabels() {
   const groups = {}
-  ;((rep && rep.groups) || []).forEach((g) => (groups[g.id] = g.label))
-  const out = [overviewColumn().key('col:' + (r ? r.runId : '-') + ':0')]
-  steps().forEach((s, k) => out.push(stepColumn(s, k + 1, groups[s.group] || '').key('col:' + r.runId + ':' + (k + 1))))
+  ;((currentReport() || {}).groups || []).forEach((g) => (groups[g.id] = g.label))
+  return groups
+}
+
+// stage: always an array of one keyed page (a stable slot shape).
+function stage() {
+  const r = currentRound()
+  const all = steps()
+  const i = Math.min(state.step, all.length)
+  if (!i) return [overviewPage().key('page:' + (r ? r.runId : '-') + ':0')]
+  const s = all[i - 1]
+  return [stepPage(s, i, groupLabels()[s.group] || '').key('page:' + r.runId + ':' + i)]
+}
+
+// stepStrip: one dot per page (Overzicht first), grouped by the report's
+// groups. A dot carries the status GLYPH and a title — never colour alone.
+function stepStrip() {
+  const rep = currentReport()
+  if (!rep) return []
+  const labels = groupLabels()
+  const dot = (i, glyph, title, ring) =>
+    html`<button
+      type="button"
+      data-testid="qa-dot"
+      data-current="${state.step === i ? 'true' : 'false'}"
+      title="${title}"
+      aria-label="${title}"
+      class="${'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-[10px] font-bold leading-none ' + (state.step === i ? 'scale-125 border-indigo-500 bg-indigo-500 text-white' : ring + ' bg-white hover:border-indigo-400 dark:bg-zinc-900')}"
+      @click="${() => {
+        leaveDock()
+        goStep(i)
+      }}"
+    ><span aria-hidden="true">${glyph}</span></button>`.key('dot:' + i + ':' + (state.step === i ? 1 : 0))
+  const RING = { ok: 'border-emerald-500 text-emerald-700 dark:text-emerald-300', warn: 'border-amber-500 text-amber-700 dark:text-amber-300', fail: 'border-rose-500 text-rose-700 dark:text-rose-300', info: 'border-slate-300 text-slate-500 dark:border-zinc-600 dark:text-zinc-400' }
+  const out = [dot(0, '·', '0. ' + t('Overzicht'), RING.info)]
+  let last = null
+  ;(rep.steps || []).forEach((s, k) => {
+    if (s.group && s.group !== last && labels[s.group]) {
+      out.push(html`<span class="ml-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${labels[s.group]}</span>`.key('grp:' + k + ':' + s.group))
+    }
+    last = s.group
+    out.push(dot(k + 1, statusOf(s.status).glyph, k + 1 + '. ' + (s.title || ''), RING[s.status] || RING.info))
+  })
   return out
 }
 
@@ -997,16 +1048,43 @@ function roundButtons() {
   })
 }
 
+function navBtn(testid, label, aria, delta) {
+  return html`<button
+    type="button"
+    data-testid="${testid}"
+    aria-label="${aria}"
+    disabled="${() => (delta < 0 ? state.step <= 0 : state.step >= stepCount())}"
+    class="rounded-lg border border-slate-300 bg-white px-3 py-1 text-[15px] hover:border-indigo-400 hover:text-indigo-600 disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:text-indigo-300"
+    @click="${() => {
+      leaveDock()
+      goStep(state.step + delta)
+    }}"
+  >${label}</button>`
+}
+
+// header: the artifact's one-line head — kicker + title left, the step dots
+// in the middle, ← n / N → right.
 function header() {
-  return html`<header class="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-200 px-5 py-2.5 dark:border-zinc-800">
+  return html`<header class="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-b border-slate-200 px-5 py-2.5 dark:border-zinc-800">
     <a href="${'/pr/' + PR}" class="rounded px-2 py-1 text-[13px] text-slate-500 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800" data-testid="qa-back">← ${t('Review-boom')}</a>
-    <div class="flex min-w-0 flex-col">
-      <span class="font-mono text-[11px] uppercase tracking-wide text-slate-500 dark:text-zinc-400">${() => t('QA-test in admin · PR #{pr}', { pr: PR })}</span>
-      <span class="truncate text-[14px] font-semibold">${() => state.prTitle}</span>
+    <div class="flex min-w-0 items-baseline gap-3">
+      <span class="shrink-0 font-mono text-[12px] uppercase tracking-wide text-slate-500 dark:text-zinc-400" data-testid="qa-kicker">${() => {
+        const rep = currentReport()
+        return (rep && rep.kicker) || t('QA-test in admin · PR #{pr}', { pr: PR })
+      }}</span>
+      <span class="truncate text-[17px] font-bold" data-testid="qa-title">${() => {
+        const rep = currentReport()
+        return (rep && rep.title) || state.prTitle
+      }}</span>
     </div>
-    <div class="flex flex-wrap items-center gap-1.5">${() => roundButtons()}</div>
-    <span class="ml-auto font-mono text-[12px] text-slate-500 dark:text-zinc-400" data-testid="qa-counter">${() => (stepCount() ? state.step + ' / ' + stepCount() : '')}</span>
-    ${themeToggleButton('')} ${settingsButton('')}
+    <nav class="flex flex-wrap items-center gap-1.5" data-testid="qa-strip" aria-label="${t('Stappen')}">${() => stepStrip()}</nav>
+    <div class="ml-auto flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-1.5">${() => roundButtons()}</div>
+      ${navBtn('qa-prev', '←', t('Vorige stap'), -1)}
+      <span class="min-w-[4rem] text-center font-mono text-[13px] text-slate-500 dark:text-zinc-400" data-testid="qa-counter">${() => (stepCount() ? state.step + ' / ' + stepCount() : '')}</span>
+      ${navBtn('qa-next', '→', t('Volgende stap'), 1)}
+      ${themeToggleButton('')} ${settingsButton('')}
+    </div>
   </header>`
 }
 
@@ -1074,8 +1152,8 @@ function dock() {
 function App() {
   return html`<div class="fixed inset-0 flex flex-col">
     ${header()}
-    <main class="${() => 'flex min-h-0 flex-1 snap-x gap-5 overflow-x-auto p-5 ' + (state.cardFull ? 'items-start overflow-y-auto' : 'items-stretch overflow-y-hidden')}" data-testid="qa-columns" data-full="${() => (state.cardFull ? 'true' : 'false')}">
-      ${() => columns()}
+    <main class="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-5 dark:bg-zinc-950" data-testid="qa-stage">
+      ${() => stage()}
     </main>
     ${dock()}
   </div>`

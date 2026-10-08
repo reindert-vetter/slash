@@ -104,3 +104,34 @@ func TestQARunDirIsAbsoluteForARelativeDataDir(t *testing.T) {
 		t.Errorf("the MCP --output-dir must carry the absolute run dir")
 	}
 }
+
+func TestSanitizeQAReportBoundsTheBeforeAfterCompare(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "after.png"), []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := "Klaar.\n\n```json\n" + `{"title":"QA","steps":[
+		{"title":"Wat verandert er","status":"info","compare":{
+			"before":{"mermaid":"flowchart LR\n  A-->B","caption":"Voorheen"},
+			"after":{"mermaid":"flowchart LR\n  A-->C","image":"after.png"}}},
+		{"title":"Alleen kapotte kanten","status":"ok","compare":{
+			"before":{"image":"../missing.png"},
+			"after":{"mermaid":"` + strings.Repeat("x", qaMaxMermaid+1) + `"}}},
+		{"title":"Alleen na","status":"ok","compare":{"after":{"image":"after.png"}}}
+	]}` + "\n```"
+	rep, err := parseQAReport(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sanitizeQAReport(rep, dir)
+	c := rep.Steps[0].Compare
+	if c == nil || c.Before == nil || c.After == nil || c.Before.Mermaid != "flowchart LR\n  A-->B" || c.After.Image != "after.png" || c.Before.Caption != "Voorheen" {
+		t.Fatalf("compare not kept: %+v", c)
+	}
+	if rep.Steps[1].Compare != nil {
+		t.Fatalf("a missing image and an oversized diagram should drop the whole pair: %+v", rep.Steps[1].Compare)
+	}
+	if c := rep.Steps[2].Compare; c == nil || c.Before != nil || c.After == nil {
+		t.Fatalf("an after-only pair should stay after-only: %+v", c)
+	}
+}

@@ -1,7 +1,8 @@
 import { test, expect, appReady, seededPr } from './_fixtures.mjs'
 
 // The /qa/<pr> page (src/qa.mjs, .claude/docs/qa-page.md): a QA report of the
-// qa_run workflow as columns that continue to the right, with a comments dock
+// qa_run workflow as a one-step-at-a-time stage (dot strip, ←/→, before/after
+// pairs with mermaid diagrams), with a comments dock
 // at the bottom scoped to the focused step — the review tree's own
 // RelatedPanel comment + Claude block, with the tree's own menus. The report
 // itself is mocked (a real qa_run drives a browser against the local admin);
@@ -9,7 +10,7 @@ import { test, expect, appReady, seededPr } from './_fixtures.mjs'
 // per-worker server.
 const RUN = 'abcdef0123456789abcdef01'
 
-function mockQA(page, pr) {
+function mockQA(page, pr, ...extraSteps) {
   return page.route(`**/api/qa?pr=${pr}*`, (route) =>
     route.fulfill({
       json: {
@@ -35,6 +36,7 @@ function mockQA(page, pr) {
                 steps: [
                   { group: 'r1', status: 'ok', eyebrow: 'Scenario 1', title: 'Pauzeren midden in het traject', body: 'Tag **Paused**.', images: [] },
                   { group: 'r1', status: 'warn', eyebrow: 'Bevinding', title: 'Cron een dag later', body: 'Zie tijd.', pre: 'cron 25-10 → niets', images: [] },
+                  ...extraSteps,
                 ],
               },
             },
@@ -59,7 +61,7 @@ async function placeLocal(page, text) {
 
 const comments = (page) => page.getByTestId('inline-comments').getByTestId('comment-item')
 
-test('steps are columns to the right, the comments dock follows the step, and the step survives a refresh', async ({ page }, testInfo) => {
+test('→ walks the steps on the stage, the comments dock follows the step, and the step survives a refresh', async ({ page }, testInfo) => {
   const pr = seededPr(testInfo)
   await mockQA(page, pr)
   await page.goto(`/qa/${pr}`)
@@ -69,7 +71,9 @@ test('steps are columns to the right, the comments dock follows the step, and th
   await expect(overview).toContainText('QA: gepauzeerd traject')
   // A deviation from the assignment is on the FIRST page, named in words.
   await expect(page.getByTestId('qa-deviations')).toContainText('Mailpit was niet bereikbaar')
-  await expect(page.getByTestId('qa-step')).toHaveCount(2)
+  // One page at a time: the overview, no step yet; a dot per page.
+  await expect(page.getByTestId('qa-step')).toHaveCount(0)
+  await expect(page.getByTestId('qa-dot')).toHaveCount(3)
   await expect(page.getByTestId('qa-dock-title')).toContainText('Overzicht')
 
   await page.keyboard.press('ArrowRight')
@@ -152,7 +156,7 @@ test('the Claude chat sits right of the comment thread; a first message on an em
   await page.keyboard.press('Escape')
 })
 
-test('the dock stays collapsed until ↓, and Enter shows the cards at full height', async ({ page }, testInfo) => {
+test('the dock stays collapsed until ↓', async ({ page }, testInfo) => {
   const pr = seededPr(testInfo)
   await mockQA(page, pr)
   let chatStarts = 0
@@ -183,15 +187,54 @@ test('the dock stays collapsed until ↓, and Enter shows the cards at full heig
   await expect(panel).toBeHidden()
   expect(chatStarts).toBe(0)
 
-  // Enter: full height (no inner scroll), the column row scrolls instead.
-  const cols = page.getByTestId('qa-columns')
-  await expect(cols).toHaveAttribute('data-full', 'false')
-  await page.keyboard.press('Enter')
-  await expect(cols).toHaveAttribute('data-full', 'true')
-  await expect(page.getByTestId('qa-card-full').filter({ visible: true })).toHaveText(/inklappen/)
-  await page.keyboard.press('Enter')
-  await expect(cols).toHaveAttribute('data-full', 'false')
-  await page.keyboard.press('Enter')
-  await page.keyboard.press('Escape')
-  await expect(cols).toHaveAttribute('data-full', 'false')
+})
+
+test('the header strip and ←/→ buttons navigate, and a before/after pair renders two mermaid diagrams', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  await mockQA(page, pr, {
+    group: 'r1',
+    status: 'info',
+    eyebrow: 'Backend',
+    title: 'Wat verandert er',
+    body: 'De flow.',
+    images: [],
+    compare: {
+      before: { mermaid: 'flowchart LR\n  A[Hervatten] --> B[nu + 1 dag]', caption: 'Oud' },
+      after: { mermaid: 'flowchart LR\n  A[Hervatten] --> B[morgen 00:00]' },
+    },
+  }, {
+    group: 'r1',
+    status: 'warn',
+    title: 'Kapot diagram',
+    images: [],
+    compare: { after: { mermaid: 'this is not mermaid ((' } },
+  })
+  await page.goto(`/qa/${pr}`)
+  await appReady(page)
+
+  await expect(page.getByTestId('qa-prev')).toBeDisabled()
+  await page.getByTestId('qa-next').click()
+  await expect(page.getByTestId('qa-counter')).toHaveText('1 / 4')
+  await expect(page.getByTestId('qa-step-title')).toHaveText('Pauzeren midden in het traject')
+  // A dot jumps straight to its step; it carries the status glyph, not only a colour.
+  const dot = page.getByTestId('qa-dot').nth(3)
+  await expect(dot).toHaveText('i')
+  await dot.click()
+  await expect(page.getByTestId('qa-counter')).toHaveText('3 / 4')
+  await expect(page.getByTestId('qa-dot').nth(3)).toHaveAttribute('data-current', 'true')
+
+  const cmp = page.getByTestId('qa-compare')
+  await expect(cmp.getByTestId('qa-compare-side')).toHaveCount(2)
+  await expect(cmp.locator('[data-side=before] figcaption')).toHaveText('Voorheen')
+  await expect(cmp.locator('[data-side=after] figcaption')).toHaveText('Nu')
+  await expect(cmp.getByTestId('qa-diagram').locator('svg')).toHaveCount(2)
+  await expect(cmp.locator('[data-side=after]')).toContainText('morgen 00:00')
+
+  // A diagram that does not parse says so in words and shows its source.
+  await page.keyboard.press('ArrowRight')
+  const side = page.getByTestId('qa-compare')
+  await expect(side.locator('[data-side=before]')).toContainText('Bestond nog niet')
+  await expect(side.getByTestId('qa-diagram-error')).toBeVisible()
+  await expect(side).toContainText('this is not mermaid')
+  await expect(page.getByTestId('qa-next')).toBeDisabled()
 })

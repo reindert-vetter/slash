@@ -80,6 +80,26 @@ na te spelen. Liever te veel dan te weinig:
 - een stap met alleen shell-uitvoer mag zonder screenshot, maar zet de
   relevante uitvoer dan in `pre`.
 
+## Voor/na-vergelijking (`compare`)
+
+De pagina toont een stap met `compare` als twee panelen naast elkaar,
+"Voorheen" en "Nu". Elke kant is een mermaid-diagram en/of een screenshot.
+
+- **Backend veranderd** (een flow, query, job, workflow, beslisregel, wat er
+  wordt opgeslagen of verstuurd): maak in de opzet-groep een stap
+  "Wat verandert er" met in `compare` twee mermaid-diagrammen: de flow vóór
+  de PR (lees de base-kant van de diff) en erna. Doe hetzelfde bij elke
+  andere stap waar een voor/na-diagram het gedrag duidelijker maakt dan
+  tekst. Een backend-PR zonder diagram is een gemiste kans.
+- **UI veranderd:** zet het screenshot-paar van vóór en na de handeling in
+  `compare` (`image`), in plaats van los in `images`.
+- Mermaid-regels: `flowchart LR/TD`, `sequenceDiagram` of `stateDiagram-v2`;
+  hooguit ~15 knopen per kant; geef gelijke dingen links en rechts dezelfde
+  knoopnaam, zodat alleen het verschil opvalt; gewone tekst in labels (geen
+  HTML, zet een label met haakjes of leestekens tussen `"..."`); maximaal
+  4000 tekens per diagram. Teken alleen wat de diff echt laat zien.
+- Bestond iets voorheen niet, laat `before` dan weg.
+
 ## Voortgang
 
 Meld tijdens het werk, elk op een eigen regel:
@@ -111,7 +131,11 @@ Sluit af met PRECIES één ```json-codeblok, en daarna niets meer. Vorm:
       "body": "<markdown: wat je deed en wat je zag>",
       "images": [{"file": "<bestandsnaam in de screenshotmap>", "caption": "<bijschrift>"}],
       "pre": "<optioneel: commando's en hun relevante output>",
-      "table": [["kop1", "kop2"], ["cel", "cel"]]
+      "table": [["kop1", "kop2"], ["cel", "cel"]],
+      "compare": {
+        "before": {"mermaid": "flowchart LR\n  A[Hervatten] --> B[remind_at = nu + 1 dag]", "caption": "<optioneel>"},
+        "after": {"mermaid": "flowchart LR\n  A[Hervatten] --> B[remind_at = morgen 00:00]", "image": "<optioneel: bestandsnaam>"}
+      }
     }
   ]
 }

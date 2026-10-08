@@ -2,8 +2,8 @@
 
 Claude tests a PR by hand in the locally running Plug&Pay stack (mostly the
 admin) and writes a step-by-step QA report with explanations and screenshots.
-The `/qa/<pr>` page shows that report: the steps are columns that continue to
-the right, and a comments dock sits at the bottom where the reviewer comments
+The `/qa/<pr>` page shows that report one step at a time (like the example
+artifact), and a comments dock sits at the bottom where the reviewer comments
 on a step and chats with Claude about it, the same way as in the review tree.
 
 Reviewer request, verbatim: *"ik wil net als deze artifact een pr kunnen laten
@@ -74,7 +74,13 @@ The reviewer's answers to the plan questions:
 - **The report:** the LAST ` ```json ` fence of the answer (`parseQAReport`).
   `sanitizeQAReport` bounds every field, normalizes the status to
   `ok|warn|fail|info`, and drops every image that is not a plain file name
-  present in the run dir. The report is the run's **recorded workflow
+  present in the run dir. An optional per-step `compare` (`before`/`after`,
+  each a `mermaid` source and/or an `image` plus `caption`) goes through
+  `sanitizeQACompare`: the image follows the same rules, a mermaid source over
+  `qaMaxMermaid` (4000) is **dropped** rather than cut (a truncated diagram
+  never parses), an empty side becomes nil. The prompt asks for a mermaid
+  before/after step ("Wat verandert er") whenever the diff changes backend
+  behaviour, and for a UI screenshot pair as `compare`. The report is the run's **recorded workflow
   result**. There is no module and no read model: `GET /api/qa` reads the
   tembed store (`engine.Runs()` + `Input` + `Result`).
 - **Determinism:** the round number and the previous round's run id are
@@ -141,20 +147,50 @@ uploading enzo"*. Also reused: `workDirOverlay.mjs`, `imageLightbox.mjs`,
 `markdown.mjs`, `codeCopy.mjs`, `dictation.mjs`, `CommandMenu.mjs`,
 `theme.mjs`, `settingsLink.mjs`, `urlState.mjs`.
 
-- **Header:** a back link to `/pr/<pr>`, the PR title, one button per round
-  (`○`/`●` plus a word: `loopt`, `mislukt`, `geen verslag`), a `n / N` counter,
-  and the theme and settings buttons.
-- **Columns** (`qa-columns`, horizontally scrolling):
-  - **Column 0, "Overzicht"** (`qa-overview`): the live progress while running
+### The stage: the artifact look
+
+Reviewer request (round 2): *"laat de qa pagina veel meer lijken op de
+artifact. gebruik mermaid diagrammen om voor en na situaties beter te
+begrijpen als in de backend dingen zijn aangepast. je mag zelf komende vragen
+beantwoorden wat het meest logisch zijn"* — reference screenshot
+`data/review-shots/task8-qa-artifact-look.png`. The earlier columns that
+continued to the right are gone (and with them the Enter "full height" toggle).
+
+- **Header** (one line, wraps when needed): a back link to `/pr/<pr>`, the
+  report's `kicker` + `title` (else the PR title), the **dot strip**
+  (`qa-strip`/`qa-dot`: Overzicht + one dot per step, grouped by the report's
+  group labels; each dot carries the status GLYPH and a title, the current one
+  is filled and larger — never colour alone), the round buttons
+  (`○`/`●` plus `loopt`/`mislukt`/`geen verslag`), `←` `n / N` `→`
+  (`qa-prev`/`qa-counter`/`qa-next`), theme and settings.
+- **The stage** (`<main data-testid=qa-stage>`, scrolls vertically) shows ONE
+  page, always as a keyed array of one:
+  - **Page 0, "Overzicht"** (`qa-overview`): the live progress while running
     (status line via `claudeStatusText`, the plan, the `[slash:qa-step]` list,
     Stop) or the run's error, then the summary, the **"Afwijkingen van de
-    opdracht"** block (`qa-deviations`, `!` plus words, never colour alone),
-    the scenario table, the step index, and the start card (instructions +
-    "Start QA-test" / "Start nieuwe ronde").
-  - **Then one column per step** (`qa-step`, `w-[44rem]`): eyebrow, title,
-    status chip (glyph + word), body (markdown), `pre`, table, screenshots.
-    The images carry `data-md-image` inside a `.markdown-body`, so the shared
-    lightbox opens them with ←/→.
+    opdracht"** block (`qa-deviations`, `!` plus words), the scenario table,
+    the step index, and the start card.
+  - **A step** (`qa-step`): eyebrow · title · status chip (glyph + word) · a
+    `⇄ Voor/na` chip when it has a `compare` · the comment count on one row,
+    then one of three layouts (picked through a function binding in a stable
+    `contents` wrapper, arrowjs-pitfalls.md):
+    1. **compare** — `Voorheen` | `Nu` side by side (`qa-compare`,
+       `qa-compare-side[data-side]`, the words carry the meaning), then the
+       notes card (body, `pre`, table) and any extra screenshots. A missing
+       `before` says "Bestond nog niet".
+    2. **screenshots** — the artifact's two panes: notes left (26rem),
+       evidence right (screenshots side by side, `pre`, table).
+    3. **text only** — one notes card (max-w-4xl) with `pre` and table.
+    Screenshots carry `data-md-image` inside a `.markdown-body`, so the shared
+    lightbox opens them with ←/→ (the compare pair's two images cycle together).
+  - **Mermaid** (`src/mermaidLoader.mjs`): `diagramHTML(src)` for an
+    `.innerHTML` binding. The vendored bundle (`src/vendor/mermaid.min.js`, see
+    `conventions.md`) is injected as a classic `<script>` only when a diagram
+    is first shown. `securityLevel:'strict'`, `htmlLabels:false`, theme
+    `dark`/`default` from `theme.pref` (cache key = mode + source, so a theme
+    switch re-renders). Renders are serialized; a placeholder shows until the
+    reactive `diagrams.tick` repaints. A source that does not parse shows
+    "! Diagram kon niet getekend worden" plus the source (`qa-diagram-error`).
   - **Live progress per round:** the progress snapshot is PR-wide, so it shows
     only on the round whose `runId` it names.
   - **A round that just ended:** the snapshot flips to "not running" a moment
@@ -162,11 +198,7 @@ uploading enzo"*. Also reused: `workDirOverlay.mjs`, `imageLightbox.mjs`,
     read the round as running. The page reloads again 2s later and keeps
     polling while any round is `running` (it used to say "loopt" forever
     after a Stop).
-- **Full height:** Enter on the columns (or the `↵` hint in the focused card's
-  header, `qa-card-full`) toggles `state.cardFull`: every card drops its inner
-  scroll and `<main>` scrolls vertically instead; ↑/↓ scroll it (↓ at the
-  bottom opens the dock), Enter/Escape close it. Not in the URL.
-- **Comments dock** (`qa-dock`, bottom), scoped to the focused column.
+- **Comments dock** (`qa-dock`, bottom), scoped to the shown step.
   - **What is mounted:** the same composition as the tree's
     `comments-and-related` column: `InlineComments` + `ClaudeChatPanel` in one
     `comment-claude-row`, `CommentClaudeFooter`, the shortcut bar and
@@ -195,7 +227,7 @@ uploading enzo"*. Also reused: `workDirOverlay.mjs`, `imageLightbox.mjs`,
   - **Placing a comment:** Enter on the filled composer (or its "Plaats…"
     button) opens a QA-only menu: "Plaats op GitHub" or "Alleen voor mij"
     (`opts.local`). The tree removed its local option; the QA page keeps it.
-    Like the tree, placing hands the keyboard back to the columns. A reply on
+    Like the tree, placing hands the keyboard back to the stage. A reply on
     a still-local thread opens the tree's own publish menu (GitHub only).
   - **Menus:** `CommandMenu.mjs` with the tree's own lists from
     `commentCommands.mjs` (see "The shared comment/Claude menus" in
@@ -210,7 +242,8 @@ uploading enzo"*. Also reused: `workDirOverlay.mjs`, `imageLightbox.mjs`,
   - **"Andere chats in deze PR":** `setClaudeTaskJump` jumps to a QA
     conversation's round/step and selects it; any other conversation opens in
     the review tree.
-- **Keyboard:** the columns own →/←/Enter/↓. While the block owns the
+- **Keyboard:** the stage owns →/← (step) and ↑/↓ (scroll; ↓ at the bottom
+  opens the dock). While the block owns the
   keyboard, `onKeydown` routes exactly like `home.mjs`'s relatedActive branch
   (`handleRelatedKey` for the arrows/Escape unless the caret can still move,
   via `editableKeys.mjs`; Enter opens the comment/Claude menu, sends the
@@ -232,13 +265,14 @@ uploading enzo"*. Also reused: `workDirOverlay.mjs`, `imageLightbox.mjs`,
 ## Tests
 
 - `qa_run_test.go`: the last-fence parse, sanitizing (images that are missing
-  or carry a path are dropped), the MCP config being valid JSON with both
+  or carry a path are dropped), the before/after `compare` bounds, the MCP config being valid JSON with both
   servers, and the image endpoint refusing unsafe paths.
 - `tests/qa-page.spec.mjs` (mocked `/api/qa`): the deviations block on page 1,
-  → to the next column, a local comment ("Alleen voor mij") landing on its own
+  → to the next step, a local comment ("Alleen voor mij") landing on its own
   step only with the tree's comment menu, the step surviving a refresh, the
   lazy local anchor of a first Claude turn carrying the step context plus the
-  tree's Claude menu, and the collapsed dock / full-height cards.
+  tree's Claude menu, the collapsed dock, and the dot strip/←→ buttons plus a
+  `compare` step rendering two mermaid SVGs (and a broken diagram's message).
 
 **Not covered by an automated test:** a real end-to-end QA run (a live Opus
 run against the local admin).

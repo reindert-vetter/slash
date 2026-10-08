@@ -25,6 +25,13 @@ git worktrees.
   imported with a relative path, not via a CDN module. Tailwind is the exception
   (Play CDN). arrow.js is vendored in `src/vendor/arrow.js` — with three
   deliberate local patches, see `.claude/rules/arrowjs-pitfalls.md`.
+- **mermaid** (11.17.2, MIT) is vendored unmodified as
+  `src/vendor/mermaid.min.js` — the single-file UMD bundle (~3.5 MB; v12's is
+  5.5 MB, the ESM build is dozens of chunks), not a CDN, per the rule above.
+  It is NOT imported: `src/mermaidLoader.mjs` injects it as a classic
+  `<script>` (it sets `window.mermaid`) the first time a diagram is shown, so
+  no page pays for it until then. Only the QA page's before/after pairs use it
+  (`.claude/docs/qa-page.md`).
 - **Code (Go + JS) is English** — comments, log messages, and identifiers. The
   docs in `.claude/` and `CLAUDE.md` are also English.
 
