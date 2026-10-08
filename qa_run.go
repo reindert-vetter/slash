@@ -107,6 +107,11 @@ type qaRunResult struct {
 	Error     string    `json:"error,omitempty"`
 	Cancelled bool      `json:"cancelled,omitempty"`
 	Dir       string    `json:"dir,omitempty"` // the checkout the run tested in
+	// Restored lists what the checkout guard put back after the run, and
+	// RestoreNotes what it could not (qa_checkout_guard.go). Also mirrored
+	// into Report.Deviations, so the first page names it.
+	Restored     []string `json:"restored,omitempty"`
+	RestoreNotes []string `json:"restoreNotes,omitempty"`
 }
 
 func qaRunCancelID(pr int) string { return fmt.Sprintf("qarun-%d", pr) }
@@ -164,7 +169,7 @@ var (
 
 // runQARun is the runQARun Activity's body. Never returns an error — a
 // failure becomes qaRunResult.Error (recorded, shown on the page).
-func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir string, arg qaRunArg) qaRunResult {
+func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir string, arg qaRunArg) (out qaRunResult) {
 	res := qaRunResult{Round: arg.Round}
 	if cl == nil {
 		res.Error = "Claude is niet beschikbaar."
@@ -236,6 +241,26 @@ func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir st
 	}
 	defer release()
 	res.Dir = dir
+
+	// The checkout guard (qa_checkout_guard.go): snapshot now, put back what
+	// the run added/changed afterwards — also after a cancel or a failure.
+	// Deferred AFTER release, so it runs BEFORE the write slot is handed back.
+	snap, serr := snapshotQACheckout(ctx, dir)
+	if serr != nil {
+		return fail("Kon de staat van de werkmap niet vastleggen: " + serr.Error())
+	}
+	defer func() {
+		restored, notes := restoreQACheckout(context.WithoutCancel(ctx), dir, snap)
+		out.Restored = restored
+		out.RestoreNotes = notes
+		if out.Report != nil {
+			var devs []string
+			if len(restored) > 0 {
+				devs = append(devs, qaGuardDeviation(restored))
+			}
+			out.Report.Deviations = append(append(devs, notes...), out.Report.Deviations...)
+		}
+	}()
 
 	runDir := qaRunDir(dataDir, arg.PR, arg.RunID)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {

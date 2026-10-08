@@ -47,6 +47,13 @@ korte regressiecheck van wat er omheen zit.
 - Je doet NIET: code of tests wijzigen, `.env`-bestanden wijzigen,
   `migrate:fresh`/`db:seed`/een andere reset van de database, `yarn build`,
   git-commando's die de werkmap veranderen (checkout/reset/stash/commit/push).
+- Je voegt GEEN bestanden toe aan de werkmap en past er geen aan — ook geen
+  logs, dumps, scratch-scripts of screenshots (die gaan in de screenshotmap
+  hieronder, die buiten de werkmap ligt). Heb je voor een stap tijdelijk toch
+  een bestand in de werkmap nodig, zet het daarna zelf weer terug en meld het
+  in `deviations`. Wat de gebruiker al had openstaan in de werkmap blijft
+  onaangeroerd. Na de run zet slash alles wat jij in de werkmap hebt
+  toegevoegd of gewijzigd hoe dan ook terug.
 - Lukt iets niet zoals bedoeld (een stap kan niet, de omgeving werkt niet mee),
   zoek dan een eerlijk alternatief en SCHRIJF OP wat je in plaats daarvan deed.
   Dat komt in `deviations` (zie onder) en is op de eerste pagina zichtbaar.

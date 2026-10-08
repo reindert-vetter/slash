@@ -86,6 +86,27 @@ The reviewer's answers to the plan questions:
   with `removeQAArtifactsForPR`, inside the existing `purgePR` Activity (no new
   step in the cleanup history).
 
+## The checkout guard (`qa_checkout_guard.go`)
+
+Reviewer rule: *"qa mag geen bestanden toevoegen of aanpassen, behalve als je
+het daarna weer terugzet"*. The prompt says so (`qa_run.md`, "Je voegt GEEN
+bestanden toe…"), and `runQARun` enforces it, inside its Activity:
+
+- right after the checkout is resolved, `snapshotQACheckout` records `HEAD`,
+  the porcelain status (`--untracked-files=all`) and the content of every
+  file that was already dirty (the user's own open work, ≤ 8 MB);
+- a deferred `restoreQACheckout` (also after a cancel or failure, before the
+  write slot is released) removes what the run added (untracked or staged
+  new, plus the empty dirs it leaves), restores what it changed or deleted
+  from `HEAD`, and puts a pre-existing dirty file it touched back to its
+  snapshotted content. A pre-existing dirty directory/submodule (like
+  `modules/Ai`) is never touched; a moved `HEAD` is reported, not reset;
+- what was put back lands on the result (`restored`, `restoreNotes`) and as
+  the first line(s) of the report's `deviations`. A round without a report
+  shows it on its Overzicht (`qa-restored`).
+
+Test: `qa_checkout_guard_test.go` (a temp git repo).
+
 ## The MCP exception (reviewer-approved, don't "fix" back)
 
 `modules/claude` used to never load an MCP server: `coldStartArgs` passes

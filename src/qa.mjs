@@ -915,7 +915,15 @@ function overviewBody() {
   const rep = res && res.report
   if (!rep) {
     const why = !res ? (r.status === 'failed' ? t('Deze ronde is mislukt.') : t('Deze ronde loopt nog.')) : res.cancelled ? t('Deze ronde is gestopt.') : res.error || t('Geen verslag.')
-    return [html`<p class="text-[13px] text-slate-600 dark:text-zinc-300" data-testid="qa-round-noreport">${why}</p>`.key('noreport:' + r.runId)]
+    // A run without a report can still have had files put back by the
+    // checkout guard (qa_checkout_guard.go) — name them, a report would list
+    // them under the deviations.
+    const back = (res && res.restored) || []
+    const notes = (res && res.restoreNotes) || []
+    const extra = back.length || notes.length
+      ? '<br><span data-testid="qa-restored">! ' + esc(back.length ? t('Teruggezet in de werkmap: {list}', { list: back.join(', ') }) : '') + (notes.length ? ' ' + esc(notes.join(' ')) : '') + '</span>'
+      : ''
+    return [html`<p class="text-[13px] text-slate-600 dark:text-zinc-300" data-testid="qa-round-noreport" .innerHTML="${esc(why) + extra}"></p>`.key('noreport:' + r.runId)]
   }
   const devs = rep.deviations || []
   return [
