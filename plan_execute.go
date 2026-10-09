@@ -663,7 +663,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 	}
 
 	// Go commits, not Claude (see the file header, point 3).
-	status, err := runGitIn(ctx, dir, "status", "--porcelain")
+	status, err := runGitStdoutIn(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		res.Note = "Kon de wijzigingen niet bekijken: " + err.Error()
 		return res

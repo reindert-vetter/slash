@@ -113,12 +113,23 @@ func isCheckoutWaiting(repo string, pr int) bool {
 // activity, never an unrelated one.
 const checkoutWaitingStepCmd = "(wachten tot de actieve chat-bewerking van deze PR klaar is)"
 
-// appendCheckoutWaitingStep records checkoutWaitingStepCmd for repo/pr — see
-// its own doc comment. Called from a checkout-mutating Activity's own
-// acquireWriteTurnSlot onWaiting callback (workflows.go).
-func appendCheckoutWaitingStep(repo string, pr int) {
+// appendCheckoutWaitingStep records the waiting step for repo/pr — see
+// checkoutWaitingStepCmd's doc comment. Called from a checkout-mutating
+// Activity's own acquireWriteTurnSlot onWaiting callback (workflows.go).
+//
+// The line names WHO is being waited on — the slot's current holder label
+// (currentWriteTurnHolder, e.g. "chat turn (<conversation>)" or "landing
+// chat edits") — so a long wait reads as "queued behind that" rather than
+// as a hang (reviewer report: "Meenemen in de commit…" looked stuck while it
+// was queued behind another conversation's shell attempt and landing). Falls
+// back to the generic checkoutWaitingStepCmd when no holder is recorded.
+func appendCheckoutWaitingStep(dataDir, repo string, pr int) {
+	cmd := checkoutWaitingStepCmd
+	if label, _, ok := currentWriteTurnHolder(checkoutWriteSlotKey(dataDir, repo, pr)); ok && label != "" {
+		cmd = "(wachten op: " + label + ")"
+	}
 	appendCheckoutProgressStep(repo, pr, checkoutProgressStep{
-		Cmd: checkoutWaitingStepCmd,
+		Cmd: cmd,
 		Ok:  true,
 		At:  time.Now().UnixMilli(),
 	})

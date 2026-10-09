@@ -365,6 +365,31 @@ func runGitIn(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// runGitStdoutIn is runGitIn with stdout ONLY as its output: stderr is kept
+// out of the returned bytes (it still goes into the error and the checkout
+// progress log). Used for every `git status --porcelain` whose output is
+// parsed or tested for emptiness — a checkout with a stale untracked cache /
+// fsmonitor prints "warning: could not open directory '…'" on stderr, which
+// CombinedOutput spliced into the porcelain lines: a clean tree read as
+// dirty, and the warnings showed up as file names in the werkmap overlay.
+func runGitStdoutIn(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	full := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", full...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	logged := stdout.Bytes()
+	if err != nil {
+		logged = append(append([]byte{}, stdout.Bytes()...), stderr.Bytes()...)
+	}
+	recordCheckoutProgressGit(ctx, args, logged, err)
+	if err != nil {
+		return stdout.Bytes(), fmt.Errorf("git %s (in %s): %w: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
 // showFileAtSHA returns the contents of one file as of a commit, without checking
 // anything out. Unlike runGit it captures stdout ONLY — runGit's CombinedOutput
 // would splice git's stderr into the file content — and it deliberately returns a

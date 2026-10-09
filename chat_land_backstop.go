@@ -80,7 +80,7 @@ func unlandedCheckoutCommit(ctx context.Context, dataDir, repo string, pr int, i
 	}
 	// Deliberately the plain porcelain status (no --ignore-submodules), so
 	// this sees exactly what commitCheckoutEditsAt would stage.
-	statusOut, err := runGitIn(ctx, a.Dir, "status", "--porcelain")
+	statusOut, err := runGitStdoutIn(ctx, a.Dir, "status", "--porcelain")
 	if err != nil {
 		log.Printf("chat_merge: landing backstop pr=%d: status in %s: %v", pr, a.Dir, err)
 		return ""

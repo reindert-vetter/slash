@@ -3824,7 +3824,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
 		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "landing chat edits", func() {
-			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+			appendCheckoutWaitingStep(m.dataDir, arg.Repo, arg.PR)
 			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseWaiting)
 		})
 		defer release()
@@ -3873,7 +3873,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
 		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: choosing another directory", func() {
-			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+			appendCheckoutWaitingStep(m.dataDir, arg.Repo, arg.PR)
 		})
 		defer release()
 		relistCheckoutCandidates(ctx, m, m.dataDir, arg.Repo, arg.PR)
@@ -3888,7 +3888,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
 		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: answering a pending choice", func() {
-			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+			appendCheckoutWaitingStep(m.dataDir, arg.Repo, arg.PR)
 		})
 		defer release()
 		// Reuse the exact same resolution path a chat turn's own pending-decision
@@ -3905,7 +3905,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		}
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: turning it off", func() {
-			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+			appendCheckoutWaitingStep(m.dataDir, arg.Repo, arg.PR)
 		})
 		defer release()
 		checkoutSetOff(m.dataDir, arg.Repo, arg.PR)
@@ -3920,7 +3920,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		clearCheckoutProgress(arg.Repo, arg.PR)
 		ctx = withCheckoutProgress(ctx, arg.Repo, arg.PR)
 		release := acquireCheckoutWriteSlot(ctx, m.dataDir, arg.Repo, arg.PR, "checkout: restoring a stash", func() {
-			appendCheckoutWaitingStep(arg.Repo, arg.PR)
+			appendCheckoutWaitingStep(m.dataDir, arg.Repo, arg.PR)
 		})
 		defer release()
 		if err := checkoutRestoreStashNow(ctx, m.dataDir, arg.Repo, arg.PR); err != nil {

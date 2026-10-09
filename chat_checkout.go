@@ -270,7 +270,7 @@ func classifyCheckoutCandidate(ctx context.Context, dir, headRef, baseBranch str
 	}
 	branch := strings.TrimSpace(string(branchOut))
 
-	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
+	statusOut, err := runGitStdoutIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return checkoutCandidate{}, err
 	}
@@ -1315,7 +1315,7 @@ func popCheckoutStash(ctx context.Context, dir, label string) error {
 // commit later (commitCheckoutEditsAt), regardless of what Claude itself
 // stages, so a pre-existing, unrelated change never rides along silently.
 func snapshotDirtyPaths(ctx context.Context, dir string) ([]string, error) {
-	out, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
+	out, err := runGitStdoutIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return nil, err
 	}
@@ -1330,7 +1330,9 @@ func snapshotDirtyPaths(ctx context.Context, dir string) ([]string, error) {
 func parseGitStatusPaths(out []byte) []string {
 	var paths []string
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		if len(line) < 4 {
+		// Porcelain v1 is always "XY PATH": anything without the space at
+		// index 2 (a stray stderr "warning: …" line) is not a path.
+		if len(line) < 4 || line[2] != ' ' {
 			continue
 		}
 		p := strings.TrimSpace(line[3:])
@@ -2143,7 +2145,7 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, cl claude.Clien
 		return newMsg("Kon de laatste stand van `"+headRefName+"` niet ophalen (geen verbinding met origin), en deze werkmap kent die branch ook lokaal nog niet. De wijziging staat wel in `"+dir+"`.", true)
 	}
 
-	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain")
+	statusOut, err := runGitStdoutIn(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		return newMsg("Kon de status van de wijziging niet bepalen.", true)
 	}
@@ -2268,7 +2270,7 @@ func chatCheckoutNeedsLanding(ctx context.Context, dataDir, repo string, pr int)
 	if a == nil || a.Dir == "" {
 		return false
 	}
-	statusOut, err := runGitIn(ctx, a.Dir, "status", "--porcelain", "--ignore-submodules=all")
+	statusOut, err := runGitStdoutIn(ctx, a.Dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		// Every git error here answers "nothing to land", which silently skips
 		// the automatic landing altogether — so say so out loud. Reconstructing
@@ -2314,7 +2316,7 @@ func checkoutFingerprint(ctx context.Context, dir string) string {
 	if err != nil {
 		return ""
 	}
-	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
+	statusOut, err := runGitStdoutIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return ""
 	}
@@ -2386,7 +2388,7 @@ func turnChangedCheckout(ctx context.Context, dataDir, repo string, pr int, conv
 // origin, which is irrelevant here: a cancelled turn's own tool calls only
 // ever leave uncommitted edits, never a commit).
 func checkoutIsDirty(ctx context.Context, dir string) (bool, error) {
-	out, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
+	out, err := runGitStdoutIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return false, err
 	}
@@ -2492,7 +2494,7 @@ func checkoutLocalPendingState(ctx context.Context, dataDir, repo string, pr int
 		return false, false, 0, ""
 	}
 	dir = a.Dir
-	statusOut, err := runGitIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
+	statusOut, err := runGitStdoutIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		return true, true, 0, dir // can't tell -> conservative, same as before
 	}

@@ -139,6 +139,17 @@ zijn wat je verwijderd"* — the gap was visibility, not a missing action.
 the overlay sits open is not reflected until the ladder re-raises the question,
 the price of keeping the read model git-free.
 
+**Every `git status --porcelain` is read from stdout only** (`runGitStdoutIn`,
+`gh.go`), never `runGitIn`'s combined output. A checkout with a stale
+untracked cache / fsmonitor prints `warning: could not open directory '…'` on
+stderr; spliced into the porcelain lines that made a clean tree (or one only
+carrying the chat's own pending edit) look dirty with "unrelated" paths,
+raised this very question for nothing, and listed the warnings as
+`ning: could not open …` file names (PR 14137,
+`data/review-shots/workdir-overlay-stuck-meenemen.png`).
+`parseGitStatusPaths` also rejects any line that isn't `XY PATH`. Test:
+`git_status_parse_test.go`.
+
 The chip's old "Bekijk de N bestanden die hier al zijn aangepast" row (which
 re-opened a dismissed overlay to show the list a truncating palette row cannot)
 is **gone** along with `reopenWorkDirOverlay()`: the overlay is now always the
@@ -226,7 +237,11 @@ thread through; only the four checkout-menu Activities themselves
 `workflows.go`) wrap their `ctx` once, right after `clearCheckoutProgress`
 resets the previous answer's log so it never bleeds into a new one. Capped at
 30 steps/400 chars of output — a backstop, not a real limit any single
-Activity run gets near. Test: `tests/checkout-overlay.spec.mjs` ("answering
+Activity run gets near. While an answer is queued behind this checkout's write
+slot, the waiting step names the current holder (`(wachten op: chat turn
+(<conversation>))`, `(wachten op: landing chat edits)`, via
+`currentWriteTurnHolder`) so a long queue reads as "behind that", not as a
+hang. Test: `tests/checkout-overlay.spec.mjs` ("answering
 shows which option is busy, locks the rest, and streams the real git commands
 it runs"); backend wiring: `checkout_progress_test.go`.
 
