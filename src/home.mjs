@@ -3833,7 +3833,9 @@ function commentGroupKeyOf(c, anchoredBlocks) {
 
 // The fixed category order at the top of the blocks index, see fileTier in
 // recomputeLeftList.
-const LEFT_LIST_CATEGORY_TIERS = ['MIGRATION', 'ROUTE', 'CONTROLLER', 'REQUEST', 'RESOURCE']
+// SUBMODULE (a changed submodule pointer, often committed by accident) leads,
+// directly under the PR title block, so the warning is seen first.
+const LEFT_LIST_CATEGORY_TIERS = ['SUBMODULE', 'MIGRATION', 'ROUTE', 'CONTROLLER', 'REQUEST', 'RESOURCE']
 
 function recomputeLeftList() {
   // Only the resolved-call targets are hidden from the index (panel-only

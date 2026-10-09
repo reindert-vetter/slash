@@ -1291,13 +1291,24 @@ checks `fd.submodule` **before** touching the filesystem at all: it builds
 new commit" → a newly added/removed submodule) and scans/classifies exactly
 like any other file from there. Since a gitlink path has no `.php`/`.ts`
 extension, `ScanBlocks` falls through to its ordinary whole-file-block
-default — no submodule-specific block shape, category, or frontend change
-needed; it shows up like any other whole-file block, old/new text
-`Subproject commit <sha>`. Tests: `classify_test.go`
+default — no submodule-specific block shape; it shows up like any other
+whole-file block, old/new text `Subproject commit <sha>`.
+
+**It is flagged as a warning, not as an ordinary MODULE file.** Reviewer
+request: a submodule pointer is too often committed by accident, so it must
+stand out. `classifyFile` overrides the path-derived category with
+`CategorySubmodule` (`"SUBMODULE"`) whenever `fd.submodule` — so both the full
+ingest and the delta refresh get it. The frontend renders that pill as
+**`! SUBMODULE`** (`categoryLabel`/`categoryTitle` in `BlockList.mjs`, used by
+the index row and the diff-card header in `Block.mjs`) — the `!` and the word
+carry the warning, the solid rose fill + ring only reinforce it (colourblind
+rule) — and `LEFT_LIST_CATEGORY_TIERS` (`home.mjs`) lists `SUBMODULE` first,
+so the block sorts directly under the PR-titel block, above MIGRATION. Blocks
+stored before this keep their old `MODULE` category until a re-ingest/rescan. Tests: `classify_test.go`
 (`TestParseUnifiedDiffCapturesSubmoduleCommitLines`,
 `TestSubmoduleCommitChangeProducesModifiedBlock` — the latter uses a real
 directory at the submodule's path in both worktrees to reproduce the original
-"is a directory" failure).
+"is a directory" failure, and asserts the `SUBMODULE` category).
 
 ## Truly deleted file (`file_deleted`)
 

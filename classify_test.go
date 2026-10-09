@@ -870,4 +870,11 @@ func TestSubmoduleCommitChangeProducesModifiedBlock(t *testing.T) {
 	if b.File != path {
 		t.Errorf("expected File=%q, got %q", path, b.File)
 	}
+	if b.Category != CategorySubmodule {
+		t.Errorf("expected Category=%q, got %q", CategorySubmodule, b.Category)
+	}
+	// An ordinary file under the same modules/ prefix keeps its path category.
+	if c := categoryFor("modules/Ai/src/Foo.php"); c == CategorySubmodule {
+		t.Errorf("ordinary module file must not be SUBMODULE, got %q", c)
+	}
 }

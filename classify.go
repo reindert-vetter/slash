@@ -203,6 +203,13 @@ func sourceLine(lines []string, ln int) string {
 // a removed+added pair.
 func classifyFile(pr int, path, oldFile string, oldBlocks, newBlocks []Block, fd *fileDiff, fileAdded, fileDeleted bool, oldSrc, newSrc string) []Block {
 	category := categoryFor(path)
+	// A changed submodule pointer gets its own warning category instead of
+	// its path-derived one (modules/Ai would otherwise read as an ordinary
+	// MODULE file): a pointer committed by accident is a common mistake, so
+	// the frontend flags it with "!" and sorts it to the top of the index.
+	if fd != nil && fd.submodule {
+		category = CategorySubmodule
+	}
 
 	oldBySym := indexBySymbol(oldBlocks)
 	newBySym := indexBySymbol(newBlocks)
@@ -567,6 +574,10 @@ func categoryForTypeDir(path string) string {
 	}
 	return typeDirCategory[typeDir]
 }
+
+// CategorySubmodule is the category of a changed git submodule pointer
+// (gitlink), set in classifyFile — never derived from the path.
+const CategorySubmodule = "SUBMODULE"
 
 // categoryFor derives a category tag from the file path: the explicit rules
 // above first (they encode conventions a bare directory name can't, like

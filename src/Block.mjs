@@ -4,7 +4,7 @@
 // header, file:line and the approve toggle. Code goes underneath later.
 
 import { html, reactive } from './vendor/arrow.js'
-import { categoryClass } from './BlockList.mjs'
+import { categoryClass, categoryLabel, categoryTitle } from './BlockList.mjs'
 import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
 import { avatarHtmlString } from './avatar.mjs'
 import { renderMarkdown } from './markdown.mjs'
@@ -1826,7 +1826,8 @@ export default function Block(b, opts = {}) {
           class="${() =>
             'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wide ' +
             categoryClass(b.category)}"
-          >${() => b.category}</span
+          title="${() => categoryTitle(b.category)}"
+          >${() => categoryLabel(b.category)}</span
         >
         ${() => pathPills(b)}
         <span class="flex min-w-0 flex-1 flex-col gap-0.5">

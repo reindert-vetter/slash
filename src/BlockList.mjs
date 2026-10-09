@@ -53,6 +53,22 @@ const CATEGORY_STYLE = {
   // isn't used by any real block category above, so it reads distinctly from
   // the code-derived pills.
   COMMENT: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-300',
+  // A changed git submodule pointer (classify.go's CategorySubmodule) — a
+  // WARNING, since one is often committed by accident. The "!" in the label
+  // (categoryLabel below) carries the meaning; the solid fill + ring only
+  // reinforce it (colourblind rule).
+  SUBMODULE: 'bg-rose-600 text-white ring-2 ring-rose-300 dark:ring-rose-400/60',
+}
+
+// categoryLabel is the text inside a category pill. SUBMODULE gets a leading
+// "!" so the warning reads without relying on colour.
+export function categoryLabel(cat) {
+  return cat === 'SUBMODULE' ? '! SUBMODULE' : cat
+}
+
+// categoryTitle is the pill's hover text ('' when there is nothing to add).
+export function categoryTitle(cat) {
+  return cat === 'SUBMODULE' ? 'Submodule-pointer gewijzigd — controleer of dit bewust is' : ''
 }
 
 // Colour + glyph per change status: + new, - gone, -/+ changed.
@@ -993,7 +1009,9 @@ function categoryOrAvatar(b) {
   return html`
     <span
       class="${'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wide ' + categoryClass(b.category)}"
-      >${b.category}</span
+      title="${categoryTitle(b.category)}"
+      data-testid="category-pill"
+      >${categoryLabel(b.category)}</span
     >
   `
 }
