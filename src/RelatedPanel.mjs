@@ -8993,7 +8993,7 @@ function viewingBubble(c, r, i, total, isActive, bare, readOnly) {
             // reads as plain text under its own already-shown header, exactly
             // like a line comment's body (compactConversation).
             return (
-              'rounded-md text-xs font-medium text-slate-800 dark:text-zinc-200 [overflow-wrap:anywhere] ' +
+              'rounded-md text-xs font-medium text-slate-800 dark:text-zinc-200 [overflow-wrap:anywhere] [&_ol]:list-decimal [&_ul]:list-disc [&_ol]:pl-5 [&_ul]:pl-5 ' +
               (sel ? 'ring-2 ring-indigo-400' : '')
             )
           }
@@ -9275,8 +9275,8 @@ function compactConversation(c, i, full, openCommentMenu) {
             ? ''
             : html`<span
                 class="${full && !commentTitleOf(c)
-                  ? '[overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'
-                  : 'line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200'}"
+                  ? '[overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200 [&_ol]:list-decimal [&_ul]:list-disc [&_ol]:pl-5 [&_ul]:pl-5'
+                  : 'line-clamp-3 [overflow-wrap:anywhere] text-xs font-medium text-slate-800 dark:text-zinc-200 [&_ol]:list-decimal [&_ul]:list-disc [&_ol]:pl-5 [&_ul]:pl-5'}"
                 .innerHTML="${commentBody(c, threadFenceStartIndexes(c).get('origin:' + c.id) ?? 0)}"
               ></span>`}
         ${() =>
