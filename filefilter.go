@@ -22,14 +22,19 @@ import (
 
 var frontendFileRe = regexp.MustCompile(`(?i)\.(vue|[cm]?[jt]sx?)$`)
 
+// phpFileRe: "frontend" hides ONLY PHP files (reviewer decision) and keeps
+// everything else visible — vue/js/ts, but also markdown, config, images and a
+// submodule pointer. "backend" still hides only the vue/js/ts family.
+var phpFileRe = regexp.MustCompile(`(?i)\.php$`)
+
 // fileFilterIgnores reports whether file is hidden (ignored) under mode.
-// Keep in sync with FRONTEND_FILE_RE in src/home.mjs.
+// Keep in sync with FRONTEND_FILE_RE/PHP_FILE_RE in src/home.mjs.
 func fileFilterIgnores(mode, file string) bool {
 	switch mode {
 	case "backend":
 		return frontendFileRe.MatchString(file)
 	case "frontend":
-		return !frontendFileRe.MatchString(file)
+		return phpFileRe.MatchString(file)
 	}
 	return false
 }

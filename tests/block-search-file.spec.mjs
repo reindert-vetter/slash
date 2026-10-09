@@ -58,7 +58,7 @@ test.describe('PR Review Tree — searching startpunten by file path', () => {
   })
 
   // File-type filter (Alles / Backend / Frontend): PR 12903 is all PHP, so
-  // Backend keeps everything and Frontend (vue/ts/js family) leaves nothing.
+  // Backend keeps everything and Frontend (hides only .php) leaves nothing.
   test('the file filter switches between Alles, Backend and Frontend', async ({ page }) => {
     await page.goto('/pr/12903')
     const rows = page.getByTestId('block-row')

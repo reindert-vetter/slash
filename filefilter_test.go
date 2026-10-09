@@ -13,6 +13,10 @@ func TestFileFilterIgnores(t *testing.T) {
 		{"backend", "c.php", false},
 		{"frontend", "c.php", true},
 		{"frontend", "d.tsx", false},
+		{"frontend", "views/x.blade.php", true},
+		{"frontend", "README.md", false},
+		{"frontend", "modules/Ai", false},
+		{"frontend", "config/app.yaml", false},
 	}
 	for _, c := range cases {
 		if got := fileFilterIgnores(c.mode, c.file); got != c.want {

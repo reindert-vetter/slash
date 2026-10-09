@@ -651,7 +651,7 @@ const state = reactive({
   // button at the bottom. Ephemeral UI state, not bound to the URL.
   showApproved: false,
   // fileFilter — 'all' | 'backend' | 'frontend': hides vue/ts/js-family files
-  // (backend) or everything else (frontend) from the index. Ephemeral, not in the URL.
+  // (backend) or only .php files (frontend) from the index. Ephemeral, not in the URL.
   fileFilter: 'all',
   onFileFilter: setFileFilter,
   // lineCommentsCollapsed — when true, hides the rows of the "Comments op
@@ -4900,11 +4900,15 @@ function clampSelectedToVisible() {
 
 // setSearch is the search box's input handler: refilter the left list and jump
 // the selection to the top match so ↑/↓ walk the results from the first hit.
+// Backend hides the vue/js/ts family; Frontend hides ONLY .php files and keeps
+// everything else (md, config, a submodule pointer, …). Mirrors
+// fileFilterIgnores in filefilter.go.
 const FRONTEND_FILE_RE = /\.(vue|[cm]?[jt]sx?)$/i
+const PHP_FILE_RE = /\.php$/i
 function fileFilterAllows(mode, file) {
-  if (mode !== 'backend' && mode !== 'frontend') return true
-  const fe = FRONTEND_FILE_RE.test(file || '')
-  return mode === 'backend' ? !fe : fe
+  if (mode === 'backend') return !FRONTEND_FILE_RE.test(file || '')
+  if (mode === 'frontend') return !PHP_FILE_RE.test(file || '')
+  return true
 }
 
 function setFileFilter(mode) {

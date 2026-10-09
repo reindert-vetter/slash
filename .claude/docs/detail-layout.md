@@ -1289,7 +1289,10 @@ and `title` are for tests/screen readers. Test: `tests/tree-clock.spec.mjs`.
 drives three buttons under the "Start" header in `BlockList.mjs`
 (`data-testid=file-filter-<mode>`, active one gets a check mark). Backend hides
 vue/ts/js-family files (`FRONTEND_FILE_RE` in `home.mjs`: `.vue`, `.js/.mjs/.cjs/.jsx`,
-`.ts/.tsx`), Frontend keeps only those. Applied in `recomputeLeftList` on
+`.ts/.tsx`); Frontend hides **only `.php`** files (`PHP_FILE_RE`, so
+`.blade.php` too) and keeps everything else — vue/js/ts, but also markdown,
+config, images and a submodule pointer (reviewer decision: "alles laten zien
+behalve .php"). Mirrored in `fileFilterIgnores` (`filefilter.go`). Applied in `recomputeLeftList` on
 `state.allBlocks` before `groupTestClasses`, so a test_class row follows its
 files' extension; the PR-description block and comment items are never
 filtered. Changing it goes through `setFileFilter` (re-runs `setSearch`, which
