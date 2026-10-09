@@ -28,6 +28,8 @@ const ui = reactive({
   text: '',
   snoozeFor: '', // id of the row whose snooze options are expanded
   snoozedOpen: false,
+  saving: '', // option key being saved right now ('' = idle)
+  failed: false,
 })
 
 const REMINDER_OPTIONS = [{ key: 'now', label: 'Nu' }, ...SNOOZE_OPTIONS]
@@ -88,10 +90,20 @@ export function createBellReminders(actions, getSnoozed) {
 
   async function submit(option) {
     const text = ui.text.trim()
-    if (!text) return
+    if (!text || ui.saving) return
+    ui.saving = option
+    ui.failed = false
+    const ok = await actions.addReminder(text, option)
+    ui.saving = ''
+    if (!ok) {
+      ui.failed = true // text stays, so nothing typed is lost
+      return
+    }
     ui.text = ''
     ui.composerOpen = false
-    await actions.addReminder(text, option)
+    // A later moment lands in "Gesnoozed", not the main list: open it so the
+    // saved reminder is visible.
+    if (option !== 'now') ui.snoozedOpen = true
   }
 
   // composer — the text field plus the four moments; picking a moment creates
@@ -109,6 +121,7 @@ export function createBellReminders(actions, getSnoozed) {
                   placeholder="${t('Waar wil je aan herinnerd worden?')}"
                   class="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[13px] text-slate-900 outline-none focus:border-indigo-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                   value="${() => ui.text}"
+                  disabled="${() => !!ui.saving}"
                   @input="${(e) => (ui.text = e.target.value)}"
                   @keydown="${(e) => {
                     if (e.key === 'Enter') {
@@ -126,12 +139,17 @@ export function createBellReminders(actions, getSnoozed) {
                       data-testid="reminder-option"
                       data-option="${o.key}"
                       class="${SMALL_BTN}"
-                      disabled="${() => !ui.text.trim()}"
+                      disabled="${() => !ui.text.trim() || !!ui.saving}"
                       @click="${() => submit(o.key)}"
                     >
-                      ${t(o.label)} <span class="text-slate-400 dark:text-zinc-500">· ${momentLabel(o.key)}</span>
+                      <span
+                        data-testid="reminder-spinner"
+                        class="${() => (ui.saving === o.key ? 'mr-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent align-[-2px]' : 'hidden')}"
+                      ></span>
+                      ${() => (ui.saving === o.key ? t('Opslaan…') + ' ' : '')}${t(o.label)} <span class="text-slate-400 dark:text-zinc-500">· ${momentLabel(o.key)}</span>
                     </button>`.key('ro:' + o.key),
                   )}
+                  <span data-testid="reminder-failed" class="text-[11px] font-medium text-rose-600 dark:text-rose-400">${() => (ui.failed ? '✕ ' + t('Opslaan mislukt') : '')}</span>
                 </div>
               </div>`.key('reminder-composer'),
             ]

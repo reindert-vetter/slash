@@ -153,4 +153,43 @@ test.describe('/pr/<id> — Jira bell, fixed top-right corner', () => {
     await expect(page.locator('[data-testid="notify-snoozed-row"]')).toContainText('deploy checken')
     expect(signals.map((s) => s.kind + ':' + (s.option || ''))).toEqual(['reminder_add:now', 'snooze:tomorrow_8'])
   })
+
+  // Enter/an option keeps the composer open with a spinner until the Signal AND
+  // the reload are done; a failure keeps the typed text.
+  test('reminder composer shows a loader until saved, keeps text on failure', async ({ page }, testInfo) => {
+    const pr = seededPr(testInfo)
+    const feed = { items: [], snoozed: [] }
+    await page.route('**/api/jira/notifications', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, runId: 'fake-run', ...feed }) }),
+    )
+    await page.route('**/api/workflows/jira_inbox', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, runId: 'fake-run' }) }),
+    )
+    let fail = true
+    let release
+    const gate = new Promise((r) => (release = r))
+    await page.route('**/signals/jira_notify', async (route) => {
+      const sig = JSON.parse(route.request().postData() || '{}')
+      if (fail) return route.fulfill({ status: 500, body: 'no' })
+      await gate
+      feed.snoozed = [{ id: 'rem:2', kind: 'reminder', at: new Date().toISOString(), title: sig.text, unread: true, snoozedUntil: new Date(Date.now() + 86400000).toISOString() }]
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
+    })
+    await page.goto('/pr/' + pr)
+    await appReady(page)
+    await page.locator('[data-testid="jira-bell-button"]').click()
+    await page.locator('[data-testid="reminder-add"]').click()
+    await page.locator('[data-testid="reminder-text"]').fill('later kijken')
+    await page.locator('[data-testid="reminder-text"]').press('Enter')
+    await expect(page.locator('[data-testid="reminder-failed"]')).toContainText('Opslaan mislukt')
+    await expect(page.locator('[data-testid="reminder-text"]')).toHaveValue('later kijken')
+
+    fail = false
+    await page.locator('[data-testid="reminder-option"][data-option="tomorrow_8"]').click()
+    await expect(page.locator('[data-testid="reminder-option"][data-option="tomorrow_8"]')).toContainText('Opslaan…')
+    await expect(page.locator('[data-testid="reminder-text"]')).toBeDisabled()
+    release()
+    await expect(page.locator('[data-testid="reminder-composer"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="notify-snoozed-row"]')).toContainText('later kijken')
+  })
 })

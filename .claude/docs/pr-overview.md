@@ -355,6 +355,12 @@ own `createJiraNotifyActions` (which gained `snooze`/`addReminder`/
   count), a click/tick marks it read, after which it behaves like a read Jira
   item (incl. the 30-day purge, counted from when it became visible), plus a
   delete ✕.
+- **Saving a reminder shows a loader**: the composer stays open, fields
+  disabled, the chosen button shows a spinner plus the word "Opslaan…", until
+  the `reminder_add` Signal was accepted AND the list was re-read
+  (`addReminder` returns true/false). On failure the text stays with
+  "Opslaan mislukt"; on success a non-"Nu" moment also opens "Gesnoozed" so the
+  item is visible.
 - **Snooze**: a clock button on every row (Jira or reminder) expands the three
   moments inline; `/pr-overview`'s right-click menu has them too. A snoozed
   row leaves the list for the collapsed **"Gesnoozed (N)"** block at the

@@ -88,14 +88,16 @@ export function createJiraNotifyActions(store) {
   async function signal(payload) {
     try {
       const runId = await ensureRunId()
-      if (!runId) return
-      await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
+      if (!runId) return false
+      const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/jira_notify', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       })
+      return res.ok
     } catch (err) {
       console.error('jira_notify signal failed:', payload.kind, err)
+      return false
     }
   }
 
@@ -161,9 +163,13 @@ export function createJiraNotifyActions(store) {
   // optimistic row — the list is re-read right after the Signal.
   async function addReminder(text, option) {
     const body = String(text || '').trim()
-    if (!body) return
-    await signal({ kind: 'reminder_add', text: body, option })
-    store.reload && store.reload()
+    if (!body) return false
+    // true only once the Signal was accepted AND the list was re-read, so the
+    // composer's loader can stay up until the reminder is really in the list.
+    const ok = await signal({ kind: 'reminder_add', text: body, option })
+    if (!ok) return false
+    if (store.reload) await store.reload()
+    return true
   }
 
   // deleteReminder removes a reminder for good (from either list).

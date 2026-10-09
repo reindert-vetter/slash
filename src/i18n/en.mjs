@@ -428,6 +428,8 @@ export const EN = {
   'Herinnering verwijderen': 'Delete reminder',
   'Waar wil je aan herinnerd worden?': 'What do you want to be reminded of?',
   'Zichtbaar:': 'Visible:',
+  'Opslaan…': 'Saving…',
+  'Opslaan mislukt': 'Saving failed',
   Nu: 'Now',
   direct: 'right away',
   'Gesnoozed ({n})': 'Snoozed ({n})',
