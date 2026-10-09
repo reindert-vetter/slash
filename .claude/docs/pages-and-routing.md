@@ -126,13 +126,16 @@ Test: `tests/overview-pr-select.spec.mjs` (in-sections, and the no-longer-in-inb
 "Goedkeuren en ga naar overzicht" (the confirm step that submits a real
 `APPROVE` review for the WHOLE PR, see `REVIEW_APPROVE_CONFIRM_COMMANDS` in
 `.claude/docs/command-palette.md`) links to
-**`overviewExitUrlAfterApprove()`** (`home.mjs`) — `/pr-overview?approved=<pr>`
+**`overviewExitUrlAfterReview()`** (`home.mjs`) — `/pr-overview?approved=<pr>`
 — deliberately **not** `overviewExitUrl()`/its `?pr=`/`?sel=` round trip:
 there's nothing left to return to once the whole PR is approved, and the
 reviewer asked for the opposite of "select the row I came from" — that row
 must already be gone by the time the page renders, with the new top row of
 the list selected instead. Reported as: "als ik een gehele PR goedkeur … wil
 ik dat het al uit het overzicht is, en selecteer dan de bovenste item".
+**"Afwijzen en ga naar overzicht"** (the `reviewReject` step, a real
+`REQUEST_CHANGES` review) uses the same helper and the same `?approved=` param
+— the name is historical; it means "just reviewed, hide it".
 
 - `overview.mjs` reads `?approved=` once, into a plain, **never-nulled**
   module const `approvedPr` (unlike `pendingSelectPr` above, it must keep

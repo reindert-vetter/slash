@@ -3938,7 +3938,7 @@ let pendingSelectPr = (() => {
 })()
 
 // approvedPr/trySelectTopAfterApprove — the counterpart for the "Goedkeuren en
-// ga naar overzicht" confirm action (home.mjs, overviewExitUrlAfterApprove):
+// ga naar overzicht" confirm action (home.mjs, overviewExitUrlAfterReview):
 // that link carries `?approved=<pr>`, never `?pr=<pr>`, precisely so it does
 // NOT trigger the pendingSelectPr behaviour above (select and remember THAT
 // row) — the PR just got fully approved and is done, so instead it must

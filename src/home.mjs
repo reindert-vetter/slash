@@ -1926,15 +1926,19 @@ function overviewExitUrl() {
   return url
 }
 
-// overviewExitUrlAfterApprove — used ONLY by "Goedkeuren en ga naar overzicht"
-// below. Deliberately NOT overviewExitUrl(): that helper carries
+// overviewExitUrlAfterReview — used ONLY by "Goedkeuren en ga naar overzicht"
+// and "Afwijzen en ga naar overzicht" below (a submitted REQUEST_CHANGES
+// review takes the PR off "Needs your review" just like an approve, but the
+// pr_inbox read-model only catches up on its next poll — so without this the
+// rejected row lingered for a while). The param stays `?approved=` for both,
+// so overview.mjs needed no change. Deliberately NOT overviewExitUrl(): that helper carries
 // `pr`/`sel`/`drill` so /pr-overview selects and remembers the exact block the
 // reviewer leaves from — correct for the plain ← exit, wrong here. Once the
 // WHOLE PR is approved there's nothing left to return to, and the reviewer
 // asked for the opposite: the just-approved PR already gone from the list by
 // the time the page appears, with the top remaining row selected instead of
 // this one. See `approvedPr`/`trySelectTopAfterApprove` in overview.mjs.
-function overviewExitUrlAfterApprove() {
+function overviewExitUrlAfterReview() {
   return '/pr-overview?approved=' + encodeURIComponent(prUidHere())
 }
 
@@ -9421,7 +9425,7 @@ async function submitReview(event, body = '') {
 // DEFAULT (the 2nd item, i.e. the one Enter lands on); "en sluiten" stays for
 // a reviewer who wants to keep looking at this PR. The navigation deliberately
 // happens only AFTER the submit resolved (submitReview also copies the summary
-// to the clipboard on success), and uses overviewExitUrlAfterApprove() —
+// to the clipboard on success), and uses overviewExitUrlAfterReview() —
 // NOT overviewExitUrl() — so the PR just approved is already filtered out of
 // the overview's list by the time it renders, with the top remaining row
 // selected instead of this (now finished) one; see `approvedPr`/
@@ -9433,7 +9437,7 @@ const REVIEW_APPROVE_CONFIRM_COMMANDS = withClose([
     hint: 'overzicht',
     icon: 'approve-pr',
     run: async () => {
-      if (await submitReview('APPROVE')) location.href = overviewExitUrlAfterApprove()
+      if (await submitReview('APPROVE')) location.href = overviewExitUrlAfterReview()
     },
   },
   {
@@ -9580,7 +9584,7 @@ function jumpToFirstUnapprovedForOwnPR() {
 // overview, same as before — reviewer request: "menu overslaan als er geen
 // andere keuzes zijn dan sluiten enzo, ga dan direct naar pr overview".
 // Deliberately `overviewExitUrl()` (keeps `sel`/`drill`), not
-// `overviewExitUrlAfterApprove()` — no review was actually submitted here, so
+// `overviewExitUrlAfterReview()` — no review was actually submitted here, so
 // there is nothing to treat as "this PR is now done, drop the context" the
 // way the confirmed-approve path does. But if the PR is NOT yet fully
 // approved (`mode === 'reviewChoice'`) — which, given the identical gating,
@@ -14333,11 +14337,27 @@ function resolveCommandsInner(query) {
   if (ms.mode === 'reviewReject') {
     const reason = (query || '').trim()
     if (!reason) return []
+    // Two items, mirroring REVIEW_APPROVE_CONFIRM_COMMANDS: both post the
+    // identical review, they differ only in where the reviewer ends up. "en ga
+    // naar overzicht" comes first so Enter lands on it, and navigates only
+    // after the submit resolved — to overviewExitUrlAfterReview(), so the
+    // rejected PR is already gone from /pr-overview instead of lingering
+    // until the next pr_inbox poll.
     return [
       {
+        id: 'review-reject-submit-overview',
+        label: t('Afwijzen en ga naar overzicht'),
+        hint: 'verstuur overzicht',
+        icon: 'reject-pr',
+        run: async () => {
+          if (await submitReview('REQUEST_CHANGES', reason)) location.href = overviewExitUrlAfterReview()
+        },
+      },
+      {
         id: 'review-reject-submit',
-        label: t('Wijs de PR af met deze reden'),
+        label: t('Afwijzen en sluiten'),
         hint: 'verstuur',
+        icon: 'reject-pr',
         run: () => submitReview('REQUEST_CHANGES', reason),
       },
     ]
@@ -14634,7 +14654,7 @@ function runCommand(cmd) {
     // "Sluit menu" to show. Reviewer request: "menu overslaan als er geen
     // andere keuzes zijn dan sluiten enzo, ga dan direct naar pr overview" —
     // deliberately `overviewExitUrl()` (keeps `sel`/`drill`), not
-    // `overviewExitUrlAfterApprove()`, since no review was actually
+    // `overviewExitUrlAfterReview()`, since no review was actually
     // submitted here. See "PR keuren" (PR_COMMANDS) — the only entry point
     // this can currently apply to.
     if (!hasRealCommands(cmd.children)) {

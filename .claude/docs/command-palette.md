@@ -1286,7 +1286,7 @@ mechanism (no new mode). That submenu also goes through `withClose` and holds
 the reviewer ends up: **"Goedkeuren en ga naar overzicht"** (the default 2nd
 item — finishing a PR is almost always followed by picking up the next one; it
 awaits `submitReview('APPROVE')` and only then goes to
-`overviewExitUrlAfterApprove()` — deliberately NOT `overviewExitUrl()`/its
+`overviewExitUrlAfterReview()` — deliberately NOT `overviewExitUrl()`/its
 `?pr`/`?sel`/drill round-trip, since there's nothing left to return to; instead
 `/pr-overview?approved=<pr>` makes that PR already gone from the list with the
 new top row selected, see "`?approved=<id>`" in
@@ -1316,8 +1316,15 @@ tick.
 it's non-empty — an empty query yields `[]`, which via `onKeydown`'s existing
 `if (list[ms.sel]) runCommand(...)` guard makes `Enter` a no-op rather than a
 silent close. `CommandMenu.mjs`'s placeholder changes for this mode ("Type the
-reason for rejection (required)…") as the only instruction. With text, the one
-row calls `submitReview('REQUEST_CHANGES', reason)`.
+reason for rejection (required)…") as the only instruction. With text it
+offers **two** rows, mirroring the approve confirm: **"Afwijzen en ga naar
+overzicht"** (first, so Enter lands on it — awaits
+`submitReview('REQUEST_CHANGES', reason)` and only then goes to
+`overviewExitUrlAfterReview()`, the same `/pr-overview?approved=<pr>` the
+approve uses) and **"Afwijzen en sluiten"** (submit and stay). Reported as "ik
+heb dit afgekeurd … ik zie het pas na een kleine periode weggaan": without the
+`?approved=` hide the rejected row lingered in "Needs your review" until the
+next `pr_inbox` poll, while an approve vanished at once.
 
 All three modes share the `lastIndexRowRect` exception with `postApprove` via
 `isReviewFollowup(mode)`. Tests: `tests/review-submit-menu.spec.mjs`, plus the

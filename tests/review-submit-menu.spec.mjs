@@ -205,15 +205,18 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await page.keyboard.press('Enter')
     await expect(menu).toBeVisible() // still open — nothing was submitted
 
-    // Typing a reason reveals exactly one command; running it submits
-    // REQUEST_CHANGES with that reason as the body.
+    // Typing a reason reveals two commands (mirroring the approve confirm):
+    // "en ga naar overzicht" first (Enter's default), "en sluiten" second.
+    // Running "en sluiten" submits REQUEST_CHANGES with that reason as the
+    // body and stays on the tree.
     await input.fill('Graag nog een test toevoegen voor de foutafhandeling.')
-    await expect(page.getByTestId('command-row')).toHaveCount(1)
-    await expect(page.getByTestId('command-row').first()).toContainText('Wijs de PR af met deze reden')
+    await expect(page.getByTestId('command-row')).toHaveCount(2)
+    await expect(page.getByTestId('command-row').nth(0)).toContainText('Afwijzen en ga naar overzicht')
+    await expect(page.getByTestId('command-row').nth(1)).toContainText('Afwijzen en sluiten')
 
     const [request] = await Promise.all([
       page.waitForRequest('**/api/workflows/submit_review'),
-      page.getByTestId('command-row').first().click(),
+      page.getByTestId('command-row').nth(1).click(),
     ])
     expect(request.method()).toBe('POST')
     expect(request.postDataJSON()).toEqual({
@@ -236,7 +239,7 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
   })
 
   // The second confirm item posts the identical review and then leaves for the
-  // PR overview via overviewExitUrlAfterApprove (home.mjs) — deliberately NOT
+  // PR overview via overviewExitUrlAfterReview (home.mjs) — deliberately NOT
   // overviewExitUrl/its `?pr=`/`?sel=` round-trip (there's nothing left to
   // return to once the whole PR is approved). Instead the just-approved PR
   // must already be filtered out of every section by the time the page
@@ -289,6 +292,44 @@ test.describe('PR Review Tree — review-submit follow-up (Keur de HELE PR goed 
     await expect(navRows.first()).toHaveAttribute('data-pr', '12888')
     await expect(page.locator('[data-pr="12903"]')).toHaveCount(0)
     await expect(navRows.first()).toHaveClass(/ring-indigo-500\/50/)
+  })
+
+  // Same as the approve case above: a submitted REQUEST_CHANGES review takes
+  // the PR off "Needs your review", but the pr_inbox read-model only catches
+  // up on its next poll — so "Afwijzen en ga naar overzicht" reuses
+  // overviewExitUrlAfterReview's `?approved=` to hide the row at once.
+  test('"Afwijzen en ga naar overzicht" submits REQUEST_CHANGES, then lands on /pr-overview with that PR already gone', async ({
+    page,
+  }) => {
+    await clearBlockApproval(page, BLOCK1_ID)
+    await clearBlockApproval(page, BLOCK6_ID)
+    await mockClipboard(page)
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await page.keyboard.press('Escape')
+
+    await page.getByTestId('block-row').filter({ hasText: 'Order::address' }).click()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.locator('[data-change-active]').first()).toBeVisible()
+    await approveViaPalette(page)
+
+    const menu = page.getByTestId('command-menu')
+    await expect(menu).toBeVisible()
+    await page.getByTestId('command-row').filter({ hasText: 'Wijs de PR af' }).click()
+    await page.getByTestId('command-input').fill('Graag nog een test.')
+    await expect(page.getByTestId('command-row')).toHaveCount(2)
+
+    const [request] = await Promise.all([
+      page.waitForRequest('**/api/workflows/submit_review'),
+      page.keyboard.press('Enter'),
+    ])
+    expect(request.postDataJSON()).toEqual({ pr: 12903, event: 'REQUEST_CHANGES', body: 'Graag nog een test.' })
+
+    await page.waitForURL(/\/pr-overview\?/)
+    const url = new URL(page.url())
+    expect(url.searchParams.get('approved')).toBe('12903')
+    await expect(page.locator('[data-nav-row]').first()).toHaveAttribute('data-pr', '12888')
+    await expect(page.locator('[data-pr="12903"]')).toHaveCount(0)
   })
 
   // buildReviewClipboardText (home.mjs) counts the reviewer's OWN comments
