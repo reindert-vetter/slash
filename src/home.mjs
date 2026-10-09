@@ -180,6 +180,7 @@ import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKey
 import { initMarkdownCodeCopy, copyCodeToClipboard } from './codeCopy.mjs'
 // The global failed-tasks dialog (failedTasks.mjs) — same top-level-mount +
 // owns-the-keyboard contract as the lightbox above.
+import RunningTasksHost, { runningBadgeButton, initRunningTasks, isRunningTasksOpen, handleRunningTasksKeydown } from './runningTasks.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown, showFailedTasksNow, showClientFailure } from './failedTasks.mjs'
 // The global auth dialog (authStatus.mjs) — same top-level-mount + keyboard
 // contract as FailedTasksHost, and checked before it.
@@ -288,6 +289,7 @@ initJiraBell()
 initImageLightbox()
 initMarkdownCodeCopy()
 initFailedTasksPopup()
+initRunningTasks()
 initAuthStatusPopup()
 // Debug mode (off unless the reviewer switched it on, see src/debugLog.mjs):
 // records this page load plus every following key/click, so Claude can replay a
@@ -14769,6 +14771,10 @@ function onKeydown(e) {
     handleFailedTasksKeydown(e)
     return
   }
+  if (isRunningTasksOpen()) {
+    handleRunningTasksKeydown(e)
+    return
+  }
 
   // F5 (toggle) dictates into the general chat — see src/dictation.mjs. It sits
   // HERE, after the two blocking dialogs but before every overlay guard below,
@@ -17120,6 +17126,7 @@ function prInfoCard(state) {
           ${() => sortReviewers(state.prReviewers).map((r, i) => reviewerAvatar(r).key('rev:' + i + ':' + r.login))}
         </span>
         <div class="flex items-center gap-1.5">
+          ${() => runningBadgeButton()}
           ${prMenuButton()}
           ${autoWarnToggleButton()}
           ${checkoutChip()}
@@ -18876,6 +18883,7 @@ MenuHost()(app)
 JiraBellHost()(app)
 ImageLightboxHost()(app)
 FailedTasksHost()(app)
+RunningTasksHost()(app)
 AuthStatusHost()(app)
 // The werkmap overlay (workDirOverlay.mjs) — top-level like MenuHost, and
 // initialized with the state + the one write path it may use

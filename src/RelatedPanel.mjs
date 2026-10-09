@@ -11111,7 +11111,7 @@ function failedRunNote(run) {
 // drops a failure that a later attempt already superseded (supersededRuns,
 // run_errors.go), so reading both would resurrect exactly the failures that
 // are no longer anything to act on.
-export function buildTaskRows(state) {
+export function buildTaskRows(state, opts) {
   const problems = (state && state.pageProblems) || { failedRuns: [], logErrors: [] }
   const failed = (problems.failedRuns || []).map((run) => {
     // A retried row keeps its place (so the reviewer's eye stays where it
@@ -11189,7 +11189,8 @@ export function buildTaskRows(state) {
         }
       })
   )
-  return [...trouble, ...live, ...chatTurnRows()].sort((a, b) => b.at - a.at)
+  // opts.chat === false: no chat-turn rows (the running-tasks popup lists runs only).
+  return [...trouble, ...live, ...(opts && opts.chat === false ? [] : chatTurnRows())].sort((a, b) => b.at - a.at)
 }
 
 // chatTurnRows — one "draait · Claude-chat" row per conversation with a turn
@@ -11328,7 +11329,7 @@ const TASK_LIST_MAX_H = (TASK_FULL_ROWS + 0.5) * TASK_ROW_H_REM
 // `row.key` rather than a captured index is the same rule as `isActiveCard` —
 // the list reorders under a poll, an index snapshot would go stale (see
 // conventions.md).
-function taskRow(row, actions) {
+export function taskRow(row, actions) {
   const openRowMenu = actions && actions.openRowMenu
   const focusState = actions && actions.focusState
   const focused = () => !!focusState && focusState.taskFocus === row.key

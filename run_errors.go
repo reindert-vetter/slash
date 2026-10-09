@@ -488,6 +488,59 @@ func (m *TaskManager) RunningCounts() (total int, byPR map[string]int) {
 	return countActive(busy)
 }
 
+// RunningRunView is one genuinely running workflow run for the "wat draait er"
+// popup: the same WorkflowRunView the "Taken" block renders, plus the PR it
+// belongs to (0 = no PR, e.g. a repo-wide tracker or a planning ticket).
+type RunningRunView struct {
+	WorkflowRunView
+	Repo string `json:"repo,omitempty"`
+	PR   int    `json:"pr"`
+}
+
+// RunningRuns lists the runs in tembed.StatusRunning, repo-wide, newest first —
+// the LIST behind RunningCounts' badge. claude_chat runs are skipped exactly as
+// RunningCounts skips them (a chat turn is counted there through the progress
+// map, not as a run), so the badge can legitimately be higher than this list.
+// Read-only.
+func (m *TaskManager) RunningRuns() []RunningRunView {
+	out := []RunningRunView{}
+	runs, err := m.engine.Runs()
+	if err != nil {
+		return out
+	}
+	for _, r := range runs {
+		if r.Status != tembed.StatusRunning || r.Workflow == WorkflowClaudeChat {
+			continue
+		}
+		v := RunningRunView{WorkflowRunView: WorkflowRunView{
+			RunID: r.ID, Workflow: r.Workflow, Status: r.Status,
+			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		}}
+		if in, err := m.engine.Input(r.ID); err == nil {
+			var input struct {
+				Repo string `json:"repo"`
+				PR   int    `json:"pr"`
+			}
+			if json.Unmarshal(in, &input) == nil {
+				v.Repo, v.PR = input.Repo, input.PR
+			}
+			if r.Workflow == WorkflowTaskCodeComment {
+				var cc CodeCommentInput
+				if json.Unmarshal(in, &cc) == nil && cc.File != "" {
+					v.Comment = &CommentRef{
+						File: cc.File, Label: cc.Label, Gran: cc.Gran, Line: cc.Line,
+						RowStart: cc.RowStart, RowEnd: cc.RowEnd,
+						Snippet: commentSnippet(cc.Body, 60),
+					}
+				}
+			}
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out
+}
+
 // activeUnit is one busy thing (a running run or an active chat turn) and the
 // PR it belongs to (pr 0 = repo-wide, counted only in the total).
 type activeUnit struct {

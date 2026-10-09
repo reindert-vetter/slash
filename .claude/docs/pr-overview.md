@@ -1442,6 +1442,18 @@ therefore skipped in the status count, so a first turn (whose run is briefly
 and are left out. Tests: `TestRunningCountsTalliesPerPR`,
 `tests/overview-running-count.spec.mjs`.
 
+**Clicking the pill opens a "Wat draait er nu" popup** (`src/runningTasks.mjs`;
+the pill is now a `<button>`, `runningBadgeButton()`, also in the PR-info
+button row of `/pr/<id>` and the header of `/plan/<KEY>`). A modal in the mould
+of `failedTasks.mjs` (backdrop, owns the keyboard, Escape/backdrop click
+closes; its keydown guard sits right after the failed-tasks one). The rows are
+the Taken block's own `taskRow`/`buildTaskRows(state, {chat:false})`
+(`RelatedPanel.mjs`, imported lazily on first open), fed by the new `runs` list
+of `GET /api/running-count` (`TaskManager.RunningRuns`: StatusRunning runs,
+repo-wide, each with `pr`), label prefixed `PR #n ·`. Chat turns are in the
+badge number but deliberately not in the list; a note says so. Test:
+`tests/running-tasks-popup.spec.mjs`.
+
 ## "Mislukte taken" block (failures that would otherwise only reach the log)
 
 Below `recentDrawer` sits a third expandable block, **"Mislukte taken"**

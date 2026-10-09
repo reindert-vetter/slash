@@ -23,6 +23,7 @@ import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './
 import { createBellReminders } from './bellReminders.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
 import { initSelfUpdate, selfUpdateNeedsAttention, selfUpdateSection } from './selfUpdate.mjs'
+import RunningTasksHost, { runningBadgeButton, setRunningSnapshot, isRunningTasksOpen, handleRunningTasksKeydown } from './runningTasks.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 import AuthStatusHost, { initAuthStatusPopup, isAuthProblemOpen, handleAuthProblemKeydown } from './authStatus.mjs'
 
@@ -2670,26 +2671,7 @@ function errorCard(msg) {
   </div>`
 }
 
-// runningBadge — the repo-wide "N actief" badge in the header: runs really
-// executing plus actively working Claude chat turns. Hidden at 0 (reviewer:
-// "als er niks is, mag je het hidden"); a keyed array so the 0 ↔ n flip never
-// hits the single↔array slot pitfall.
-function runningBadge() {
-  const n = state.runningCount
-  if (!n) return []
-  return [
-    html`<span
-      data-testid="running-count"
-      class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
-    >
-      <span
-        class="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-indigo-400"
-        data-testid="running-count-dot"
-      ></span>
-      <span>${t('{n} actief', { n })}</span>
-    </span>`.key('running:' + n),
-  ]
-}
+// The repo-wide "N actief" badge is runningBadgeButton() (runningTasks.mjs).
 
 function headerBlock() {
   return html`
@@ -2698,7 +2680,7 @@ function headerBlock() {
         <h1 class="text-xl font-semibold text-slate-900 dark:text-zinc-100">Needs your review</h1>
       </div>
       <div class="flex items-center gap-2">
-        ${() => runningBadge()}
+        ${() => runningBadgeButton()}
         <span class="rounded-full bg-slate-100 dark:bg-zinc-800/80 px-2.5 py-1 text-xs text-slate-500 dark:text-zinc-400"
           >${() => {
             const n = state.sections.reduce((acc, s) => acc + s.prs.filter((pr) => !leavesSection(pr, s.title)).length, 0)
@@ -4934,6 +4916,7 @@ function setupKeyboard() {
     // The auth dialog outranks it (src/authStatus.mjs), same contract.
     if (isAuthProblemOpen()) return handleAuthProblemKeydown(e)
     if (isFailedTasksOpen()) return handleFailedTasksKeydown(e)
+    if (isRunningTasksOpen()) return handleRunningTasksKeydown(e)
     // The open menu owns the keyboard — checked before everything else,
     // mirroring home.mjs's own menu branch (and the popover branch below).
     if (menu.open) return handleMenuKey(e)
@@ -5242,6 +5225,7 @@ async function loadRunningCount() {
     if (!body || !body.ok) return
     state.runningCount = typeof body.running === 'number' ? body.running : 0
     state.runningByPr = body.byPr && typeof body.byPr === 'object' ? body.byPr : {}
+    setRunningSnapshot(body)
   } catch (e) {
     // keep whatever we already showed — a transient failure here must never
     // blank the badge back to 0.
@@ -5276,6 +5260,7 @@ function startLiveSync() {
 
 App()(document.getElementById('app'))
 FailedTasksHost()(document.getElementById('app'))
+RunningTasksHost()(document.getElementById('app'))
 AuthStatusHost()(document.getElementById('app'))
 initFailedTasksPopup()
 initAuthStatusPopup()

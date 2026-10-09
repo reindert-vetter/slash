@@ -58,6 +58,7 @@ import { restorePendingAttachments, takePendingAttachments } from './chatAttachm
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 // The ONE global "er is werk mislukt" dialog (src/failedTasks.mjs) — also on
 // this page, so a failed GitHub post or review never goes unnoticed here.
+import RunningTasksHost, { runningBadgeButton, initRunningTasks, isRunningTasksOpen, handleRunningTasksKeydown } from './runningTasks.mjs'
 import FailedTasksHost, { initFailedTasksPopup, isFailedTasksOpen, handleFailedTasksKeydown } from './failedTasks.mjs'
 // The live "what is Claude doing right now" wiring behind this chat is
 // reused unchanged from the review tree: events.mjs's one multiplexed SSE
@@ -1878,6 +1879,10 @@ function onKeydown(e) {
     handleFailedTasksKeydown(e)
     return
   }
+  if (isRunningTasksOpen()) {
+    handleRunningTasksKeydown(e)
+    return
+  }
   // F5 (toggle) dictates into this ticket's chat — see src/dictation.mjs. First,
   // because the chatOpen branch right below returns early: dictating a second
   // paragraph into an already-open chat has to stay possible.
@@ -2892,6 +2897,7 @@ function ticketCard() {
               </svg>
             </button>
           </div>
+          ${() => runningBadgeButton()}
           ${jiraBellButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${themeToggleButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
           ${settingsButton('h-7 w-7 bg-slate-50 dark:bg-zinc-800 ring-1 ring-slate-200 dark:ring-zinc-700')}
@@ -4671,6 +4677,8 @@ if (!planKey) {
   ImageLightboxHost()(document.getElementById('app'))
   FailedTasksHost()(document.getElementById('app'))
   initFailedTasksPopup()
+  RunningTasksHost()(document.getElementById('app'))
+  initRunningTasks()
   // Debug mode ("record my navigation so a later session can replay a
   // reported bug", .claude/docs/debug-mode.md) was wired into home.mjs/
   // overview.mjs/settings.mjs but never into this page — so a reviewer with

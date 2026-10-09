@@ -1252,7 +1252,7 @@ func (s *server) handleRunningCount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	total, byPR := s.tasks.manager.RunningCounts()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": total, "byPr": byPR})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "running": total, "byPr": byPR, "runs": s.tasks.manager.RunningRuns()})
 }
 
 // handleWorkflowsList serves GET /api/workflows?pr=N — the read-only list of
