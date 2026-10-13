@@ -16,9 +16,23 @@ export const SNOOZE_OPTIONS = [
   { key: 'days_7', label: 'Over 7 dagen 08:00' },
 ]
 
+// A moment picked in the date picker (SnoozeDatePicker.mjs) travels as the
+// option "at:<ISO>" — pr_snooze.go's SnoozeAtPrefix. The server only accepts
+// it when it lies in the future.
+export const SNOOZE_AT_PREFIX = 'at:'
+
+export function snoozeAtOption(date) {
+  return SNOOZE_AT_PREFIX + date.toISOString()
+}
+
 // snoozePreviewUntil mirrors pr_snooze.go's snoozeUntil in the browser's local
-// time: 08:00 on tomorrow / next calendar week's Monday / the day 7 days out.
+// time: 08:00 on tomorrow / next calendar week's Monday / the day 7 days out,
+// or the picked moment itself for an "at:" option.
 export function snoozePreviewUntil(option, now = new Date()) {
+  if (typeof option === 'string' && option.startsWith(SNOOZE_AT_PREFIX)) {
+    const at = new Date(option.slice(SNOOZE_AT_PREFIX.length))
+    return isNaN(at) ? null : at
+  }
   if (option === 'hours_3') return new Date(now.getTime() + 3 * 3600 * 1000)
   let days = 0
   if (option === 'tomorrow_8') days = 1

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/reindert-vetter/tembed"
@@ -32,15 +33,34 @@ const (
 	SnoozeNextMonday = "next_monday_8" // Monday of next week, 08:00
 	SnoozeSevenDays  = "days_7"        // in 7 days, 08:00
 	SnoozeClear      = "clear"         // lift the snooze now
+	// SnoozeAtPrefix marks a moment the reviewer picked in the date picker:
+	// "at:" + an RFC3339 timestamp. Unlike the fixed options the moment comes
+	// from the Signal itself — still deterministic, it is recorded input.
+	SnoozeAtPrefix = "at:"
 )
 
-// validSnoozeOption reports whether option is one of the four above.
+// snoozeAtMax caps how far ahead a picked moment may lie.
+const snoozeAtMax = 2 * 365 * 24 * time.Hour
+
+// parseSnoozeAt returns the moment in an "at:<RFC3339>" option.
+func parseSnoozeAt(option string) (time.Time, bool) {
+	if !strings.HasPrefix(option, SnoozeAtPrefix) || len(option) > 64 {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimPrefix(option, SnoozeAtPrefix))
+	return t, err == nil
+}
+
+// validSnoozeOption reports whether option is one of the fixed options above
+// or a well-formed picked moment. Whether that moment lies in the future is
+// decided in the workflow (snoozeUntil), against the recorded clock.
 func validSnoozeOption(option string) bool {
 	switch option {
 	case SnoozeThreeHours, SnoozeTomorrow, SnoozeNextMonday, SnoozeSevenDays, SnoozeClear:
 		return true
 	}
-	return false
+	_, ok := parseSnoozeAt(option)
+	return ok
 }
 
 // PrSnoozeInput starts the pr_snooze tracker. Empty on purpose — one per process.
@@ -59,8 +79,16 @@ type PrSnoozeSignal struct {
 // clock. time.Date normalises an overflowing day and keeps 08:00 wall-clock
 // time across a DST switch. "Next Monday" is the Monday of NEXT calendar week
 // (ISO, weeks start on Monday): on a Monday that is +7 days, on a Sunday it is
-// tomorrow. ok is false for an unknown option (and for SnoozeClear).
+// tomorrow. A picked "at:" moment is taken as is, provided it lies after now
+// and within snoozeAtMax. ok is false for an unknown option (and for
+// SnoozeClear).
 func snoozeUntil(now time.Time, option string) (until time.Time, ok bool) {
+	if at, isAt := parseSnoozeAt(option); isAt {
+		if !at.After(now) || at.Sub(now) > snoozeAtMax {
+			return time.Time{}, false
+		}
+		return at.In(now.Location()), true
+	}
 	days := 0
 	switch option {
 	case SnoozeThreeHours:

@@ -22,6 +22,7 @@ import { t } from './i18n.mjs'
 import { relativeTime } from './relativeTime.mjs'
 import { SNOOZE_OPTIONS, snoozePreviewUntil, formatSnoozeMoment } from './snooze.mjs'
 import { jiraRespiteActive } from './jiraNotifyActions.mjs'
+import { SnoozeDatePicker } from './SnoozeDatePicker.mjs'
 
 const ui = reactive({
   composerOpen: false,
@@ -149,6 +150,13 @@ export function createBellReminders(actions, getSnoozed) {
                       ${() => (ui.saving === o.key ? t('Opslaan…') + ' ' : '')}${t(o.label)} <span class="text-slate-400 dark:text-zinc-500">· ${momentLabel(o.key)}</span>
                     </button>`.key('ro:' + o.key),
                   )}
+                  ${SnoozeDatePicker({
+                    testid: 'reminder-date',
+                    label: 'Op dit moment',
+                    buttonCls: SMALL_BTN,
+                    disabled: () => !ui.text.trim() || !!ui.saving,
+                    onPick: (option) => submit(option),
+                  })}
                   <span data-testid="reminder-failed" class="text-[11px] font-medium text-rose-600 dark:text-rose-400">${() => (ui.failed ? '✕ ' + t('Opslaan mislukt') : '')}</span>
                 </div>
               </div>`.key('reminder-composer'),
@@ -194,6 +202,14 @@ export function createBellReminders(actions, getSnoozed) {
                     ${t(o.label)} <span class="text-slate-400 dark:text-zinc-500">· ${momentLabel(o.key)}</span>
                   </button>`.key('so:' + o.key),
                 )}
+                ${SnoozeDatePicker({
+                  testid: 'notify-snooze-date',
+                  buttonCls: SMALL_BTN,
+                  onPick: (option) => {
+                    ui.snoozeFor = ''
+                    actions.snooze(n, option)
+                  },
+                })}
               </div>`.key('snooze-options'),
             ]
           : []}

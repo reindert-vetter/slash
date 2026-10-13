@@ -49,6 +49,24 @@ func TestSnoozeUntil(t *testing.T) {
 	}
 }
 
+// A date-picker moment ("at:<RFC3339>") is taken as is, but only when it lies
+// in the future and not absurdly far out.
+func TestSnoozeUntilPickedMoment(t *testing.T) {
+	now := time.Date(2026, 10, 12, 15, 0, 0, 0, time.UTC)
+	got, ok := snoozeUntil(now, "at:2026-10-20T07:30:00.000Z")
+	if !ok || !got.Equal(time.Date(2026, 10, 20, 7, 30, 0, 0, time.UTC)) {
+		t.Errorf("picked moment: got %v, %v", got, ok)
+	}
+	for _, opt := range []string{"at:2026-10-12T14:00:00Z", "at:2030-01-01T08:00:00Z", "at:tomorrow", "at:"} {
+		if _, ok := snoozeUntil(now, opt); ok {
+			t.Errorf("%q must be rejected", opt)
+		}
+	}
+	if !validSnoozeOption("at:2026-10-20T07:30:00.000Z") || validSnoozeOption("at:nope") {
+		t.Error("validSnoozeOption must accept a well-formed picked moment only")
+	}
+}
+
 // The pr_snooze workflow end-to-end against a real (temp) prsnooze store: a
 // snooze Signal lands a row whose wake-up moment the workflow computed itself,
 // a clear Signal removes it again, and EnsurePrSnooze reuses its run.

@@ -19,6 +19,7 @@ import { settingsButton } from './settingsLink.mjs'
 import { assigneeMark, avatarHTML, avatarUrlOf, displayNameOf, ensureMe, ensureNames, fullNameOf, meLogin } from './avatar.mjs'
 import { relativeTime } from './relativeTime.mjs'
 import { SNOOZE_OPTIONS, snoozePreviewUntil, formatSnoozeMoment, isSnoozeActive, snoozeMarkText } from './snooze.mjs'
+import { SnoozeDatePicker } from './SnoozeDatePicker.mjs'
 import { createJiraNotifyActions, jiraRespiteActive, pruneJiraRespite } from './jiraNotifyActions.mjs'
 import { createBellReminders } from './bellReminders.mjs'
 import { fetchProblems, problemRunRow, problemLogRow } from './problems.mjs'
@@ -1945,7 +1946,17 @@ function snoozeAction(pr) {
                 <span class="flex-1 truncate">${t(o.label)}</span>
                 <span class="shrink-0 text-[11px] text-slate-400 dark:text-zinc-500">${formatSnoozeMoment(snoozePreviewUntil(o.key))}</span>
               </button>`.key('snooze-opt:' + o.key),
-            )
+            ).concat([
+              html`<div class="py-1 pl-8 pr-2.5">
+                ${SnoozeDatePicker({
+                  onPick: (option) => sendSnooze(pr, option),
+                  disabled: () => ui.snoozeBusy,
+                  buttonCls:
+                    'inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[12px] text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800/60 ' +
+                    POPOVER_FOCUS_CLS,
+                })}
+              </div>`.key('snooze-date'),
+            ])
           : []}
       ${() =>
         activeSnooze(pr)
@@ -4361,6 +4372,15 @@ function closePopover() {
 // works, identical to a mouse click), Escape closes it. Every other key is
 // swallowed so it can't leak through to the list nav below.
 function handlePopoverKey(e) {
+  // The snooze date picker's field: its arrows/Home/End edit the date, so
+  // only Escape still closes the popover.
+  if (e.target && e.target.tagName === 'INPUT') {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closePopover()
+    }
+    return
+  }
   switch (e.key) {
     case 'ArrowDown':
       e.preventDefault()

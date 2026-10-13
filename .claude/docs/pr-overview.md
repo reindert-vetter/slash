@@ -349,7 +349,8 @@ own `createJiraNotifyActions` (which gained `snooze`/`addReminder`/
 
 - **Reminder**: "+ Herinnering" in the panel header opens a text field plus
   four moments — "Nu" and the three PR-snooze moments (`snooze.mjs`, 08:00
-  local). Picking a moment creates it, Enter means "Nu". No free date/time.
+  local), plus the shared date picker (below). Picking a moment creates it,
+  Enter means "Nu".
   It is a row in the same list (`kind:"reminder"`, id `rem:<n>`, the word
   "Herinnering" + a clock glyph, not a link): unread once visible (dot +
   count), a click/tick marks it read, after which it behaves like a read Jira
@@ -366,6 +367,19 @@ own `createJiraNotifyActions` (which gained `snooze`/`addReminder`/
   row leaves the list for the collapsed **"Gesnoozed (N)"** block at the
   bottom of the panel ("gesnoozed tot …" + "Snooze opheffen") and comes back
   **unread** at its moment. "Alles gelezen maken" skips snoozed rows.
+- **Date picker, everywhere a snooze is offered** (Reindert: "ik wil bij
+  snoozen (overal) ook een date picker hebben"): `src/SnoozeDatePicker.mjs`, a
+  native `datetime-local` field (default tomorrow 08:00, `min` = now) plus one
+  confirm button naming the resolved moment, below the fixed moments in the
+  PR popover (`snooze-date`), every bell row (`notify-snooze-date`) and the
+  reminder composer (`reminder-date`, "Op dit moment"). The moment travels as
+  option `at:<ISO>` (`snoozeAtOption`) through the unchanged write paths; the
+  server rejects a past moment (`snoozeUntil`). It can sit inside a row's
+  `<a>`, so its wrapper stops every click (default too, except on the input).
+  In the PR popover, `handlePopoverKey` leaves keys on the field alone
+  (arrows edit the date) — only Escape still closes. Not in the right-click
+  menu: a command list has no place for a field. Test:
+  `tests/snooze-date-picker.spec.mjs`.
 - **Waking up is read-side only**: `GET /api/jira/notifications` splits the
   stored rows into `items` and `snoozed` by comparing the stored moment with
   now (`splitBellItems`, `jira_notifications.go`) — no timer, no write.

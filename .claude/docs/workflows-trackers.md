@@ -792,6 +792,13 @@ carries its own `repo`.
   Exactly one Activity per Signal, chosen from the Signal alone, so replay is
   deterministic. No `w.Sleep`: waking up is a read-side check, see the
   overview doc for why new activity lifting a snooze is not a write either.
+- **A picked moment** (the date picker, `src/SnoozeDatePicker.mjs`) is the
+  option `at:<RFC3339>` (`SnoozeAtPrefix`). `validSnoozeOption` only checks
+  its syntax; `snoozeUntil` takes the moment as is, but only when it lies
+  after the recorded `w.Now()` and within `snoozeAtMax` (2 years) — else the
+  Signal runs no Activity. Deterministic: the moment is recorded Signal input.
+  `jira_inbox`'s `snooze`/`reminder_add` go through the same `snoozeUntil`,
+  so they accept it too.
 - **Validation** (`decodePrSnoozeSignal`, in the generic signal forwarder):
   known option, `pr > 0`, a configured repo (`knownRepo`, then `canonRepo`).
 - `EnsurePrSnooze` starts/reuses the tracker at startup and from

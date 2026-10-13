@@ -428,6 +428,10 @@ export const EN = {
   'Herinnering verwijderen': 'Delete reminder',
   'Waar wil je aan herinnerd worden?': 'What do you want to be reminded of?',
   'Zichtbaar:': 'Visible:',
+  // ── src/SnoozeDatePicker.mjs ──
+  'Kies moment': 'Pick a moment',
+  'kies een moment in de toekomst': 'pick a moment in the future',
+  'Op dit moment': 'At this moment',
   'Opslaan…': 'Saving…',
   'Opslaan mislukt': 'Saving failed',
   Nu: 'Now',
