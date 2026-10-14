@@ -737,6 +737,7 @@ func (m *TaskManager) runCleanupOnce(ctx context.Context) {
 		m.logf("cleanup: run failed: %v", err)
 		return
 	}
+	debugf("cleanup", "cleanup run finished purged=%d", len(res.Purged))
 	m.logf("cleanup: purged %d pr(s) (cutoff=%s)", len(res.Purged), res.Cutoff.Format(time.RFC3339))
 }
 
@@ -1847,6 +1848,8 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				// A plain boolean; nothing to validate (nil = default shown).
 			case "touchedSection":
 				// A plain boolean; nothing to validate (nil = default off).
+			case "debugMode":
+				// A plain boolean; nothing to validate (nil = off).
 			case "fileFilter":
 				if _, n := parseStatusKey(body.FileFilterKey); n == 0 || !validFileFilterMode(body.FileFilterMode) {
 					http.Error(w, "invalid file filter", http.StatusBadRequest)

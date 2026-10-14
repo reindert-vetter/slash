@@ -47,6 +47,8 @@ data/notify-filters.json
 # navigation/click history, only exists while Debug mode is on, same reasoning
 # as the two files above.
 data/debug-log.jsonl
+data/debug-server.log
+data/debug-server.json
 # The whisper.cpp speech model for F5 dictation (whisper.go) — 1.6 GB of
 # downloadable binary, fetched on demand from the settings page. Never a
 # commit: data/ is ignored file by file here, so without this line it would

@@ -567,6 +567,8 @@ func purgePR(ctx context.Context, d purgeDeps, pr int) (CleanupPurgeResult, erro
 // worktree directories. A directory that's already gone is simply skipped
 // (idempotent — a repeated cleanup pass never errors on it).
 func removePRWorktrees(ctx context.Context, dataDir string, repo string, pr int) (int, error) {
+	debugf("cleanup", "removePRWorktrees start pr=%d", pr)
+	defer debugf("cleanup", "removePRWorktrees end pr=%d", pr)
 	baseDir, headDir := worktreeDirs(dataDir, repo, pr)
 	n := 0
 	for _, dir := range []string{baseDir, headDir} {
@@ -576,9 +578,13 @@ func removePRWorktrees(ctx context.Context, dataDir string, repo string, pr int)
 		// Deregister the git worktree first (best-effort — an already-broken
 		// or non-worktree directory just falls through to the raw removal).
 		_, _ = runGitFor(ctx, repo, "worktree", "remove", "--force", dir)
+		debugf("cleanup", "RemoveAll start pr=%d dir=%s", pr, dir)
+		rmStart := time.Now()
 		if err := os.RemoveAll(dir); err != nil {
+			debugf("cleanup", "RemoveAll failed pr=%d dir=%s err=%v", pr, dir, err)
 			return n, fmt.Errorf("remove %s: %w", dir, err)
 		}
+		debugf("cleanup", "RemoveAll done pr=%d dir=%s dur=%s", pr, dir, time.Since(rmStart).Round(time.Millisecond))
 		n++
 	}
 
@@ -602,9 +608,13 @@ func removePRWorktrees(ctx context.Context, dataDir string, repo string, pr int)
 		}
 		dir := filepath.Join(wtRoot, e.Name())
 		_, _ = runGitFor(ctx, repo, "worktree", "remove", "--force", dir)
+		debugf("cleanup", "RemoveAll start pr=%d dir=%s", pr, dir)
+		rmStart := time.Now()
 		if err := os.RemoveAll(dir); err != nil {
+			debugf("cleanup", "RemoveAll failed pr=%d dir=%s err=%v", pr, dir, err)
 			return n, fmt.Errorf("remove %s: %w", dir, err)
 		}
+		debugf("cleanup", "RemoveAll done pr=%d dir=%s dur=%s", pr, dir, time.Since(rmStart).Round(time.Millisecond))
 		// Best-effort: also drop the shadow's own local branch (chat/<id>),
 		// otherwise it dangles in the shared clone forever for a conversation
 		// that never committed/pushed, back when this branch shape existed.

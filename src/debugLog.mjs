@@ -44,6 +44,28 @@ function readStored() {
 // debugMode.enabled is the reactive source of truth the toggle button reads.
 export const debugMode = reactive({ enabled: readStored() })
 
+// The server-side half (debug-server.log: git calls, cleanup, signals,
+// heartbeat) is a persisted flag the server reads at startup, so the switch
+// also signals the app_settings tracker (Kind "debugMode") — never a direct
+// write. Fire-and-forget: the browser recording works without it.
+let settingsRunId = null
+async function saveServerDebug(on) {
+  try {
+    if (!settingsRunId) {
+      const r = await fetch('/api/workflows/app_settings', { method: 'POST' })
+      if (r.ok) settingsRunId = (await r.json()).runId || null
+    }
+    if (!settingsRunId) return
+    await fetch('/api/workflows/' + encodeURIComponent(settingsRunId) + '/signals/app_settings_update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'debugMode', debugMode: on }),
+    })
+  } catch (err) {
+    console.error('save server debug failed:', err)
+  }
+}
+
 // toggleDebugMode flips the switch and persists it immediately — the same
 // shape as theme.mjs's cycleTheme. Turning it ON starts a fresh session line
 // right away (so the reviewer doesn't have to reload first); turning it OFF
@@ -51,6 +73,7 @@ export const debugMode = reactive({ enabled: readStored() })
 export function toggleDebugMode() {
   const next = !debugMode.enabled
   debugMode.enabled = next
+  saveServerDebug(next)
   try {
     localStorage.setItem(STORAGE_KEY, next ? 'on' : 'off')
   } catch {

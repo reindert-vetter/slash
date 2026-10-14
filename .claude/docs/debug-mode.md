@@ -156,10 +156,30 @@ the newest `debugLogKeepLines` lines (atomic temp-file + rename). "Log wissen"
 on the settings row empties it through the same workflow (`kind:"clear"`) so a
 reviewer can start a clean reproduction.
 
+## Server-side half: `data/debug-server.log`
+
+The same switch also turns on server diagnostics, aimed at "the server just
+died with `signal: killed` and left no trace". `toggleDebugMode` signals the
+`app_settings` tracker (Kind `debugMode`) whose `saveDebugServer` Activity
+writes `<appDataDir>/debug-server.json` (`{"on":bool}`, gitignored) — the only
+writer (`debug_trace.go`). The flag is loaded at startup in `runServe`
+(before the DB/workflows open), so logging runs from the very first moment of a
+restart, not only once the UI loads. `GET /api/debugmode` reads it.
+
+While on, `debugf(tag, ...)` appends to `data/debug-server.log` and **fsyncs per
+line**, so the tail survives a SIGKILL: every `git` call (`runGitFor`: start,
+end, duration, error), the cleanup purge (`purgePR`, `removePRWorktrees`, each
+`os.RemoveAll` with duration), received SIGTERM/SIGINT/SIGHUP (SIGKILL cannot be
+caught: the heartbeat simply stops), and a 2s heartbeat (heap/sys MB, goroutines,
+ppid). The log is a purely diagnostic operational carve-out (never a read-model,
+never called from a workflow body). Note the `localStorage` preference and the
+server flag are set by the same click but are separate states.
+
 ## Tests
 
 - `tests/debug-mode.spec.mjs` — the switch, the recorded session/key/nav lines
   for a real tree navigation, `Enter` on the row doing what the click does, and
   that nothing is recorded while it is off.
+- `debug_trace_test.go` — the server log writes only while on, and the flag persists.
 - `debug_log_test.go` — append across sessions, the tail read, clear, the
   size-cap trim keeping the newest line, and the validation door.

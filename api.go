@@ -53,6 +53,8 @@ func (s *server) routes(staticDir string) *http.ServeMux {
 	mux.HandleFunc("/api/blankrows", s.handleBlankRows)
 	// Whether /pr-overview has the "Migrations & API changes" section (touchedsection.go).
 	mux.HandleFunc("/api/touchedsection", s.handleTouchedSection)
+	// Server-side Debug mode flag (debug_trace.go).
+	mux.HandleFunc("/api/debugmode", s.handleDebugMode)
 	mux.HandleFunc("/api/filefilters", s.handleFileFilters)
 	// GET /api/debug/log → the recorded debug-mode navigation/action log
 	// (debug_log.go). Registered here rather than in routesTasks for the same

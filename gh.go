@@ -90,7 +90,10 @@ func runGit(ctx context.Context, args ...string) ([]byte, error) {
 func runGitFor(ctx context.Context, repo string, args ...string) ([]byte, error) {
 	full := append([]string{"-C", repoDirFor(repo)}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
+	started := time.Now()
+	debugf("git", "start git %s", strings.Join(full, " "))
 	out, err := cmd.CombinedOutput()
+	debugf("git", "done  git %s dur=%s err=%v", strings.Join(args, " "), time.Since(started).Round(time.Millisecond), err)
 	if err != nil {
 		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}

@@ -111,6 +111,8 @@ func runServe(args []string) {
 	// use — which is not necessarily the DB's dir (a test run points -db and
 	// -data at different trees).
 	initRepos(resolvedData)
+	// Debug mode flag first, so logging runs from the very start (debug_trace.go).
+	loadDebugServerFile(resolvedData)
 	tk, closeTasks, err := newTasks(context.Background(), db, filepath.Dir(resolvedDB), repoSlugFor(""), true)
 	if err != nil {
 		log.Fatalf("init workflows: %v", err)

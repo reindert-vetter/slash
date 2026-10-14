@@ -821,6 +821,9 @@ type AppSettingsSignal struct {
 	// ShowTouchedSection carries the "Migrations & API changes" section setting
 	// (Kind "touchedSection"); nil means the default (off). See touchedsection.go.
 	ShowTouchedSection *bool `json:"showTouchedSection,omitempty"`
+	// DebugMode carries the server-side Debug mode flag (Kind "debugMode");
+	// nil means off. See debug_trace.go.
+	DebugMode *bool `json:"debugMode,omitempty"`
 	// FileFilterKey + FileFilterMode carry one PR's file filter (Kind
 	// "fileFilter"): the statusKey and "all"|"backend"|"frontend". See filefilter.go.
 	FileFilterKey  string `json:"fileFilterKey,omitempty"`
@@ -2776,6 +2779,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, saveTouchedSectionFile(m.appDataDirOrDefault(), show)
 	})
 
+	// Activity: persist the server-side Debug mode flag (debug-server.json) —
+	// saveDebugServerFile (debug_trace.go) is the only writer of it.
+	engine.RegisterActivity("saveDebugServer", func(ctx context.Context, in []byte) ([]byte, error) {
+		var on bool
+		if err := json.Unmarshal(in, &on); err != nil {
+			return nil, err
+		}
+		return nil, saveDebugServerFile(m.appDataDirOrDefault(), on)
+	})
+
 	// Activity: persist one PR's file filter into file-filters.json —
 	// setFileFilterFile (filefilter.go) is the only writer of that file.
 	engine.RegisterActivity("saveFileFilter", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -3307,7 +3320,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &t); err != nil {
 			return nil, err
 		}
+		debugf("cleanup", "purgePR start pr=%d", t.PR)
 		res, err := m.purgePRAndForget(ctx, t.PR)
+		debugf("cleanup", "purgePR end pr=%d err=%v", t.PR, err)
 		if err != nil {
 			return nil, err
 		}
@@ -4095,6 +4110,7 @@ func (m *TaskManager) SetAppDataDir(dir string) {
 	m.appDataDir = dir
 	loadBlankRowsFile(dir)
 	loadTouchedSectionFile(dir)
+	loadDebugServerFile(dir)
 	loadFileFiltersFile(dir)
 }
 
@@ -5157,6 +5173,11 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			show := sig.ShowTouchedSection != nil && *sig.ShowTouchedSection
 			if err := w.ExecuteActivity("saveTouchedSection", show, nil); err != nil {
 				return nil, fmt.Errorf("save touched section: %w", err)
+			}
+		case "debugMode":
+			on := sig.DebugMode != nil && *sig.DebugMode
+			if err := w.ExecuteActivity("saveDebugServer", on, nil); err != nil {
+				return nil, fmt.Errorf("save debug mode: %w", err)
 			}
 		case "fileFilter":
 			in := struct{ Key, Mode string }{sig.FileFilterKey, sig.FileFilterMode}
