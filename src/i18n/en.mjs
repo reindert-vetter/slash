@@ -140,6 +140,7 @@ export const EN = {
   // ── src/markdown.mjs ────────────────────────────────────────────────────
   'Suggestie {n}': 'Suggestion {n}',
   'Codeblok {n}': 'Code block {n}',
+  'Voorstel {n}': 'Proposal {n}',
 
   // ── src/relativeTime.mjs ────────────────────────────────────────────────
   zojuist: 'just now',

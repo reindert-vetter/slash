@@ -3668,6 +3668,43 @@ itself. Same knob shape as the paragraph above: to dial this up/down, edit
 that one shared paragraph in the three prompt files, no frontend change
 involved.
 
+### Numbered proposals: `Voorstel N:` and its badge
+
+Reviewer request: every change the chat proposes gets a unique number, so it
+can be referred to later ("doe voorstel 2"). Scope, as decided by Reindert:
+every proposed change counts (volunteered or asked for), each alternative of
+an "A or B" gets its own number, plain explanation and a `question` with
+options never do; the number runs on across the **whole conversation** and is
+**independent of "Codeblok N"** (a proposal can have zero, one or several
+fences).
+
+- **Prompt half:** one shared paragraph in `chat.md`/`chat_readonly.md`/
+  `chat_shell.md`, right after the "volunteering a change proposal" paragraph
+  above: start a proposal on its own line with exactly `Voorstel N:`
+  (`Proposal N:` in an English answer), no bullet/heading/bold, and continue
+  from the last number used earlier in the conversation (the turn resumes the
+  CLI session, so Claude sees its own earlier answers). `chat_readonly.md`'s
+  "approval counts as a request" list also names "doe voorstel 2". Test:
+  `TestChatPromptsNumberProposals` (`modules/claude/prompts_test.go`).
+- **Badge half:** `renderMarkdown`'s fourth argument `proposals` (default
+  false) runs `extractProposalMarkers` (`markdown.mjs`), turning a LINE-START
+  `Voorstel N:`/`Proposal N:` (optionally behind a list bullet, or with a `**`
+  pair around exactly the marker) into a bordered pill reading "Voorstel N"
+  (`data-testid=chat-proposal-badge`, `data-proposal=N`) — the word carries
+  the meaning, the violet tint is decoration (colourblind rule). Only
+  `ClaudeChat.mjs` passes `true`, and only for Claude's own turns
+  (`claudeMessageBody` with `role !== 'user'`, plus the streaming partial
+  bubble) — never comment bodies or the reviewer's messages.
+- **Why a keyword and not a bare `N:`:** a bare number+colon at a line start is
+  ordinary text too ("10:30 draait de job", a step "1: …"); the keyword is
+  what makes the match unambiguous. Mid-sentence ("zie voorstel 3: …") and
+  inside a fence never match: the regex is line-anchored and runs after the
+  fence/table extraction. The badge goes in through the same `store` as a
+  fence, but its token is wrapped in a private-use char (`\uE010`) instead of
+  the ` MDn ` spaces, because snarkdown trims a list item's leading space.
+  Test: `tests/markdown.spec.mjs` ("a line-start "Voorstel N:" becomes a
+  proposal badge…").
+
 ### Codeblok numbering diverges from chat context (on purpose) — the mechanism for acting on a fenced code block/suggestion
 
 A fenced code block (` ``` `) or a GitHub `` ```suggestion `` block in a

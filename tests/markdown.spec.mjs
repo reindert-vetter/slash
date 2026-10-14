@@ -403,4 +403,49 @@ test.describe('PR Review Tree — Markdown rendering', () => {
     await expect(host.locator('[data-testid="code-fence"]')).toHaveCount(1)
     await expect(host.locator('[data-testid="code-fence"]')).toContainText('| A | B |')
   })
+
+  test('a line-start "Voorstel N:" becomes a proposal badge only when asked, never a time or a fenced line', async ({ page }) => {
+    await page.goto('/pr/12903')
+
+    await appReady(page)
+
+    const out = await evaluateSettled(page, async () => {
+      const { renderMarkdown } = await import('/src/markdown.mjs')
+      const md = [
+        'Voorstel 1: gebruik een early return.',
+        '',
+        '- **Proposal 2:** of <b>inline</b> houden.',
+        '',
+        '10:30 draait de job.',
+        '',
+        '1: gewone genummerde stap.',
+        '',
+        'Zie voorstel 3: niet aan het begin.',
+        '',
+        '```',
+        'Voorstel 9: in code',
+        '```',
+      ].join('\n')
+      const host = document.createElement('div')
+      host.id = 'proposal-host'
+      host.innerHTML = renderMarkdown(md, 0, true, true)
+      document.body.appendChild(host)
+      return { off: renderMarkdown(md).includes('chat-proposal-badge') }
+    })
+
+    expect(out.off).toBe(false)
+    const host = page.locator('#proposal-host')
+    const badges = host.locator('[data-testid="chat-proposal-badge"]')
+    await expect(badges).toHaveCount(2)
+    await expect(badges.nth(0)).toHaveAttribute('data-proposal', '1')
+    await expect(badges.nth(1)).toHaveAttribute('data-proposal', '2')
+    await expect(badges.nth(0)).toContainText(/(Voorstel|Proposal) 1/)
+    // The rest of the line still renders, and stays escaped.
+    await expect(host).toContainText('gebruik een early return.')
+    await expect(host.locator('b')).toHaveCount(0)
+    await expect(host).toContainText('10:30 draait de job.')
+    await expect(host).toContainText('1: gewone genummerde stap.')
+    await expect(host).toContainText('Zie voorstel 3: niet aan het begin.')
+    await expect(host.locator('[data-testid="code-fence"]')).toHaveAttribute('data-fence-code', 'Voorstel 9: in code')
+  })
 })

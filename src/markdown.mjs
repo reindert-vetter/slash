@@ -783,6 +783,43 @@ export function hardBreaks(text) {
   return transformed.replace(/ HB(\d+) /g, (m, i) => store[Number(i)])
 }
 
+// extractProposalMarkers — the numbered-proposal badge in a Claude-chat
+// bubble (see "Numbered proposals" in .claude/docs/claude-chat-panel.md). The
+// chat prompts (modules/claude/prompts/chat*.md) make Claude open every
+// proposed change with `Voorstel N:` (`Proposal N:` in an English answer), N
+// running on across the whole conversation. Deliberately a WORD plus number,
+// not a bare `N:`: a bare number+colon at a line start also matches ordinary
+// text ("10:30 gaat de job draaien", a numbered step "1: ..."), the keyword
+// can't. Only matched at the very start of a line (optionally behind a list
+// bullet and/or a `**` pair around exactly the marker), so "zie voorstel 2: ..." mid-
+// sentence stays text. Runs on the RAW text after the fence/table extraction,
+// so a marker inside a code block is never touched; the badge itself goes in
+// as a placeholder (same `store` as a fence), the word/number come from the
+// regex (letters/digits only) and are escaped anyway. Shape carries the
+// meaning (a bordered pill with the word in it), colour is decoration only
+// (the colourblind rule in conventions.md).
+const PROPOSAL_RE = /^([ \t]*(?:[-*+][ \t]+)?)(?:\*\*(?:Voorstel|Proposal)[ \t]+(\d{1,3})(?::\*\*|\*\*:)|(?:Voorstel|Proposal)[ \t]+(\d{1,3}):)[ \t]+/gim
+const PROPOSAL_BADGE_CLS =
+  'mr-1 inline-flex items-center rounded-md border border-violet-400 bg-violet-50 px-1.5 py-px align-baseline text-[11px] font-semibold text-violet-800 dark:border-violet-400/60 dark:bg-violet-500/15 dark:text-violet-200'
+
+// The token is wrapped in a private-use char rather than the fences' ` MDn `
+// spaces: snarkdown trims a list item's leading whitespace, which would eat
+// the space applyPlaceholders needs. Any stray PROPOSAL_MARK already in the
+// text is dropped first, so text can never forge a token.
+const PROPOSAL_MARK = '\uE010'
+const PROPOSAL_TOKEN_RE = /\uE010(\d+)\uE010/g
+
+function extractProposalMarkers(text, store) {
+  return text.split(PROPOSAL_MARK).join('').replace(PROPOSAL_RE, (m, lead, boldN, plainN) => {
+    const n = boldN || plainN
+    const label = escapeHtml(t('Voorstel {n}', { n }))
+    const html = `<span class="${PROPOSAL_BADGE_CLS}" data-testid="chat-proposal-badge" data-proposal="${escapeHtml(n)}">${label}</span>`
+    const token = PROPOSAL_MARK + store.length + PROPOSAL_MARK
+    store.push(html)
+    return lead + token
+  })
+}
+
 // renderMarkdown(text, startIndex, truncate) -> safe HTML string, meant for
 // arrow.js's `.innerHTML="${() => renderMarkdown(...)}"` binding. `startIndex`
 // (default 0, i.e. the first fence in `text` is numbered 1) lets a caller
@@ -797,13 +834,18 @@ export function hardBreaks(text) {
 // column" in .claude/docs/claude-chat-panel.md) — everywhere else (the PR
 // summary/description in `prInfoCard`) there is no such card to point at, so
 // those keep the untruncated, pre-existing rendering (the default `false`).
-export function renderMarkdown(text, startIndex = 0, truncate = false) {
+//
+// `proposals` (default false) turns a line-start `Voorstel N:` into a badge
+// (`extractProposalMarkers`) — on only for Claude's OWN chat turns
+// (`ClaudeChat.mjs`), never for comment bodies or the reviewer's messages.
+export function renderMarkdown(text, startIndex = 0, truncate = false, proposals = false) {
   if (!text) return ''
   const store = []
   let src = String(text)
   src = extractCodeFences(src, store, startIndex, truncate)
   src = extractTables(src, store)
   src = extractRawImages(src, store)
+  if (proposals) src = extractProposalMarkers(src, store)
   src = escapeHtml(src)
   // Keep snarkdown away from the two emphasis cases it gets wrong (an
   // intra-word `_`, an unpairable `**`/`__`) — see the block comment above
@@ -815,6 +857,7 @@ export function renderMarkdown(text, startIndex = 0, truncate = false) {
   let out = snarkdown(src)
   out = restoreProtectedChars(out)
   out = applyPlaceholders(out, store)
+  if (proposals) out = out.replace(PROPOSAL_TOKEN_RE, (m, i) => store[Number(i)] ?? '')
   out = sanitizeUrls(out)
   out = proxyGithubAttachments(out)
   out = enhanceImages(out)

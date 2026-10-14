@@ -117,8 +117,11 @@ function claudeMessageBody(msg) {
     const parts = splitAutoCheckQuote(msg.body || '')
     if (parts) return () => autoCheckHTML(parts)
   }
-  const body = msg.role === 'user' ? hardBreaks(msg.body || '') : msg.body || ''
-  return () => renderMarkdown(body, 0, true)
+  const own = msg.role === 'user'
+  const body = own ? hardBreaks(msg.body || '') : msg.body || ''
+  // Claude's own turns get the numbered-proposal badge (`Voorstel N:`, see
+  // extractProposalMarkers in markdown.mjs); the reviewer's never do.
+  return () => renderMarkdown(body, 0, true, !own)
 }
 
 // splitAutoCheckQuote takes an auto_check turn's body apart into the text
@@ -481,7 +484,7 @@ function claudePartialBubble(view) {
             : html`<div
                 class="markdown-body max-w-[92%] rounded-xl border border-slate-300 bg-slate-100 px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere] text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300"
                 data-testid="claude-partial-body"
-                .innerHTML="${() => renderMarkdown(closeOpenFence(p.partial), 0, true)}"
+                .innerHTML="${() => renderMarkdown(closeOpenFence(p.partial), 0, true, true)}"
               ></div>`}
     </div>
   `

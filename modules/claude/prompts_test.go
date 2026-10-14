@@ -138,3 +138,21 @@ func TestChatPromptsRequireLineNumberBackedByShownCode(t *testing.T) {
 		}
 	}
 }
+
+// The numbered-proposal rule must stay in all three chat prompts, and its
+// marker must match what markdown.mjs's extractProposalMarkers turns into a
+// badge (`Voorstel N:` / `Proposal N:` at a line start). See "Numbered
+// proposals" in .claude/docs/claude-chat-panel.md.
+func TestChatPromptsNumberProposals(t *testing.T) {
+	for name, p := range map[string]string{
+		"ChatSystemPrompt":         ChatSystemPrompt,
+		"ChatReadOnlySystemPrompt": ChatReadOnlySystemPrompt,
+		"ChatShellSystemPrompt":    ChatShellSystemPrompt,
+	} {
+		for _, want := range []string{"`Voorstel N:`", "`Proposal N:`", "hele gesprek", "Codeblok N", "eigen nummer"} {
+			if !strings.Contains(p, want) {
+				t.Fatalf("%s: expected the numbered-proposal rule to mention %q", name, want)
+			}
+		}
+	}
+}
