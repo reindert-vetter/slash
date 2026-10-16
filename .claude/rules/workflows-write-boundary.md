@@ -146,7 +146,8 @@ A `claude_chat` turn (`runOneClaudeTurn`, `chat_workflow.go`) may run with
 `Read/Grep/Glob/Edit` **plus `Bash`**, in the conversation's own shadow
 worktree (`chat_shadow.go`) — so Claude can run `git`, `gh` and `acli` itself
 when the reviewer asks for it in the message, instead of the reviewer clicking
-a dedicated button.
+a dedicated button. When that message asks for screenshots/containers, the
+shell attempt also gets Playwright MCP (`chat_screenshots.go`).
 
 What this deliberately gives up, recorded here so nobody "fixes" it back by
 accident:

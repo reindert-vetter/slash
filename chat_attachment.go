@@ -356,6 +356,21 @@ func (m *TaskManager) saveChatAttachment(ctx context.Context, in ChatAttachmentI
 	if err != nil {
 		return ChatAttachmentRef{}, fmt.Errorf("chat attachment: invalid base64: %w", err)
 	}
+	// appDataDirOrDefault, never m.dataDir: an attachment is app content the
+	// read-only GET serves out of server.dataDir (api.go), and those two dirs
+	// only coincide by default — a run that points -db and -data at different
+	// trees (every Playwright worker does) would otherwise write where nothing
+	// ever reads. Same reasoning, and the same call, as the app_settings
+	// Activities that write settings.json.
+	return storeChatAttachmentBytes(m.appDataDirOrDefault(), in.ConversationID, in.Name, data)
+}
+
+// storeChatAttachmentBytes is the shared "verify by magic bytes, hash, write"
+// core: used by saveChatAttachment (a reviewer's pasted image) and by
+// harvestChatScreenshots (a screenshot Claude itself took during a chat turn,
+// chat_screenshots.go). Only ever called from inside an Activity. The file
+// name is the content hash, so writing the same bytes twice is idempotent.
+func storeChatAttachmentBytes(appDataDir, conversationID, name string, data []byte) (ChatAttachmentRef, error) {
 	if len(data) == 0 {
 		return ChatAttachmentRef{}, fmt.Errorf("chat attachment: empty file")
 	}
@@ -368,20 +383,14 @@ func (m *TaskManager) saveChatAttachment(ctx context.Context, in ChatAttachmentI
 	}
 	sum := sha256.Sum256(data)
 	id := hex.EncodeToString(sum[:]) + chatAttachmentExts[mime]
-	// appDataDirOrDefault, never m.dataDir: an attachment is app content the
-	// read-only GET serves out of server.dataDir (api.go), and those two dirs
-	// only coincide by default — a run that points -db and -data at different
-	// trees (every Playwright worker does) would otherwise write where nothing
-	// ever reads. Same reasoning, and the same call, as the app_settings
-	// Activities that write settings.json.
-	dir := chatAttachmentConvDir(m.appDataDirOrDefault(), in.ConversationID)
+	dir := chatAttachmentConvDir(appDataDir, conversationID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ChatAttachmentRef{}, fmt.Errorf("chat attachment: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, id), data, 0o644); err != nil {
 		return ChatAttachmentRef{}, fmt.Errorf("chat attachment: %w", err)
 	}
-	return ChatAttachmentRef{ID: id, Name: chatAttachmentDisplayName(in.Name, id), MIME: mime}, nil
+	return ChatAttachmentRef{ID: id, Name: chatAttachmentDisplayName(name, id), MIME: mime}, nil
 }
 
 // chatAttachmentDisplayName keeps the reviewer's own file name for display,

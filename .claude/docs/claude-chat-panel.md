@@ -5649,6 +5649,37 @@ bucket — terwijl de al geplakte afbeeldingen nog onder de oude hangen.
   geweigerd), plus `chat_attachment_test.go` voor de opslag-, pad- en
   scope-bewaking.
 
+## Screenshots van Claude (containers + browser in the review chat)
+
+Reviewer request: "ik wil dat ik aan de claude chat kan vragen om containers
+te draaien en zo screenshots te kunnen maken. die screenshots moeten
+zichtbaar zijn in de chat". Review-tree chat only (`claude_chat`), not the
+`/plan` chat. Code: `chat_screenshots.go`, wired into `runOneClaudeTurn`.
+
+- **Containers need nothing new**: the escalated shell attempt already has
+  Bash in the reviewer's checkout, so `docker compose up -d` works.
+  `chat_readonly.md` sends a container/screenshot request to `need_write`;
+  `chat_shell.md` carries the same stack rules as `qa_run.md` (check `docker
+  ps` first, never stop a stack from another dir, admin login).
+- **Playwright MCP only on keyword, only on the shell attempt** (reviewer
+  decision): `wantsChatScreenshots(arg.Body)` is a pure, case-insensitive
+  substring match (`screenshot`, `schermafbeelding`, `container`, `docker`,
+  `playwright`, `browser`, …). Any other write turn pays no MCP start-up or
+  tool-schema tokens. Same Playwright flags as `qaMCPConfig`, no
+  laravel-boost.
+- **Per-turn dir outside the checkout**: `data/chat-shots/<conv>/<turn>`
+  (absolute, `--output-dir` + `--add-dir`; inside the checkout the landing
+  check would commit the images). Its path goes into the continuation prompt.
+- **Harvest**: after a successful turn, every supported image there (oldest
+  first, max `chatScreenshotsPerTurn` = 8) is copied into the conversation's
+  ordinary attachment store via `storeChatAttachmentBytes` (shared with
+  `saveChatAttachment`) and set as `msg.Attachments` on the assistant
+  message; the per-turn dir is removed (`defer`, also on cancel/error).
+  `messageAttachments` already renders any message's attachments (`h-24`
+  thumbnails + lightbox), so no frontend change. All inside the Activity: the
+  history only carries the refs.
+- Test: `chat_screenshots_test.go`.
+
 ## Open (frontend gaps)
 
 - No draft-persistence (`composeDrafts`/`replyDrafts`-style) for the chat

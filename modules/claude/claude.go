@@ -142,11 +142,12 @@ type RunRequest struct {
 	// MCPConfig, when non-empty, is passed verbatim to the CLI's own
 	// --mcp-config (a JSON string). Together with coldStartArgs'
 	// --strict-mcp-config this loads EXACTLY these MCP servers and nothing
-	// configured elsewhere on the machine. Exactly one caller sets it: the
-	// qa_run workflow (qa_run.go), which needs a real browser (Playwright
-	// MCP) and laravel-boost to test a PR in the local admin — a deliberate,
-	// reviewer-approved exception to "this module never loads an MCP server",
-	// see .claude/docs/qa-page.md. Its tools still have to be allow-listed via
+	// configured elsewhere on the machine. Two callers set it, both
+	// deliberate, reviewer-approved exceptions to "this module never loads an
+	// MCP server": the qa_run workflow (qa_run.go — Playwright MCP plus
+	// laravel-boost, see .claude/docs/qa-page.md) and a claude_chat shell
+	// attempt whose message asks for screenshots/containers (Playwright only,
+	// chat_screenshots.go). Its tools still have to be allow-listed via
 	// Tools (e.g. "mcp__playwright"); agenticToolUniverse keeps those names
 	// out of --tools, which only knows built-in tools. RunChat only.
 	MCPConfig string
@@ -814,10 +815,11 @@ func newSessionID() string {
 // conversation"):
 //
 //   - --strict-mcp-config: this module passes --mcp-config only for qa_run
-//     (RunRequest.MCPConfig), so this makes sure NO OTHER MCP server
+//     and a screenshot chat turn (RunRequest.MCPConfig), so this makes sure
+//     NO OTHER MCP server
 //     configured anywhere on the machine
 //     (project or personal, e.g. a personal Atlassian/Jira MCP server) is
-//     loaded into a review-chat turn. Review-chat never needs an MCP tool, so
+//     loaded into a review-chat turn. Review-chat needs no other MCP tool, so
 //     this can only remove content, never behaviour.
 //   - --exclude-dynamic-system-prompt-sections: moves the per-machine parts of
 //     the DEFAULT system prompt (cwd, env info, git status) out of the cached
@@ -875,7 +877,7 @@ func coldStartArgs() []string {
 // without being explicitly allow-listed), so this change doesn't alter
 // skill-permission behaviour, only removes what was never reachable.
 //
-// An "mcp__<server>" entry (only qa_run passes one, see RunRequest.MCPConfig)
+// An "mcp__<server>" entry (qa_run and a screenshot chat turn, see RunRequest.MCPConfig)
 // is an --allowedTools permission, not a built-in tool, so it is left out of
 // the universe here — MCP tools are loaded via --mcp-config regardless of
 // --tools (verified with a manual `claude -p` run).

@@ -23,7 +23,9 @@ The reviewer's answers to the plan questions:
    directory where the PR branch is checked out (`prepareChatShellWorkDir`).
    If that is ambiguous, the reviewer is asked, through the same werkmap
    overlay.
-2. **Browser:** Playwright MCP plus laravel-boost MCP, only for `qa_run`.
+2. **Browser:** Playwright MCP plus laravel-boost MCP for `qa_run`. (A
+   screenshot request in the review chat also gets Playwright MCP — see
+   "Screenshots van Claude" in `claude-chat-panel.md`.)
 3. **What Claude may do:** whatever the example artifact did (Nova actions,
    artisan, DB updates, simulating time, queue workers). No code edits, no
    `.env` edits, no `migrate:fresh`/reseed. Whenever Claude does something
@@ -117,7 +119,9 @@ Test: `qa_checkout_guard_test.go` (a temp git repo).
 
 `modules/claude` used to never load an MCP server: `coldStartArgs` passes
 `--strict-mcp-config` on every call. `RunRequest.MCPConfig` adds
-`--mcp-config <json>` for **qa_run only**. Together with
+`--mcp-config <json>` for **qa_run** (and, Playwright only, for a review-chat
+shell attempt whose message asks for screenshots/containers — see
+"Screenshots van Claude" in `claude-chat-panel.md`). Together with
 `--strict-mcp-config`, that call loads exactly these two servers:
 
 - `playwright`: `npx -y @playwright/mcp@latest --headless --isolated

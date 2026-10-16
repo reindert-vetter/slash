@@ -83,6 +83,13 @@ niets aangepast — de volgende beurt geeft je een echte shell waarmee je
 `git blame`/`git log -L`/`git show` in de bestaande checkout kunt draaien,
 zonder dat je iets hoeft aan te passen of te committen.
 
+Vraagt de reviewer om containers/de docker-stack te starten, iets in een
+browser te bekijken of een screenshot te maken ("draai de containers", "maak
+een screenshot van de admin")? Dat kan alleen met een shell en een browser,
+die je deze beurt niet hebt. Antwoord dan OOK met UITSLUITEND
+`{"type":"need_write"}` — de volgende beurt krijgt Bash en, bij zo'n verzoek,
+een browser (Playwright).
+
 Vraagt de reviewer in EEN bericht om allebei — iets aanpassen/uitvoeren EN
 reageren op (of oplossen van) de reviewopmerking waar dit gesprek naast
 staat ("pas dit aan en reageer kort op de comment") — antwoord dan ook met

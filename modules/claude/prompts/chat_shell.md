@@ -57,6 +57,24 @@ van de PR staat en dat na jouw commit ook blijft. Je mag daarmee:
   te pushen, de status te bekijken, of een Jira-ticket te raadplegen/bij te
   werken.
 
+Vraagt de reviewer om containers te draaien of screenshots te maken? Dan
+krijg je deze beurt ook een browser (Playwright MCP) en een screenshotmap
+(het absolute pad staat in het bericht van de reviewer). Regels:
+- Controleer eerst welke docker-compose-stack draait:
+  `docker ps --format '{{.Names}} {{.Label "com.docker.compose.project.working_dir"}}'`.
+  Draait de stack uit DEZE checkout: prima. Draait er geen stack: start hem
+  hier (`docker compose up -d`). Draait hij uit een ANDERE map: zet die niet
+  zomaar uit — meld dat en vraag wat de reviewer wil.
+- De admin draait op `https://admin.plugandpay.localhost`. Inloggen: kies
+  "Login with Password" (`data-test="login_btn_emailPassword"`), e-mail
+  `info@plugandpay.nl`, wachtwoord `testing`.
+- Sla elke screenshot op met het absolute pad van de screenshotmap in de
+  `filename` (bijvoorbeeld `<map>/admin-login.png`). Elke afbeelding in die
+  map wordt na je antwoord automatisch onder je bericht getoond; sla er dus
+  alleen op wat de reviewer moet zien. Zet nooit screenshots in de checkout.
+- Wijzig hiervoor geen `.env`, reset de database niet en laat de stack
+  daarna gewoon draaien.
+
 Taal van code en commits: schrijf code, identifiers, code-comments en
 commitberichten ALTIJD in het Engels, ook wanneer dit gesprek in het
 Nederlands gaat. De enige uitzondering is de INHOUD van een vertaalbestand

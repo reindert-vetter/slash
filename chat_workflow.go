@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -1412,6 +1413,9 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		logTurnMilestone("read-only attempt quoted need_write inline after %v, escalating anyway", time.Since(t0))
 		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)
 	}
+	// shotDir is this turn's screenshot directory, set only when the shell
+	// attempt below got a browser (see chat_screenshots.go).
+	shotDir := ""
 	if escalate {
 		// From here on this turn is going to CHANGE code, and only one such
 		// turn runs at a time PER CHECKOUT (chat_write_gate.go,
@@ -1528,6 +1532,20 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			OnHeartbeat: func() { touchWriteTurnHolder(writeSlotKey) },
 			AddDirs:     attachmentDirs,
 		}
+		// A screenshot/container request also gets a browser (Playwright
+		// MCP) and a per-turn screenshot dir outside the checkout — only
+		// when the reviewer's message asks for it, see chat_screenshots.go.
+		if wantsChatScreenshots(arg.Body) {
+			dir := chatScreenshotDir(tm.appDataDirOrDefault(), arg.ConversationID, arg.TurnID)
+			if err := os.MkdirAll(dir, 0o755); err == nil {
+				shotDir = dir
+				defer os.RemoveAll(dir)
+				shellReq.Tools = append(shellReq.Tools, "mcp__playwright")
+				shellReq.MCPConfig = chatScreenshotMCPConfig(dir)
+				shellReq.AddDirs = append(append([]string(nil), shellReq.AddDirs...), dir)
+				shellReq.Prompt += chatScreenshotPromptNote(dir)
+			}
+		}
 		shellSteerCh, unregisterShellSteer := openSteerSlot(runCtx, arg.ConversationID)
 		shellReq.Steer = shellSteerCh
 		logTurnMilestone("local prep done after %v, invoking claude CLI (shell attempt)", time.Since(t0))
@@ -1576,6 +1594,10 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	}
 
 	msg, action := parseAssistantTurn(arg.PR, arg.ConversationID, arg.TurnID, result.Text)
+	// Screenshots Claude took this turn show up under its own bubble.
+	if shotDir != "" {
+		msg.Attachments = harvestChatScreenshots(tm.appDataDirOrDefault(), arg.ConversationID, shotDir)
+	}
 	// Which model actually answered — the reviewer sees it on the bubble when it
 	// isn't the default one (see the model pill in ClaudeChat.mjs).
 	msg.Model = model
