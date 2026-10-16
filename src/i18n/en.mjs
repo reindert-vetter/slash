@@ -346,6 +346,8 @@ export const EN = {
   '{n} genegeerd, {s} overgeslagen.': '{n} ignored, {s} skipped.',
 
   // ── src/overview.mjs ─────────────────────────────────────────────────────
+  // The overview's refresh error line (refreshErrorLine, src/overview.mjs).
+  'Server niet bereikbaar — overzicht is van {time}': 'Server unreachable — overview is from {time}',
   // The manual per-category refresh button (above a PR section and above
   // "Planning").
   Vernieuwen: 'Refresh',

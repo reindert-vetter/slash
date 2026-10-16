@@ -377,3 +377,15 @@ func TestCombineSinceMoment(t *testing.T) {
 		})
 	}
 }
+
+// TestIsOpenRow guards the buildInbox vangnet: a search hit whose live state is
+// MERGED/CLOSED (GitHub's search index still listing it under state:open right
+// after the merge) is dropped; OPEN and an empty state (fixtures) stay.
+func TestIsOpenRow(t *testing.T) {
+	cases := map[string]bool{"": true, "OPEN": true, "MERGED": false, "CLOSED": false}
+	for state, want := range cases {
+		if got := isOpenRow(inboxRow{Number: 1, State: state}); got != want {
+			t.Errorf("isOpenRow(state=%q) = %v, want %v", state, got, want)
+		}
+	}
+}

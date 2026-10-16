@@ -1317,6 +1317,29 @@ own cadence.
   fresh fetch" (`tests/overview.spec.mjs`), "the Planning section's own
   refresh button asks for a fresh Jira fetch" (`tests/overview-jira-issues.spec.mjs`).
 
+### A refresh that cannot reach the server says so
+
+Reviewer report: "ik refresh, maar pr staan hier nog" — two just-merged PRs
+stayed in "Ready to merge". The server had been killed (SIGKILL) right after
+the last `refreshInbox`, and every fetch in the refresh path (`postWorkflow`,
+`reloadSnapshot`) swallowed its error, so the button spun ~6s and stopped as
+if the refresh had worked. Now `postWorkflow` resolves `true/false`,
+`reloadSnapshot` sets **`ui.refreshError`** on a network error/non-OK answer
+(and clears it on the next good read), and `refreshSectionsNow` sets it when
+the signal itself failed. `refreshErrorLine()` (under the `<h1>` in
+`headerBlock`, `data-testid=overview-refresh-error`) shows only then:
+"Server niet bereikbaar — overzicht is van HH:MM", the time being the
+read-model's own `updatedAt` of the last snapshot that did load
+(`state.snapshotAt`). The rows stay — a failed refresh never blanks the list.
+Test: `tests/overview-refresh-error.spec.mjs`.
+
+**Server-side vangnet:** every inbox query filters on `state:open`, but
+GitHub's search index lags a merge/close by seconds up to a minute.
+`buildInbox` therefore also drops a hit whose live node `state` is not OPEN
+(`isOpenRow`, `inbox.go`; an empty state — fixtures — counts as open), so a
+refresh right after merging never keeps the PR one more round. Test:
+`TestIsOpenRow` (`inbox_test.go`).
+
 ## "Nieuw sinds jouw comment/review" (`newSinceKind`)
 
 The "Bijgewerkt … geleden" line (`rowMeta`, `src/overview.mjs`) can carry one

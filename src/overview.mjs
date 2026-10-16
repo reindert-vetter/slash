@@ -51,6 +51,9 @@ const state = reactive({
   loading: true,
   error: '',
   cached: false,
+  // snapshotAt — the pr_inbox read-model's own updatedAt (RFC3339) of the last
+  // snapshot this tab loaded successfully; shown in the refresh error line.
+  snapshotAt: '',
   inboxRunId: '', // pr_inbox workflow Run ID — target for refresh signal + heartbeat
   // jira — the reviewer's own Jira notification feed, read from
   // GET /api/jira/notifications (the jira_inbox tracker's read-model). Shown
@@ -183,6 +186,10 @@ const ui = reactive({
   // reads the same jira_issues read-model, so there is no per-section tracker
   // to target individually.
   sectionsRefreshing: false, jiraIssuesRefreshing: false,
+  // refreshError — the last refresh (signal or snapshot re-read) could not
+  // reach the server, so the list on screen is stale. Cleared by the next
+  // successful snapshot read. See refreshErrorLine.
+  refreshError: false,
 })
 
 // INGEST_STAGE_LABELS — Dutch labels for the busy button while /api/ingest is
@@ -2684,11 +2691,37 @@ function errorCard(msg) {
 
 // The repo-wide "N actief" badge is runningBadgeButton() (runningTasks.mjs).
 
+// refreshErrorLine — shown only while ui.refreshError is set: the refresh
+// could not reach the server (reviewer report: "ik refresh, maar pr staan hier
+// nog" — the server had been killed and every fetch error was swallowed, so
+// the spinner stopped as if the refresh worked). Names the time of the last
+// snapshot that DID load, so it is clear how stale the list is. Words carry
+// the meaning, not the colour. Stable `contents` root, toggling inside it
+// (see .claude/rules/arrowjs-pitfalls.md).
+function snapshotTimeLabel() {
+  const d = state.snapshotAt ? new Date(state.snapshotAt) : null
+  if (!d || isNaN(d.getTime())) return '?'
+  return d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })
+}
+
+function refreshErrorLine() {
+  return html`<div class="contents">${() =>
+    ui.refreshError
+      ? html`<p
+          data-testid="overview-refresh-error"
+          role="alert"
+          class="mt-1 text-xs font-medium text-rose-700 dark:text-rose-300"
+          >${() => t('Server niet bereikbaar — overzicht is van {time}', { time: snapshotTimeLabel() })}</p
+        >`
+      : ''}</div>`
+}
+
 function headerBlock() {
   return html`
     <header class="mb-4 flex items-end justify-between">
       <div>
         <h1 class="text-xl font-semibold text-slate-900 dark:text-zinc-100">Needs your review</h1>
+        ${refreshErrorLine()}
       </div>
       <div class="flex items-center gap-2">
         ${() => runningBadgeButton()}
@@ -3905,6 +3938,7 @@ async function applyLive(body) {
   if (Array.isArray(body.repos)) state.repos = body.repos
   state.generatedFor = body.generatedFor || ''
   state.inboxRunId = body.runId || ''
+  state.snapshotAt = body.updatedAt || ''
   const sections = normalizeSections(body.sections)
   await primeSectionNames(sections)
   state.sections = sections
@@ -5091,12 +5125,16 @@ function activeTab() {
   return document.visibilityState === 'visible' && document.hasFocus()
 }
 
+// Resolves true when the server accepted the POST, false on a network error
+// or a non-OK answer (the caller decides whether that is worth surfacing).
 async function postWorkflow(path) {
-  if (!state.inboxRunId) return
+  if (!state.inboxRunId) return false
   try {
-    await fetch('/api/workflows/' + state.inboxRunId + path, { method: 'POST' })
+    const res = await fetch('/api/workflows/' + state.inboxRunId + path, { method: 'POST' })
+    return res.ok
   } catch (e) {
     // best-effort — the workflow keeps its own cadence regardless
+    return false
   }
 }
 
@@ -5115,10 +5153,15 @@ async function reloadSnapshot() {
   const gen = ++loadGen
   try {
     const res = await fetch('/api/inbox')
-    if (!res.ok) return
+    if (!res.ok) {
+      ui.refreshError = true
+      return
+    }
     const body = await res.json()
     if (gen !== loadGen) return
     if (body && body.ok && body.live) {
+      ui.refreshError = false
+      state.snapshotAt = body.updatedAt || state.snapshotAt
       state.repo = body.repo || state.repo
       state.generatedFor = body.generatedFor || state.generatedFor
       state.inboxRunId = body.runId || state.inboxRunId
@@ -5133,7 +5176,8 @@ async function reloadSnapshot() {
       kickOffCheckout(gen)
     }
   } catch (e) {
-    // keep the current snapshot on a transient failure
+    // keep the current snapshot on a transient failure, but say so
+    ui.refreshError = true
   }
 }
 
@@ -5161,7 +5205,14 @@ function repollAfterRefresh(onDone) {
 function refreshSectionsNow() {
   if (ui.sectionsRefreshing || !state.inboxRunId) return
   ui.sectionsRefreshing = true
-  sendRefresh().then(() => repollAfterRefresh(() => (ui.sectionsRefreshing = false)))
+  sendRefresh().then((ok) =>
+    repollAfterRefresh(() => {
+      ui.sectionsRefreshing = false
+      // The signal never reached the tracker: whatever the repolls read is
+      // the old snapshot, so the refresh did not happen.
+      if (!ok) ui.refreshError = true
+    }),
+  )
 }
 
 // refreshJiraIssuesNow — the "Refresh" button above the Planning section

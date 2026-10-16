@@ -565,6 +565,16 @@ func isReleaseToMaster(r inboxRow) bool {
 	return r.HeadRefName == "release" && r.BaseRefName == "master"
 }
 
+// isOpenRow reports whether a search hit is really still open. Every inbox
+// query filters on state:open, but GitHub's search index lags a merge/close by
+// seconds up to a minute, so a refresh right after merging a PR could keep it
+// listed (e.g. in "Ready to merge") for one more round. The node's own `state`
+// field is live, so a row whose State says MERGED/CLOSED is dropped. An empty
+// State (fixtures, older callers) counts as open.
+func isOpenRow(r inboxRow) bool {
+	return r.State == "" || r.State == "OPEN"
+}
+
 func rowKey(r inboxRow) string { return statusKey(r.Repo, r.Number) }
 
 // statusKey is the statuses-map key for one PR: the bare number for the primary
@@ -974,6 +984,9 @@ func buildInbox(ctx context.Context, db *sql.DB, left map[prKey]bool) ([]inboxSe
 			for _, r := range byRef[qref{si, qi}] {
 				if isReleaseToMaster(r) {
 					continue // never reviewed: no row, so no status/tree/AI either
+				}
+				if !isOpenRow(r) {
+					continue // merged/closed but still in GitHub's lagging search index
 				}
 				k := rowKey(r)
 				if seen[k] || local[k] {
