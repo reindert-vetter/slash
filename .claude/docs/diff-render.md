@@ -275,6 +275,17 @@ unchanged, also on a line without a word background.
 
 ## Line selection: click and browser text selection
 
+> **UPDATE (supersedes rule 1 and the range/restore bullets below):** reviewer
+> request "als ik code selecteer wil ik niet dat daar iets mee gebeurt, alleen
+> als ik klik". A real (non-collapsed) browser selection (drag, native
+> double-/triple-click) is now pure browser text for copying:
+> `resolvePendingMouseSelection` returns without touching any state, focus or
+> card. Only a genuine click (`resolveClickSelection`) or Shift+click moves the
+> cursor. A native double-click's FIRST click is still an ordinary click (it may
+> select a call segment/line); accepted, no delay/detection added. The
+> `resolveRangeSelection`/`captureSelectionSnapshot`/`restoreExactSelection`
+> helpers are now unused by that path and the text below describes the old behaviour.
+
 Reviewer request: "ik wil dat huidige manier van selecteren in de diff met
 mijn muis weg gaat [...] ik wil de browser selectie manier gebruiken" — the
 mouse used to reimplement its own click-count-based line/group/whole-block

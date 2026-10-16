@@ -22,7 +22,7 @@ function** the key runs — never a parallel implementation. Concretely:
 | The approve checkbox on a block card | the palette's "Approve …" item | `.claude/docs/approval.md` |
 | `pr-info-body-toggle` ("more…") | the PR menu's "Show full description" | `.claude/docs/detail-layout.md` |
 | A `/pr-overview` row → popover | `Enter` on the selected row | `.claude/docs/pr-overview.md` |
-| A diff row → a genuine click selects a call-segment/line (or nothing, on an unchanged line), a real browser text selection (drag, native double-/triple-click, or Shift+click) always rounds up to a per-line range | `f`/`d`/`s` (zoom) + `↑`/`↓` (jump to it in steps), Shift+`↑`/`↓` (range) | "Line selection: click and browser text selection" in `.claude/docs/diff-render.md` |
+| A diff row → a genuine click selects a call-segment/line (or nothing, on an unchanged line), a real browser text selection (drag, native double-/triple-click) does nothing at all (pure text for copying); Shift+click extends a per-line range | `f`/`d`/`s` (zoom) + `↑`/`↓` (jump to it in steps), Shift+`↑`/`↓` (range) | "Line selection: click and browser text selection" in `.claude/docs/diff-render.md` |
 | A call segment's dot/hover ring (`data-seg-dot`) | `Space` (approve + continue) | "Approving from the mouse" in `.claude/docs/approval.md` |
 | A right-click anywhere with a menu of its own (a diff row/group/call, a sidebar row, the PR description, a comment thread, the Claude column, …) | `Enter` at that same spot, native-styled at the cursor | "The right-click context menu" in `.claude/docs/command-palette.md` |
 | The Claude chat's "Stuur" button | `Enter` in the chat composer | `.claude/docs/claude-chat-panel.md` |

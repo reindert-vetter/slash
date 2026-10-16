@@ -10499,19 +10499,10 @@ function resolvePendingMouseSelection() {
     if (!resolveShiftClickSelection(pending)) resolveClickSelection(pending)
     return
   }
+  // A real (non-collapsed) selection is pure browser text (for copying): it
+  // leaves the cursor and every card alone. Only a genuine click moves it.
   const sel = window.getSelection()
-  if (sel && !sel.isCollapsed) {
-    const startRow = rowOfNode(sel.anchorNode, pending.cardEl)
-    const endRow = rowOfNode(sel.focusNode, pending.cardEl)
-    if (startRow != null && endRow != null) {
-      // Snapshot the real selection BEFORE resolveRangeSelection's own state
-      // write tears down the row DOM it points into — see
-      // restoreExactSelection's own doc comment.
-      const snapshot = captureSelectionSnapshot(sel, pending.cardEl)
-      resolveRangeSelection(pending, startRow, endRow, snapshot)
-      return
-    }
-  }
+  if (sel && !sel.isCollapsed) return
   resolveClickSelection(pending)
 }
 

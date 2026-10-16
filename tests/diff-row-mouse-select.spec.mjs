@@ -18,12 +18,10 @@ import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 // all (reviewer: "als er geen line is aangepast, dan wil ik daar geen
 // interactie van zien").
 //
-// A REAL (non-collapsed) browser selection — a mousedown+drag, a native
-// double-click (word select), a native triple-click (paragraph select,
-// confined to the row's own <div>), or a native Shift+click (the browser's
-// own selection-extend behaviour) — always rounds up to a per-LINE range
-// (reviewer: "afronden op hele regels"), reusing the exact same
-// state.rangeAnchor mechanism Shift+ArrowUp/Down built (see range-select.spec.mjs).
+// A REAL (non-collapsed) browser selection (drag, native double-/triple-click)
+// is pure browser text for copying and changes nothing (reviewer: "als ik code
+// selecteer wil ik niet dat daar iets mee gebeurt, alleen als ik klik"). Only a
+// click, or Shift+click (see shift-click-range.spec.mjs), moves the cursor.
 //
 // Reuses PR 102 (RangeSelectAction::execute, four changed lines in two
 // groups, split by one unchanged `$mid` line; ::other, a same-file neighbour
@@ -102,9 +100,7 @@ test.describe('PR Review Tree — mouse line selection (click, native selection)
     await cRow.dblclick({ position: { x: 24, y: cBox.height / 2 } }) // native word-select, confined to its own row
     await expect(activeRows).toHaveCount(1)
     await expect(activeRows).toContainText('$c')
-    // 'line' is the gran that was already active — the point of this test is
-    // that a native double-click does NOT widen the selection to the group.
-    await expect(page).toHaveURL(/gran=line/)
+    // The point: a native double-click does NOT widen the selection to the group.
   })
 
   test('a native triple-click still selects only the ONE line it lands on, never the whole block', async ({
@@ -125,12 +121,9 @@ test.describe('PR Review Tree — mouse line selection (click, native selection)
     // triple-click stops at the row's own block-level <div>.
     await expect(activeRows).toHaveCount(1)
     await expect(activeRows).toContainText('$b')
-    await expect(page).toHaveURL(/gran=line/)
   })
 
-  test('mousedown + drag (a real browser text selection) rounds up to a contiguous LINE range, exactly like Shift+ArrowDown', async ({
-    page,
-  }) => {
+  test('mousedown + drag (a real browser text selection) leaves the cursor alone', async ({ page }) => {
     await page.goto('/pr/102')
     await leaveSearchBox(page)
 
@@ -141,27 +134,19 @@ test.describe('PR Review Tree — mouse line selection (click, native selection)
     const activeRows = card.locator('div[class*="#b9f5d9"]')
     const changedRows = card.locator('[data-pane="new"] [data-changed="1"]')
     await expect(activeRows).toHaveCount(1)
-    // Let the block-column's own entrance transition (BlockList's fixed
-    // pr-index slide-in) settle before reading pixel coordinates — a raw
-    // mouse drag, unlike .click(), needs stable coordinates up front.
     await page.waitForTimeout(400)
 
     const from = await changedRows.nth(0).boundingBox() // $a
     const to = await changedRows.nth(2).boundingBox() // $c
-    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+    await page.mouse.move(from.x + 40, from.y + from.height / 2)
     await page.mouse.down()
-    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2)
+    await page.mouse.move(to.x + 40, to.y + to.height / 2)
     await page.mouse.up()
+    await page.waitForTimeout(300)
 
-    // The range now spans 3 of the 4 changed lines ($a, $b, $c) — the exact
-    // same end state as range-select.spec.mjs's Shift+ArrowDown x2.
-    await expect(activeRows).toHaveCount(3)
-
-    // The anchor is a real Shift-range anchor: the command palette offers the
-    // same bulk-approve action a keyboard range would.
-    await page.keyboard.press('Enter')
-    await expect(page.getByTestId('command-row').nth(1)).toContainText('Keur deze 3 regels goed')
-    await page.keyboard.press('Escape')
+    // Selecting is pure browser text: still one active line, selection intact.
+    await expect(activeRows).toHaveCount(1)
+    expect(await page.evaluate(() => window.getSelection().toString().length)).toBeGreaterThan(0)
   })
 
   // Bug report: "ik kan niet normaal met een muis een selectie doen ... want
