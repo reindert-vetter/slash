@@ -73,6 +73,12 @@ test('the live partial bubble shows a labelled icon, not raw JSON, for the need_
 
   await expect(page.getByTestId('claude-message')).toHaveCount(0)
 
+  // The footer status line says what is really happening — asking for write
+  // access — not "Claude schrijft…", even though the phase is "writing".
+  const status = page.getByTestId('claude-chat-status')
+  await expect(status).toContainText('Schrijfrechten ophalen')
+  await expect(status).not.toContainText('Claude schrijft')
+
   expect(errors).toEqual([])
 })
 

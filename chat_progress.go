@@ -93,7 +93,15 @@ type chatProgress struct {
 	// the plan page's own minutes-long agentic run.
 	Steps     []chatStep `json:"steps,omitempty"`
 	StartedAt int64      `json:"startedAt"` // unix ms
-	UpdatedAt int64      `json:"updatedAt"` // unix ms
+	// PhaseStartedAt is when Phase last CHANGED (unix ms) — set by
+	// startChatProgress and by mutateChatProgress whenever fn moves Phase to a
+	// different value. The status line's "· Ns" keeps counting from
+	// StartedAt (the whole turn); only the "het is nu druk" suffix
+	// (src/ClaudeChat.mjs, LONG_WAIT_SECONDS) measures against this, so a
+	// shell attempt that only just entered "starting" in an already-old turn
+	// does not claim the API is busy straight away.
+	PhaseStartedAt int64 `json:"phaseStartedAt"`
+	UpdatedAt      int64 `json:"updatedAt"` // unix ms
 	// repo/pr are unexported on purpose: they exist only so the PR-wide read
 	// (runningChatProgressForPR, GET /api/chat/progress?pr=N) can filter the
 	// map, and encoding/json skips them — the pushed frame's shape is
@@ -133,7 +141,7 @@ var nowMillis = func() int64 { return time.Now().UnixMilli() }
 // from runOneClaudeTurn right before the claude CLI is invoked.
 func startChatProgress(repo string, pr int, conversationID string) {
 	now := nowMillis()
-	p := chatProgress{Running: true, Phase: chatPhasePreparing, StartedAt: now, UpdatedAt: now, repo: repo, pr: pr}
+	p := chatProgress{Running: true, Phase: chatPhasePreparing, StartedAt: now, PhaseStartedAt: now, UpdatedAt: now, repo: repo, pr: pr}
 	chatProgressMu.Lock()
 	chatProgressByConv[conversationID] = p
 	chatProgressMu.Unlock()
@@ -202,8 +210,12 @@ func mutateChatProgress(conversationID string, fn func(*chatProgress)) (chatProg
 	if !ok {
 		return chatProgress{}, false
 	}
+	prevPhase := p.Phase
 	fn(&p)
 	p.UpdatedAt = nowMillis()
+	if p.Phase != prevPhase {
+		p.PhaseStartedAt = p.UpdatedAt
+	}
 	chatProgressByConv[conversationID] = p
 	return p, true
 }

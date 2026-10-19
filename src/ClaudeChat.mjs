@@ -313,12 +313,25 @@ export function claudeStatusText(p, elapsed, settled = false) {
   if (p.phase === 'tool' && p.tool) {
     const verb = TOOL_VERB[p.tool] ? t(TOOL_VERB[p.tool]) : t('gebruikt {tool}', { tool: p.tool })
     base = t('Claude {verb}{detail}', { verb, detail: p.detail ? ' ' + p.detail : '' })
+  } else if (p.phase === 'writing' && (p.partial || '').trim().startsWith(NEED_WRITE_PARTIAL_PREFIX)) {
+    // The "text" streaming in is the need_write directive — Claude is asking
+    // for write access, not writing anything (reviewer report: "Claude
+    // schrijft… is niet altijd waar"). Same words as the escalating phase
+    // that follows it.
+    base = t(PHASE_LABEL.escalating)
   } else {
     base = t(PHASE_LABEL[p.phase] || 'Claude denkt…')
   }
   if (!p.running) base = t('Claude is klaar — bezig met opslaan…')
   let text = elapsed > 0 ? base + ' · ' + elapsed + 's' : base
-  if (p.running && p.phase === 'starting' && elapsed >= LONG_WAIT_SECONDS) {
+  // The suffix measures against the CURRENT phase's own start (phaseStartedAt,
+  // chat_progress.go) — the shown "· Ns" is the whole turn, and a shell
+  // attempt that only just entered "starting" in an already-old turn must not
+  // claim the API is busy right away. Falls back to the turn total for a
+  // snapshot without the field; a caller passing elapsed 0 (no clock, e.g. a
+  // task-list row) still never gets the suffix.
+  const phaseElapsed = elapsed > 0 && p.phaseStartedAt ? Math.max(0, Math.round((Date.now() - p.phaseStartedAt) / 1000)) : elapsed
+  if (p.running && p.phase === 'starting' && phaseElapsed >= LONG_WAIT_SECONDS) {
     text += ' · ' + LONG_WAIT_SUFFIX
   }
   return text

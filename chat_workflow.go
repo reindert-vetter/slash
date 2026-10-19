@@ -1386,6 +1386,14 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// falls back to instead (looksLikeWriteRefusal) — the reviewer never has
 	// to ask twice for write access, and never gets a button for it either.
 	escalate := isNeedWriteDirective(result.Text)
+	if escalate {
+		// The strict directive IS the whole answer: without this the phase
+		// stayed on the "writing" its own streamed text set, and the status
+		// line said "Claude schrijft…" through the slot acquire and the
+		// work-directory prep below (reviewer report: "dit is niet altijd
+		// waar"). Same momentary line the other escalation routes show.
+		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)
+	}
 	// A turn that follows a checkout dead end escalates unconditionally: the
 	// pending request already asked for write access last turn, so waiting
 	// for Claude to say so again is a guess we don't have to make. See
@@ -1443,11 +1451,12 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 			return chatCancelledMessage(ctx, cm, arg, model), nil
 		}
 		if waited {
-			// The wait is over; don't leave "Wacht op…" standing until the
-			// first streamed event happens to replace it.
 			logTurnMilestone("got the code-turn slot after %v", time.Since(t0))
-			advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
 		}
+		// Slot in hand (waited or not): resolving the work directory next is
+		// local gh/git prep that can take a while — say exactly that, instead
+		// of leaving "escalating"/"Wacht op…" standing.
+		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhasePreparing)
 		// reviewerReply is deliberately "" — see prepareChatShellWorkDir's own
 		// doc comment: a chat message is never an answer to the
 		// work-directory choice.
@@ -1514,6 +1523,9 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		// together with no separator for the rest of the turn. See
 		// resetChatProgressPartial's own doc comment.
 		resetChatProgressPartial(arg.Repo, arg.PR, arg.ConversationID)
+		// Prep done, the shell CLI is about to be invoked: "Claude start…"
+		// now covers only the wait for its first event, as for attempt 1.
+		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseStarting)
 		shellReq := claude.RunRequest{
 			Model:        model,
 			Prompt:       chatNeedWriteContinuationPrompt + attachmentNote,

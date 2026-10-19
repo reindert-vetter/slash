@@ -2174,6 +2174,23 @@ doc). Momentary by design:
 and there is deliberately no bubble, no stored message and no reviewer-facing
 control for any of it — this brief line is the whole visible surface.
 
+**The full phase sequence around an escalation, and why each step is set
+explicitly.** Reviewer report (screenshot: the "Vraagt schrijftoegang" pill
+with "Claude schrijft… · 30s" underneath): the strict `{"type":"need_write"}`
+directive streams in as ordinary text, which puts the phase on `writing` —
+and nothing moved it on, so "Claude schrijft…" stood through the slot acquire,
+the whole `prepareChatShellWorkDir` (`gh pr view` + `git fetch`/checkout, can
+take tens of seconds) and the shell CLI's own start-up. `runOneClaudeTurn`
+now sets every step itself: `escalating` (also for the strict directive, not
+only the prose/dead-end/embedded routes) → `waiting` (only if the slot is
+busy) → `preparing` once the slot is held, right before the work directory is
+resolved → `starting` right after `resetChatProgressPartial`, before the
+shell `RunChat`. On the frontend, `claudeStatusText` also shows "Schrijfrechten
+ophalen…" (not "Claude schrijft…") while the `writing` phase's partial is the
+need_write directive still forming. Test: the phase-sequence assertion in
+`TestRunOneClaudeTurnEscalatesToShellOnNeedWrite` (`chat_shell_test.go`) and
+the status-line check in `tests/claude-chat-needwrite-icon.spec.mjs`.
+
 ### The live partial bubble: attempt 1's leftover directive, and glued text segments
 
 `p.Partial` (`chatProgress.Partial`, `chat_progress.go`) is the running answer
@@ -2252,7 +2269,10 @@ and never needs this) and `elapsed >= LONG_WAIT_SECONDS` (30): "Claude start…
 · 47s · het is nu druk, hij blijft proberen". Worded as a still-in-progress
 sentence, not an error — "nog geen antwoord" was rejected as an opening because
 it reads as something already went wrong, when the CLI is (usually) still
-quietly retrying. The only consumer of `GET /api/chat/progress` is this same
+quietly retrying. The 30s is measured against the snapshot's **`phaseStartedAt`** (set by
+`mutateChatProgress` whenever `Phase` changes), not the turn's `startedAt`:
+otherwise a shell attempt entering `starting` in an already-old turn claimed
+"het is nu druk" the instant it began. The shown "· Ns" stays the whole turn. The only consumer of `GET /api/chat/progress` is this same
 UI with its own clock, so there is no reason to compute or store the threshold
 server-side.
 

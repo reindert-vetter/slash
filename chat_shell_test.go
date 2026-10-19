@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,10 +62,51 @@ func TestRunOneClaudeTurnEscalatesToShellOnNeedWrite(t *testing.T) {
 	checkoutDir := cloneCheckoutDir(t, bareDir, headRefName)
 	writeCheckoutSettings(t, dataDir, checkoutDir)
 
+	resetChatProgress()
+	defer resetChatProgress()
+	subID, sub := events.subscribe(statusKey("", pr))
+	defer events.unsubscribe(subID)
+
 	fake.SetChatTurns(`{"type":"need_write"}`, "Ik heb het aangepast.")
+	// The directive streams in as ordinary text, which puts the phase on
+	// "writing" — exactly the state that used to stick around.
+	fake.SetChatEvents(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: `{"type":"need_write"}`})
 	msg, _ := runOneClaudeTurn(ctx, m, cm, fake, dataDir, chatTurnInput{
 		PR: pr, ConversationID: commentID, Body: "Pas foo.txt aan", TurnID: "msg-shell",
 	})
+
+	// The status line must say what really happens between the two CLI
+	// calls (reviewer report: "Claude schrijft…" while nothing was being
+	// written): escalating → preparing (work directory) → starting, never a
+	// stale "writing" in between.
+	var phases []string
+	for len(sub.ch) > 0 {
+		ev := <-sub.ch
+		if ev.Type != eventChatProgress || ev.Key != commentID {
+			continue
+		}
+		var p chatProgress
+		if err := json.Unmarshal(ev.Data, &p); err != nil {
+			t.Fatalf("bad progress frame: %v", err)
+		}
+		if p.Running && p.PhaseStartedAt == 0 {
+			t.Fatalf("expected phaseStartedAt on every running frame, got %+v", p)
+		}
+		if p.Running && (len(phases) == 0 || phases[len(phases)-1] != p.Phase) {
+			phases = append(phases, p.Phase)
+		}
+	}
+	want := []string{chatPhaseWriting, chatPhaseEscalating, chatPhasePreparing, chatPhaseStarting}
+	found := false
+	for i := 0; i+len(want) <= len(phases); i++ {
+		if strings.Join(phases[i:i+len(want)], ",") == strings.Join(want, ",") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected the phase sequence %v around the escalation, got %v", want, phases)
+	}
 
 	if msg.Kind == chat.KindError {
 		t.Fatalf("expected an ordinary reply, got an error turn: %+v", msg)
