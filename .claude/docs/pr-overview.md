@@ -1155,11 +1155,10 @@ late arrival could never repaint a mounted row).
 
 Clicking it POSTs the **`remove_reviewer`** workflow with **only** `{pr}` — who
 gets removed is resolved server-side from the authenticated GitHub user, so the
-endpoint can never remove somebody else — then closes the popover, drops the row
-from the list **immediately** and selects the new top row (see below). While in
-flight the button is really
-`disabled` (the plain attribute, see `.claude/rules/arrowjs-pitfalls.md`) and
-reads "Bezig…"; a failure shows `data-testid=remove-reviewer-error` inline. The
+endpoint can never remove somebody else. It is **optimistic**, like ignore/snooze:
+the popover closes, the row drops and the selection moves to the next row
+(`selectNextRowAfter`) BEFORE the POST returns. On failure the row is restored and
+the popover reopens showing `data-testid=remove-reviewer-error`. The
 item is deliberately shown on every foreign PR, also one where I am no longer a
 requested reviewer at all — GitHub treats that DELETE as a no-op, and gating on
 the asynchronously backfilled `status.reviewers` would make the item appear

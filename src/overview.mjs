@@ -1750,7 +1750,12 @@ const removedPrs = new Set()
 // change. reloadSnapshot still runs afterwards to pull everything else in.
 async function removeSelfAsReviewer(pr) {
   if (ui.removingReviewer) return // one at a time; the button is disabled anyway
-  ui.removingReviewer = prUid(pr)
+  const uid = prUid(pr)
+  ui.removingReviewer = uid
+  // Optimistic FIRST (see sendIgnore): the menu closes and the selection moves
+  // on at once; on failure the row is restored and the popover reopens.
+  const prevSections = state.sections
+  closePopover()
   ui.removeReviewerError = null
   try {
     const res = await fetch('/api/workflows/remove_reviewer', {
@@ -1759,11 +1764,6 @@ async function removeSelfAsReviewer(pr) {
       body: JSON.stringify({ pr: pr.number, repo: pr.repo || undefined }),
     })
     if (!res.ok) throw new Error('remove_reviewer failed')
-    closePopover()
-    selectNextRowAfter(pr)
-    removedPrs.add(prUid(pr))
-    state.sections = state.sections.map((s) => ({ ...s, prs: s.prs.filter((row) => prUid(row) !== prUid(pr)) }))
-    scheduleRepaint()
     reloadSnapshot()
   } catch (e) {
     ui.removeReviewerError = t('Verwijderen mislukt')
@@ -1793,6 +1793,10 @@ function removeReviewerAction(pr) {
         ${() => (ui.removingReviewer === prUid(pr) ? icon('loader', 'h-3.5 w-3.5 animate-spin') : icon('user-minus', 'h-3.5 w-3.5'))}
         ${() => t(ui.removingReviewer === prUid(pr) ? 'Bezig…' : 'Verwijder mij als reviewer')}
       </button>
+  selectNextRowAfter(pr)
+  removedPrs.add(uid)
+  state.sections = state.sections.map((s) => ({ ...s, prs: s.prs.filter((row) => prUid(row) !== uid) }))
+  scheduleRepaint()
       ${() =>
         ui.removeReviewerError
           ? html`<p class="px-2.5 py-1 text-[11px] text-rose-600 dark:text-rose-400 [overflow-wrap:anywhere]" data-testid="remove-reviewer-error">${ui.removeReviewerError}</p>`
@@ -1807,7 +1811,11 @@ function removeReviewerAction(pr) {
 // pr_snooze workflow (start + Signal, never a direct write); the wake-up moment
 // is computed there from w.Now(). Whether a snooze still hides the row is a
 // READ-side check (isSnoozeActive): the moment passed, or the PR saw new
+    removedPrs.delete(uid)
+    state.sections = prevSections
 // activity since. See "Snoozen" in .claude/docs/pr-overview.md.
+    ui.openPopover = uid
+    scheduleRepaint()
 
 let snoozeRunId = ''
 let snoozeWakeTimer = null
