@@ -41,7 +41,7 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 // no PR to hang on. The one piece of that engine THIS page does reuse is the
 // live progress channel (events.mjs + claudeTurns.mjs) — see
 // ensurePlanChatEvents/chatView below and "Live progress" in
-// .claude/docs/plan-page.md. See planChatOverlay below.
+// .claude/docs/plan-page.md. See planInlineChat below.
 // claudeStatusText comes from the same module: the one formatter that turns a
 // live progress snapshot into a status line ("Claude leest X · 42s"), reused
 // verbatim by this page's own live panes (livePane) so a running plan
@@ -131,18 +131,17 @@ const state = reactive({
   runs: [],
   generating: false,
   runId: '',
-  // The CURRENT intent.md text — the auto-generated document, or the
-  // reviewer's own override (state.doc.intentOverride) once they edit it.
-  // Computed server-side (renderPlanIntent) and sent as its own top-level
-  // GET /api/plan field, same as `artifacts` — the "Intentie" field in
-  // column 0 seeds itself with this. See .claude/docs/plan-page.md.
-  intentText: '',
-  // The intent textarea in the TICKET column (phase specs/plan) is read-only
-  // until Enter unlocks it — see intentField. Reactive because both the
-  // textarea's own `readonly` and the word next to the label follow it.
-  // Always false while the field lives in the questions column (phase
-  // intent), where typing straight into it is the whole point.
-  intentEditing: false,
+  // The Jira topics above the chat (doc.topics, see topicsCard): the
+  // reviewer's own not-yet-confirmed state per topic id ({off, body}) wins
+  // until the stored document reports the same (dropSettledTopics) — mirrored
+  // into sessionStorage so a refresh right after an edit neither shows the
+  // old text nor loses it (it is re-sent, see resendPendingTopics).
+  topicPending: loadTopicPending(),
+  // The id of the topic whose text is being edited ('' = none).
+  topicEditing: '',
+  // True while a topics run (the automatic first one, or "Opnieuw
+  // samenvatten") is in flight from THIS tab.
+  topicsBusy: false,
   // Which column owns the keyboard: 0 = the ticket, 1 = questions/tasks,
   // 2 + n = the n-th block column (2 is the first one).
   col: 1,
@@ -236,11 +235,11 @@ const state = reactive({
   // dir, truncated}. Plain per-file cache — nothing here is the source of
   // truth, so a miss simply shows the proposed code on its own.
   current: {},
-  // The general chat about this ticket (reused from the review tree, see the
-  // import comment above and planChatOverlay below). chatOpen gates the
-  // fullscreen overlay (ephemeral — not in the URL/localStorage, exactly like
-  // the tree's own generalChatOverlay.mjs: Escape simply hides it again, the
-  // conversation itself is durable on the document). chatBusy/chatError cover
+  // The planning chat about this ticket (reused from the review tree, see the
+  // import comment above and planInlineChat below) — always on screen in the
+  // questions column, right under the branch question and the Jira topics;
+  // it replaced both the old fullscreen overlay and the intent form.
+  // chatBusy/chatError cover
   // the one in-flight Signal round trip (the reviewer's own "did my send go
   // through" state); the LIVE turn itself — what Claude is doing right now,
   // streamed token by token — lives in claudeTurns.mjs's shared per-
@@ -249,7 +248,6 @@ const state = reactive({
   // about. chatTick is read purely to register a reactive dependency for the
   // 1s elapsed-seconds heartbeat (see syncPlanChatTicker) — the value itself
   // is never used, same trick as RelatedPanel.mjs's own cc.tick.
-  chatOpen: false,
   chatBusy: false,
   chatError: '',
   chatTick: 0,
@@ -456,14 +454,16 @@ async function loadPlan() {
     state.generating = !!body.generating
     state.exec = body.exec || null
     state.artifacts = body.artifacts || null
-    state.intentText = body.intent || ''
     state.error = ''
     state.loading = false
     if (!state.doc.needsScope) state.scopePending = false
     if (!state.doc.needsHotfix) state.hotfixPending = false
     dropSettledPending()
+    dropSettledTopics()
     dropSettledRetrying()
     clampCursor()
+    resendPendingTopics()
+    maybeRequestTopics()
   } catch (err) {
     state.error = t('Kon dit ticket niet laden.')
     state.loading = false
@@ -484,6 +484,203 @@ function dropSettledPending() {
   }
   if (changed) state.pending = keep
   dropSettledTaskPending()
+}
+
+// ------------------------------------------------ Jira topics above the chat
+//
+// Reviewer request: "wat je weet door jira dingen, opgedeeld in onderwerpen
+// en dat je dat boven de chat kan aanvinken en uitvinken om mee te nemen,
+// dus bepalen hoe groot de scope is, maar dat je per scope het nog kan
+// aanpassen". The topics live on the plan document (doc.topics, built by the
+// planTopics Activity); every edit/toggle is one `kind:"topic"` Signal on
+// whichever signal the tracker is parked on (chatSignalName — the same
+// reason the chat rides it: a gate must not swallow an edit until after the
+// first generation, which is exactly why the old intent field's edits "were
+// gone after a refresh").
+
+// topicDraftKey is the sessionStorage key of this ticket's unconfirmed topic
+// state — see state.topicPending. A function (not a const) because
+// loadTopicPending already runs while `state` itself is being created, above
+// this point in the module.
+function topicDraftKey() {
+  return 'plan-topic-pending:' + planKey
+}
+
+function loadTopicPending() {
+  try {
+    const raw = sessionStorage.getItem(topicDraftKey())
+    const v = raw ? JSON.parse(raw) : null
+    return v && typeof v === 'object' ? v : {}
+  } catch (err) {
+    return {}
+  }
+}
+
+function saveTopicPending(pending) {
+  // An editor still open keeps its typed text in the stored copy too, so a
+  // settle of some OTHER topic (setTopicPending) never wipes it.
+  for (const [id, body] of Object.entries(topicDrafts)) {
+    pending = { ...pending, [id]: { off: !!(pending[id] && pending[id].off), ...(pending[id] || {}), body } }
+  }
+  try {
+    if (Object.keys(pending).length) sessionStorage.setItem(topicDraftKey(), JSON.stringify(pending))
+    else sessionStorage.removeItem(topicDraftKey())
+  } catch (err) {
+    // Private mode / blocked storage: the in-memory overlay still works.
+  }
+}
+
+function setTopicPending(pending) {
+  state.topicPending = pending
+  saveTopicPending(pending)
+}
+
+// topicView is one topic as the reviewer currently sees it: the stored one
+// with any unconfirmed local state on top.
+function topicView(id) {
+  const tp = (state.doc.topics || []).find((x) => x.id === id)
+  if (!tp) return null
+  const p = state.topicPending[id]
+  return p ? { ...tp, off: !!p.off, body: p.body != null && p.body !== '' ? p.body : tp.body } : tp
+}
+
+// dropSettledTopics drops a local topic state once the stored document says
+// the same — same "local pick wins until the document catches up" rule as
+// dropSettledPending.
+function dropSettledTopics() {
+  const topics = state.doc.topics || []
+  let changed = false
+  const keep = {}
+  for (const [id, p] of Object.entries(state.topicPending)) {
+    const tp = topics.find((x) => x.id === id)
+    if (!tp) {
+      // Topics not loaded yet (or regenerated away): keep it while there are
+      // no topics at all, drop it once a different set has arrived.
+      if (topics.length) changed = true
+      else keep[id] = p
+      continue
+    }
+    if (!!tp.off === !!p.off && (p.body == null || p.body === '' || p.body === tp.body)) changed = true
+    else keep[id] = p
+  }
+  if (changed) setTopicPending(keep)
+}
+
+// topicSignalBody is the Signal payload for one topic's local state.
+function topicSignalBody(id, p) {
+  return JSON.stringify({ kind: 'topic', topicId: id, topicOff: !!p.off, text: p.body || '' })
+}
+
+// sendTopic records the local state optimistically, then signals it.
+async function sendTopic(id, off, body) {
+  const tp = (state.doc.topics || []).find((x) => x.id === id)
+  if (!tp) return
+  const p = { off: !!off, body: body != null && body.trim() !== tp.body ? body.trim() : '' }
+  setTopicPending({ ...state.topicPending, [id]: p })
+  lastPayload = ''
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: topicSignalBody(id, p),
+    })
+  } catch (err) {
+    // Kept in topicPending (and sessionStorage): re-sent on the next load.
+  }
+}
+
+// resendPendingTopics re-sends every unconfirmed topic state once the first
+// load landed — the other half of the refresh safety net (pagehide's
+// keepalive flush below is best-effort; a browser may drop it).
+let topicsResent = false
+function resendPendingTopics() {
+  if (topicsResent || !state.runId || !(state.doc.topics || []).length) return
+  topicsResent = true
+  for (const [id, p] of Object.entries(state.topicPending)) {
+    if (!(state.doc.topics || []).some((x) => x.id === id)) continue
+    fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: topicSignalBody(id, p),
+    }).catch(() => {})
+  }
+}
+
+// topicDrafts holds the text being typed in an open topic editor — plain,
+// NOT reactive (a reactive write per keystroke would re-render the editor
+// under the caret); mirrored into topicPending + sessionStorage on every
+// input so even an immediate F5 keeps it, and signalled on blur.
+const topicDrafts = {}
+
+function onTopicInput(id, value) {
+  topicDrafts[id] = value
+  const cur = topicView(id)
+  saveTopicPending({ ...state.topicPending, [id]: { off: !!(cur && cur.off), body: value } })
+}
+
+function commitTopicEdit(id) {
+  const draft = topicDrafts[id]
+  delete topicDrafts[id]
+  if (state.topicEditing === id) state.topicEditing = ''
+  const cur = topicView(id)
+  if (!cur || draft == null) return
+  sendTopic(id, cur.off, draft)
+}
+
+// flushTopicsOnPagehide sends whatever is still unconfirmed with
+// `keepalive`, so a reload right after typing still reaches the tracker.
+function flushTopicsOnPagehide() {
+  if (!state.runId) return
+  const all = { ...state.topicPending }
+  for (const id of Object.keys(topicDrafts)) {
+    const cur = topicView(id)
+    all[id] = { off: !!(cur && cur.off), body: topicDrafts[id] }
+  }
+  for (const [id, p] of Object.entries(all)) {
+    try {
+      fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: topicSignalBody(id, p),
+        keepalive: true,
+      })
+    } catch (err) {
+      // Nothing more to do on the way out; sessionStorage still has it.
+    }
+  }
+}
+window.addEventListener('pagehide', flushTopicsOnPagehide)
+
+// requestTopics asks the tracker to (re)build the topics. The automatic first
+// run fires once per page load for a document that never had one
+// (doc.topicsAt empty); the backend skips it anyway when topics exist, so a
+// second tab costs nothing.
+let topicsRequested = false
+async function requestTopics(regenerate) {
+  if (state.topicsBusy) return
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  state.topicsBusy = true
+  try {
+    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'topics', text: regenerate ? 'regenerate' : '' }),
+    })
+  } catch (err) {
+    // The next load shows what was stored (or topicsError).
+  }
+  state.topicsBusy = false
+  lastPayload = ''
+  await loadPlan()
+}
+
+function maybeRequestTopics() {
+  if (topicsRequested || state.loading || !state.doc.title || state.doc.topicsAt || (state.doc.topics || []).length) return
+  topicsRequested = true
+  requestTopics(false)
 }
 
 // dropSettledTaskPending is the same for a task's checkbox/field: the stored
@@ -699,33 +896,6 @@ async function sendTaskState(task, off, note) {
   }
   state.saving = ''
 }
-
-// sendIntentOverride replaces the auto-generated intent.md WHOLESALE with the
-// reviewer's own edited text (planAnswerIntent Kind, see plan_workflow.go) —
-// an empty text clears the override, reverting to the auto-generated one.
-// lastPayload is reset so the very next poll's (possibly slower-arriving)
-// response is not mistaken for "nothing changed" and skipped.
-async function sendIntentOverride(text) {
-  lastPayload = ''
-  if (!state.runId) await ensureTracker()
-  if (!state.runId) return
-  state.saving = INTENT_SAVE_ID
-  try {
-    await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'intent', text: text || '' }),
-    })
-  } catch (err) {
-    // Nothing to undo: the next poll shows what the tracker really stored.
-  }
-  state.saving = ''
-}
-
-// INTENT_SAVE_ID is the state.saving marker for an intent-field edit — the
-// same shared "id of whatever is being saved right now" state every
-// option/scope/hotfix/task row already uses (never a colour-only spinner).
-const INTENT_SAVE_ID = 'intent'
 
 // toggleTask flips the checkbox, keeping whatever is typed in the field. This
 // is what Enter/Space on a task row does (an agreed default, see
@@ -1173,11 +1343,17 @@ function execConvId() {
   return 'planexec:' + state.key
 }
 
+// topicsConvId is the live-progress id of the Jira-topics run (planTopics),
+// mirroring planTopicsConversationID (plan_workflow.go).
+function topicsConvId() {
+  return 'plantopics:' + state.key
+}
+
 // planConvIds is every conversation this page watches — the one place the set
 // is written down, so the SSE filter, the resync read and the elapsed-seconds
 // ticker below can never drift apart on which runs they cover.
 function planConvIds() {
-  return [chatConvId(), genConvId(), execConvId()]
+  return [chatConvId(), genConvId(), execConvId(), topicsConvId()]
 }
 
 // syncPlanChatTicker runs a 1s heartbeat while ANY of this page's runs is
@@ -1403,20 +1579,28 @@ function chatCallbacks() {
   }
 }
 
+// openPlanChat jumps to the inline chat's composer (`/`, the chat button,
+// the first F5 of a dictation): the chat is always on screen now, so
+// "opening" it means focusing column 1 and putting the caret in the
+// composer. Scrolls the composer into view VERTICALLY only — the column flow
+// scrolls horizontally (see the scrollIntoView axis rule in
+// .claude/rules/arrowjs-pitfalls.md).
 function openPlanChat() {
-  state.chatOpen = true
+  if (state.col !== 1) focusColumn1()
   requestAnimationFrame(() => {
-    const el = document.querySelector('[data-testid=claude-chat-compose]')
-    if (el) el.focus()
+    const el = document.querySelector('[data-testid=plan-inline-chat] [data-testid=claude-chat-compose]')
+    if (!el) return
+    el.focus({ preventScroll: true })
+    const card = el.closest('[data-testid=plan-inline-chat]')
+    const scroller = card && card.closest('.overflow-y-auto')
+    if (scroller) {
+      const top = card.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 8
+      scroller.scrollTop = Math.max(0, top)
+    }
   })
-  // Reopening an already-running conversation should land on its latest
-  // turn, not scrolled to the top — see scrollPlanChatThreadToBottom's own
-  // doc comment.
+  // Land on the latest turn — see scrollPlanChatThreadToBottom's own doc
+  // comment.
   scrollPlanChatThreadToBottom()
-}
-
-function closePlanChat() {
-  state.chatOpen = false
 }
 
 // ------------------------------------------------------------------ cursors
@@ -1883,9 +2067,9 @@ function onKeydown(e) {
     handleRunningTasksKeydown(e)
     return
   }
-  // F5 (toggle) dictates into this ticket's chat — see src/dictation.mjs. First,
-  // because the chatOpen branch right below returns early: dictating a second
-  // paragraph into an already-open chat has to stay possible.
+  // F5 (toggle) dictates into this ticket's chat — see src/dictation.mjs.
+  // First, so dictating while the composer has focus keeps working (the
+  // isEditableFocused branch below returns early).
   if (handleDictationKeydown(e)) return
   // While the fullscreen image viewer is open it owns the keyboard completely
   // — →/← walk the other screenshots, Escape closes — placed here for the
@@ -1903,22 +2087,6 @@ function onKeydown(e) {
   // overlay/menu guard below.
   if (isJiraBellOpen()) {
     handleJiraBellKeydown(e)
-    return
-  }
-  // The general-chat overlay owns the keyboard completely while open — same
-  // shape as the review tree's own generalChatOverlay.mjs: Escape hides it
-  // (ClaudeChat.mjs's own composer @keydown only intercepts Escape while a
-  // turn is genuinely active, see view.active() above, so an idle Escape
-  // reaches here and closes the overlay), every other key is left alone so
-  // it keeps reaching the composer textarea exactly as ClaudeChat.mjs wires
-  // it. Checked before isEditableFocused() below: that branch would
-  // otherwise just blur the composer on Escape instead of closing the
-  // overlay around it.
-  if (state.chatOpen) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      closePlanChat()
-    }
     return
   }
   // The ticket-column Enter-menu owns the keyboard the same way — mirrors
@@ -2391,310 +2559,6 @@ function referencedIssueRow(r) {
   `.key('ref:' + r.key)
 }
 
-// planPhaseNow mirrors planPhase() in plan_artifacts.go: which of the three
-// planning stages this ticket is in. It prefers the server's own answer
-// (state.artifacts.phase) and falls back to the same rule that answer is
-// derived from — nothing generated yet is stage 1 — so a response that
-// carries no artifacts block at all (a ticket whose files were never written)
-// still lands on a real phase instead of on nothing.
-function planPhaseNow() {
-  const p = state.artifacts && state.artifacts.phase
-  if (p) return p
-  return (state.doc.questions || []).length || (state.doc.tasks || []).length ? 'specs' : 'intent'
-}
-
-// intentInQuestionsColumn: during stage 1 the intent IS the work, so the field
-// moves to the questions column (reviewer request: "laat mij intentie in 2e
-// kolom zien als je nog in stap 1 zit"). From stage 2 on it goes back to its
-// old spot under the ticket description, where the plan itself has taken over
-// the questions column.
-function intentInQuestionsColumn() {
-  return planPhaseNow() === 'intent'
-}
-
-// parseIntentSections/buildIntentFromSections: reviewer request ("misschien
-// dat de markdown titels niet aangepast kan worden, alleen de description
-// daaronder, meer github markdown editor ofzo") — split intent.md's own
-// markdown on every heading line (`#`..`######`) into {heading, body} pairs,
-// so intentField (below) can render each heading as a fixed, non-editable
-// label and only the text below it as its own editable field. The leading
-// segment before the very first heading (normally empty — intent.md always
-// starts with "# Intent — …") gets `heading: null` and is only rendered/kept
-// when it actually has content. buildIntentFromSections is the inverse, used
-// to reconstruct the single intent.md text sent to the `plan_answer` Signal —
-// deliberately joined with a blank line between every part rather than
-// preserving the original's exact blank-line layout, since the document is
-// regenerated from scratch by Claude whenever there is no override anyway.
-function parseIntentSections(text) {
-  const lines = (text || '').split('\n')
-  const sections = []
-  let cur = { heading: null, body: [] }
-  for (const line of lines) {
-    if (/^#{1,6}\s+/.test(line)) {
-      sections.push(cur)
-      cur = { heading: line, body: [] }
-    } else {
-      cur.body.push(line)
-    }
-  }
-  sections.push(cur)
-  return sections.map((s) => ({ heading: s.heading, body: s.body.join('\n').trim() })).filter((s) => s.heading || s.body)
-}
-
-// intentSections is what intentField actually renders: the CURRENT intent.md
-// text split into sections, never an empty list. An empty/not-yet-generated
-// intent parses to zero sections, which used to render zero textareas — so in
-// stage 1 (intent), where writing the intent is the whole job, there was
-// literally nothing to type into and the "wordt automatisch gegenereerd…"
-// placeholder the single-textarea version always showed was gone. One empty,
-// heading-less section is the honest equivalent of that old empty field.
-function intentSections() {
-  const parsed = parseIntentSections(state.doc.intentOverride || state.intentText)
-  return parsed.length ? parsed : [{ heading: null, body: '' }]
-}
-
-function buildIntentFromSections(sections) {
-  return sections
-    .map((s) => (s.heading ? s.heading + (s.body ? '\n\n' + s.body : '') : s.body))
-    .filter((s) => s.trim().length)
-    .join('\n\n')
-}
-
-// intentSectionBody is one section's own editable field (the "description"
-// under a fixed, non-editable heading — see parseIntentSections above). On
-// blur it reconstructs the WHOLE intent.md text from every sibling section's
-// CURRENT (possibly just-edited) value — found via the shared
-// `data-testid=plan-intent-sections` container, and each heading read back off
-// the field's OWN `data-section-heading`, never off a section array captured
-// when this component mounted: arrow.js reuses a keyed node without re-running
-// its bindings, so such a snapshot goes stale the moment the list grows (the
-// empty→generated case) and a blur would then rebuild the document with the
-// wrong headings. Same "seed once, save on blur" discipline as the
-// single-textarea version this replaces.
-//
-// Its .key() carries the section's own CONTENT, not just its position, for
-// that same keyed-node-reuse reason: a position-only key left the very first
-// field showing the empty text it mounted with even after the generated
-// intent arrived. Keying on the content re-seeds exactly that case and
-// nothing else — a poll bringing back the same text keeps the same key, so an
-// edit in progress is still never clobbered.
-function intentSectionBody(s, i, place, locked) {
-  const inTicket = place === 'ticket'
-  const rows = Math.max(3, Math.min(16, s.body.split('\n').length + 2))
-  const save = (container) => {
-    if (!container) return
-    const bodies = Array.from(container.querySelectorAll('[data-testid="plan-intent-section-body"]'))
-    const next = bodies.map((el) => ({ heading: el.dataset.sectionHeading || null, body: el.value }))
-    const text = buildIntentFromSections(next)
-    if (text !== buildIntentFromSections(intentSections())) sendIntentOverride(text)
-  }
-  return html`
-    <div class="mb-2" data-testid="plan-intent-section" data-section-idx="${i}">
-      <div class="contents">
-        ${() =>
-          s.heading
-            ? html`<div
-                class="mb-1 select-none font-mono text-[11px] font-semibold text-slate-500 dark:text-zinc-400"
-                data-testid="plan-intent-heading"
-              >
-                ${s.heading}
-              </div>`.key('heading')
-            : ''}
-      </div>
-      <textarea
-        data-testid="plan-intent-section-body"
-        data-section-idx="${i}"
-        data-section-heading="${s.heading || ''}"
-        rows="${rows}"
-        placeholder="${t('Intentie wordt automatisch gegenereerd…')}"
-        readonly="${() => (locked() ? 'true' : false)}"
-        class="w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[12px] leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
-        @click="${(e) => {
-          if (!e || !inTicket) return
-          // stopPropagation FIRST (the nested-@click rule in
-          // arrowjs-pitfalls.md), then take the keyboard to the ticket
-          // column — `state.col = 0` is what the description block's own
-          // click already did and this one forgot, so clicking the intent
-          // field from a block column set col0Focus but never satisfied
-          // intentCommentsColumnVisible()'s own `state.col === 0`.
-          e.stopPropagation()
-          state.col = 0
-          state.col0Focus = 'intent'
-        }}"
-        @keydown="${(e) => {
-          if (!e || !inTicket) return
-          // Enter on the locked field is what unlocks it — never a
-          // newline, so the first Enter can't also edit the text.
-          if (e.key === 'Enter' && !e.shiftKey && !state.intentEditing) {
-            e.preventDefault()
-            e.stopPropagation()
-            state.intentEditing = true
-            return
-          }
-          // Escape locks it again; the page's own onKeydown blurs the
-          // textarea right after (isEditableFocused branch), which is
-          // also where the blur handler saves.
-          if (e.key === 'Escape') state.intentEditing = false
-        }}"
-        @blur="${(e) => {
-          if (!e) return
-          if (inTicket) state.intentEditing = false
-          save(e.target.closest('[data-testid="plan-intent-sections"]'))
-        }}"
-      >${s.body}</textarea
-      >
-    </div>
-  `.key('intent-sec-' + place + '-' + i + ':' + (s.heading || '') + ' ' + s.body)
-}
-
-// intentField is the "Intentie" block — reviewer request: "in taak
-// description eerste kolom moet de intentie zichtbaar zijn, maar dat moeten
-// we ook kunnen aanpassen". Shows the CURRENT intent.md text (auto-generated
-// via state.intentText, or the reviewer's own state.doc.intentOverride once
-// they edited it) as one editable field PER SECTION (see parseIntentSections
-// above) — each section's own markdown heading is a fixed label, only the
-// text below it can be typed in, closer to a GitHub-style structured editor
-// than one big free-form textarea (reviewer request, verbatim: "misschien dat
-// de markdown titels niet aangepast kan worden, alleen de description
-// daaronder, meer github markdown editor ofzo"). Same "static seed, save on
-// blur" pattern as plan-task-note above, so a slow poll never clobbers a
-// half-typed edit — and, stacking one field per section, the whole block
-// reads noticeably taller than the old single 6-row textarea by itself,
-// covering the reviewer's other request ("intentie hoger": the box's bottom
-// edge moves down, its top edge/position is unchanged).
-//
-// Keyed on the loading state AND on where it renders (not on
-// state.intentText/doc.updatedAt) so every section's static seed is set
-// exactly ONCE per placement, right after the first real load — remounting on
-// every later poll would wipe an in-progress edit, exactly the bug
-// plan-task-note's own key discipline avoids. A REMOTE change (another
-// tab/reviewer editing the same ticket at the same time) is a known, accepted
-// gap, same as plan-task-note.
-//
-// The section LIST itself is its own `${() => intentSections().map(...)}`
-// binding (never a static `.map()` inside this conditional template — the
-// "fifth variant" pitfall in .claude/rules/arrowjs-pitfalls.md), so a section
-// that only EXISTS later still appears: an intent that was still empty at
-// first load (or was generated while the page was open) used to leave this
-// block permanently blank until a collapse toggle or a reload. An
-// already-mounted field keeps its own key and therefore its own seed, so this
-// costs nothing for an edit in progress.
-//
-// TWO placements, one function (see intentInQuestionsColumn):
-//
-//   - 'questions' (stage intent) — top of the questions column, never
-//     collapsed, directly typable. Writing the intent is stage 1's whole job,
-//     so nothing should stand between the reviewer and the caret.
-//   - 'ticket' (stage specs/plan) — the historical spot under the ticket
-//     description, collapsed while the questions column has the keyboard
-//     (reviewer request: "2e kolom mag dubbel breed en intent inklappen als ik
-//     in vragen kolom zit"), and READ-ONLY until Enter unlocks it ("alleen
-//     editbaar als je enter erop drukt"): by then the reviewer is answering
-//     questions, and a stray keystroke in a passed stage should not silently
-//     rewrite the intent. Click/Tab focuses, Enter unlocks, Escape and blur
-//     lock it again. A click into any section body also selects this ticket
-//     placement as `state.col0Focus = 'intent'` — see "A dedicated
-//     Jira-opmerkingen column next to the ticket" in .claude/docs/plan-page.md.
-//
-// Collapsing hides only the sections, the header (label + reset button)
-// stays, plus the WORD "ingeklapt" — and, in the ticket placement, the word
-// "vergrendeld"/"bewerken" — never a colour alone, per the colourblind rule.
-// Every one of those is a nested `${() => ...}` binding in its own stable
-// `contents` root (never a bare toggling expression, see
-// `.claude/rules/arrowjs-pitfalls.md`) so the outer node's key — and thus
-// every section's one-time seed — is untouched by a col/lock change.
-function intentField(place) {
-  const loaded = !state.loading
-  const inTicket = place === 'ticket'
-  const collapsed = () => inTicket && state.col === 1
-  const locked = () => inTicket && !state.intentEditing
-  return html`
-    <div
-      class="${inTicket ? 'mt-3 border-t border-slate-100 pt-2 dark:border-zinc-800' : 'mb-3 rounded-2xl bg-white p-3 ring-1 ring-slate-200 dark:bg-zinc-900 dark:ring-zinc-800'}"
-      data-testid="plan-intent"
-      data-intent-place="${place}"
-      data-collapsed="${() => (collapsed() ? 'true' : 'false')}"
-      data-locked="${() => (locked() ? 'true' : 'false')}"
-    >
-      <div class="mb-1 flex items-center justify-between">
-        <span class="${LABEL}">${t('Intentie')}</span>
-        <div class="flex items-center gap-1.5">
-          <div class="contents">
-            ${() =>
-              collapsed()
-                ? html`<span class="text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-intent-collapsed-label"
-                    >${t('ingeklapt')}</span
-                  >`.key('intent-collapsed-label')
-                : ''}
-          </div>
-          <div class="contents">
-            ${() =>
-              inTicket && !collapsed()
-                ? html`<span class="text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-intent-lock-label"
-                    >${() => (state.intentEditing ? t('bewerken') : t('vergrendeld — Enter om te bewerken'))}</span
-                  >`.key('intent-lock-label')
-                : ''}
-          </div>
-          <div class="contents">
-            ${() =>
-              state.saving === INTENT_SAVE_ID
-                ? html`<span class="text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-intent-saving">${t('opslaan…')}</span>`.key(
-                    'intent-saving',
-                  )
-                : ''}
-          </div>
-          <div class="contents">
-            ${() =>
-              state.doc.intentOverride
-                ? html`<button
-                    type="button"
-                    data-testid="plan-intent-reset"
-                    class="text-[10.5px] text-slate-400 underline hover:text-slate-600 dark:text-zinc-500 dark:hover:text-zinc-300"
-                    @click="${(e) => {
-                      e.stopPropagation()
-                      sendIntentOverride('')
-                    }}"
-                  >
-                    ${t('Terug naar automatisch gegenereerd')}
-                  </button>`
-                : ''}
-          </div>
-        </div>
-      </div>
-      <div class="contents">
-        ${() =>
-          collapsed()
-            ? ''
-            : html`<div class="flex flex-col" data-testid="plan-intent-sections">
-                ${() => intentSections().map((s, i) => intentSectionBody(s, i, place, locked))}
-              </div>`.key('sections')}
-      </div>
-    </div>
-  `.key('intent:' + place + ':' + (loaded ? 'ready' : 'pending'))
-}
-
-// intentToSpecsHint answers the reviewer's own question ("in kolom 2 moet het
-// duidelijk zijn hoe ik van intent naar specs ga"): a short, status-aware line
-// directly under the intent field while stage 1 (intent) is active, saying in
-// words what happens next — there is deliberately no button here, the
-// transition to specs (spec.md) happens automatically as soon as the intent is
-// complete (the gate answered, if there is one), see planWorkflow's own
-// `planGenerate Mode:"all"` call in plan_workflow.go. `busyGenerating()` picks
-// between "not yet" and "happening right now", the same signal `phaseRow`'s
-// own "bezig" state and `planRunStatusWord`'s pill read.
-function intentToSpecsHint() {
-  return html`
-    <p
-      class="mb-3 rounded-xl bg-sky-50 px-3 py-2 text-[11.5px] leading-relaxed text-sky-700 dark:bg-sky-500/10 dark:text-sky-300"
-      data-testid="plan-intent-to-specs-hint"
-    >
-      ${busyGenerating()
-        ? t('Specs (de vragen hieronder) worden nu gegenereerd vanuit deze intentie…')
-        : t('Specs worden automatisch gegenereerd zodra de intentie compleet is.')}
-    </p>
-  `.key('intent-to-specs-hint')
-}
-
 // PHASE_WORD is the reviewer-facing word of each phase. The WORD carries the
 // meaning, never a colour on its own (Reindert is colourblind), and the glyph
 // (a filled/open/checked shape) is a second, non-colour signal on top of it.
@@ -2935,7 +2799,6 @@ function ticketCard() {
               : ''}
         </div>
       </div>
-      <div class="contents">${() => (intentInQuestionsColumn() ? '' : intentField('ticket'))}</div>
     </div>
   `
 }
@@ -3336,7 +3199,7 @@ function scopeRow(row) {
 // .claude/rules/arrowjs-pitfalls.md).
 function scopeCard() {
   return html`
-    <section class="${CARD + CARD_IDLE}" data-testid="plan-scope">
+    <section class="${'mb-3 ' + CARD + CARD_IDLE}" data-testid="plan-scope">
       <div class="mb-2 flex items-start gap-2">
         <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
           >${t('Eerst dit')}</span
@@ -3491,7 +3354,7 @@ function branchRow(b) {
 // rows for the same reason.
 function hotfixCard() {
   return html`
-    <section class="${CARD + CARD_IDLE}" data-testid="plan-hotfix">
+    <section class="${'mb-3 ' + CARD + CARD_IDLE}" data-testid="plan-hotfix">
       <div class="mb-2 flex items-start gap-2">
         <span class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10.5px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
           >${t('Eerst dit')}</span
@@ -3684,6 +3547,7 @@ function taskRow(row) {
 // "klaar" (never a colour on its own), so what just happened is still
 // readable — the same choice test_run_progress.go makes server-side.
 function liveTestid(convId) {
+  if (convId === topicsConvId()) return 'plan-topics-live'
   return convId === execConvId() ? 'plan-execute-live' : 'plan-generate-live'
 }
 
@@ -4358,6 +4222,164 @@ function commentsPanel() {
   `
 }
 
+// topicsCard is "what Jira tells about this ticket", split into topics the
+// reviewer ticks on/off to decide the scope and can rewrite — directly above
+// the planning chat (see the "Jira topics above the chat" block further up
+// for the data side). Always mounted (a stable element root, toggling only
+// inside — .claude/rules/arrowjs-pitfalls.md), the list its own function
+// binding that always returns an array.
+function topicsCard() {
+  return html`
+    <section class="${'mb-3 ' + CARD + CARD_IDLE}" data-testid="plan-topics">
+      <div class="mb-2 flex items-center gap-2">
+        <h2 class="min-w-0 flex-1 text-[13.5px] font-semibold leading-snug text-slate-900 dark:text-zinc-100">
+          ${t('Wat Jira hierover zegt')}
+        </h2>
+        <button
+          type="button"
+          class="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+          data-testid="plan-topics-regenerate"
+          disabled="${() => state.topicsBusy}"
+          @click="${(e) => {
+            if (!e) return
+            e.stopPropagation()
+            requestTopics(true)
+          }}"
+        >
+          ${() => (state.topicsBusy ? t('bezig…') : t('Opnieuw samenvatten'))}
+        </button>
+      </div>
+      <p class="mb-2 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+        ${t('Vink aan wat in de scope hoort. Een aangepaste tekst gaat mee naar de chat, het plan en de uitvoering.')}
+      </p>
+      <div class="contents">${() => livePane(topicsConvId())}</div>
+      <div class="flex flex-col gap-1.5" data-testid="plan-topic-list">${() => topicRows()}</div>
+    </section>
+  `.key('plan-topics')
+}
+
+function topicRows() {
+  const topics = state.doc.topics || []
+  if (!topics.length) {
+    const text = state.topicsBusy || (!state.doc.topicsAt && !state.doc.topicsError)
+      ? t('Claude vat de Jira-informatie samen in onderwerpen…')
+      : state.doc.topicsError
+        ? t('Kon geen onderwerpen maken: {reason}', { reason: state.doc.topicsError })
+        : t('geen onderwerpen')
+    return [html`<p class="text-[12px] italic text-slate-400 dark:text-zinc-500" data-testid="plan-topics-empty">${text}</p>`.key('topics-empty')]
+  }
+  return topics.map((tp) => topicRow(tp.id))
+}
+
+// topicRow is one topic: a checkbox SHAPE (☑/☐) plus the WORD
+// "meenemen"/"buiten scope" (never colour alone — Reindert is colourblind),
+// the title, and the body rendered as Markdown (a table/image the topic
+// carries shows as one). A click on "bewerk" swaps the body for a textarea
+// with the raw Markdown; blur saves. The key carries the edit state so that
+// swap is a fresh node, and every binding reads topicView(id) fresh (a
+// reused keyed node does not re-run its bindings).
+function topicRow(id) {
+  const v = () => topicView(id) || { title: '', body: '', off: false }
+  const editing = state.topicEditing === id
+  const body = editing
+    ? html`<textarea
+        data-testid="plan-topic-input"
+        rows="${Math.max(3, Math.min(14, (v().body || '').split('\n').length + 1))}"
+        class="mt-1 w-full resize-y rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 font-mono text-[11.5px] leading-relaxed text-slate-800 focus:border-indigo-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+        @click="${(e) => e && e.stopPropagation()}"
+        @input="${(e) => e && onTopicInput(id, e.target.value)}"
+        @keydown="${(e) => {
+          if (!e) return
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            e.target.blur()
+          }
+        }}"
+        @blur="${(e) => e && commitTopicEdit(id)}"
+      >${(state.topicPending[id] && state.topicPending[id].body) || v().body}</textarea
+      >`
+    : html`<div
+        class="${() => 'markdown-body mt-0.5 text-[12px] leading-relaxed [overflow-wrap:anywhere] ' + (v().off ? 'text-slate-400 dark:text-zinc-500' : 'text-slate-700 dark:text-zinc-200')}"
+        data-testid="plan-topic-body"
+        .innerHTML="${() => renderMarkdown(v().body || '')}"
+      ></div>`
+  return html`
+    <div
+      class="${() => 'rounded-lg border px-2 py-1.5 ' + (v().off ? 'border-dashed border-slate-200 dark:border-zinc-800' : 'border-slate-200 bg-white dark:border-zinc-700 dark:bg-zinc-900/40')}"
+      data-testid="plan-topic"
+      data-topic-id="${id}"
+      data-topic-state="${() => (v().off ? 'off' : 'on')}"
+    >
+      <div class="flex items-start gap-2">
+        <button
+          type="button"
+          class="shrink-0 rounded px-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          data-testid="plan-topic-toggle"
+          @click="${(e) => {
+            if (!e) return
+            e.stopPropagation()
+            const cur = v()
+            sendTopic(id, !cur.off, topicDrafts[id] != null ? topicDrafts[id] : (state.topicPending[id] && state.topicPending[id].body) || cur.body)
+          }}"
+        >
+          ${() => (v().off ? '☐ ' + t('buiten scope') : '☑ ' + t('meenemen'))}
+        </button>
+        <span
+          class="${() => 'min-w-0 flex-1 text-[12.5px] font-semibold leading-snug ' + (v().off ? 'text-slate-400 line-through dark:text-zinc-500' : 'text-slate-900 dark:text-zinc-100')}"
+          data-testid="plan-topic-title"
+          >${() => v().title}</span
+        >
+        <span class="shrink-0 text-[10.5px] text-slate-400 dark:text-zinc-500" data-testid="plan-topic-edited"
+          >${() => (v().edited || (state.topicPending[id] && state.topicPending[id].body) ? t('aangepast') : '')}</span
+        >
+        <button
+          type="button"
+          class="shrink-0 rounded px-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+          data-testid="plan-topic-edit"
+          @click="${(e) => {
+            if (!e) return
+            e.stopPropagation()
+            if (state.topicEditing === id) {
+              commitTopicEdit(id)
+              return
+            }
+            if (state.topicEditing) commitTopicEdit(state.topicEditing)
+            state.topicEditing = id
+            requestAnimationFrame(() => {
+              const el = document.querySelector('[data-topic-id="' + id + '"] [data-testid=plan-topic-input]')
+              if (el) el.focus()
+            })
+          }}"
+        >
+          ${editing ? t('klaar') : t('bewerk')}
+        </button>
+      </div>
+      ${body}
+    </div>
+  `.key('topic:' + id + ':' + (editing ? 'edit' : 'view'))
+}
+
+// planInlineChat is the planning chat itself — the review tree's own
+// claudeChatColumn (composer, live progress, images, dictation), reused
+// unchanged and fed by this page's chatView/chatCallbacks. It replaced the
+// intent form: reviewer request "het plannen van een jira taak moet anders.
+// ik wil het met een chat kunnen plannen … De vraag welke branch er gebruikt
+// moet worden is prima, maar ik wil daaronder gelijk kunnen chatten".
+function planInlineChat() {
+  return html`
+    <section class="${'mb-3 ' + CARD + CARD_IDLE}" data-testid="plan-inline-chat">
+      <div class="mb-1 flex items-center gap-2">
+        <h2 class="min-w-0 flex-1 text-[13.5px] font-semibold leading-snug text-slate-900 dark:text-zinc-100">
+          ${t('Plan dit ticket in de chat')}
+        </h2>
+        <span class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-zinc-800 dark:text-zinc-400">/</span>
+      </div>
+      <div class="flex min-h-0 flex-col">${() => claudeChatColumn(chatView(), chatCallbacks(), false, () => {}, {})}</div>
+    </section>
+  `.key('plan-inline-chat')
+}
+
 // questionsColumn holds ONE Jira-opmerkingen panel at a time: while the
 // dedicated column next to the ticket is up (intentCommentsColumnVisible),
 // this copy stands down. Both rendering at once put the same panel twice on
@@ -4376,8 +4398,10 @@ function questionsColumn() {
     >
       ${columnHeader(t('Vragen over het plan'), () => state.col === 1)}
       <div class="min-h-0 flex-1 overflow-y-auto pr-1">
-        <div class="contents">${() => (intentInQuestionsColumn() ? [intentField('questions')] : [])}</div>
-        <div class="contents">${() => (intentInQuestionsColumn() ? [intentToSpecsHint()] : [])}</div>
+        <div class="contents">${() => (needsScope() ? [scopeCard()] : [])}</div>
+        <div class="contents">${() => (needsHotfix() ? [hotfixCard()] : [])}</div>
+        ${topicsCard()}
+        ${planInlineChat()}
         <div class="contents">${() => (intentCommentsColumnVisible() ? [] : [commentsPanel()])}</div>
         <div class="contents">${() => livePane(genConvId())}</div>
         ${() => (gateOpen() ? [] : (state.doc.questions || []).map((q, qi) => questionCard(q, qi)))}
@@ -4389,8 +4413,6 @@ function questionsColumn() {
                 </p>`.key('no-questions'),
               ]
             : []}
-        <div class="contents">${() => (needsScope() ? [scopeCard()] : [])}</div>
-        <div class="contents">${() => (needsHotfix() ? [hotfixCard()] : [])}</div>
         <div class="contents">
           ${() => (!gateOpen() && navRows().some((r) => r.kind === 'followup') ? [followupCard()] : [])}
         </div>
@@ -4580,43 +4602,6 @@ function planMenuOverlay() {
   `.key('plan-menu-overlay')
 }
 
-// planChatOverlay is the general chat about this ticket — mirrors the review
-// tree's own generalChatOverlay.mjs shape (a fullscreen backdrop, Escape/an
-// outside click closes it) around the SAME claudeChatColumn, fed by this
-// page's own chatView/chatCallbacks above.
-function planChatOverlay() {
-  return html`
-    <div
-      class="fixed inset-0 z-40 flex items-stretch justify-center bg-slate-900/40 p-4 backdrop-blur-sm dark:bg-black/60"
-      data-testid="plan-chat-overlay"
-      @click="${(e) => {
-        if (e.target === e.currentTarget) closePlanChat()
-      }}"
-    >
-      <div
-        class="flex min-h-0 w-full max-w-[720px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl ring-1 ring-slate-200 dark:bg-zinc-900 dark:ring-zinc-700"
-        data-testid="plan-chat-card"
-      >
-        <div class="flex shrink-0 items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-zinc-800">
-          <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-zinc-400"
-            >${() => t('Chat over dit ticket · {key}', { key: state.key })}</span
-          >
-          <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-zinc-800 dark:text-zinc-400">esc</span>
-        </div>
-        <div class="flex min-h-0 flex-1 flex-col overflow-y-auto p-2">
-          ${() =>
-            // `{ inOverlay: true }` drops claudeChatColumn's tree-only
-            // `max-h-[38vh]` cap — this overlay, like generalChatOverlay.mjs's
-            // GeneralChatCard, already has a real, bounded height, so the
-            // thread should fill it instead of leaving a dead gap above the
-            // composer (see scrollPlanChatThreadToBottom's own doc comment).
-            claudeChatColumn(chatView(), chatCallbacks(), false, () => {}, { inOverlay: true })}
-        </div>
-      </div>
-    </div>
-  `.key('plan-chat-overlay')
-}
-
 // intentCommentsColumnVisible: reviewer request ("als je dat selecteerd,
 // alleen dan opmerkingen rechts daarvan zien (ook als je pr description
 // selecteerd hebt)") — a DEDICATED column, separate from the questions
@@ -4662,7 +4647,6 @@ function App() {
             : ''}
       </div>
       <div class="contents">${() => (menu.open ? [planMenuOverlay()] : [])}</div>
-      <div class="contents">${() => (state.chatOpen ? [planChatOverlay()] : [])}</div>
     </div>
   `
 }

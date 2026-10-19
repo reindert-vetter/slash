@@ -496,7 +496,7 @@ func TestPlanChatPromptCarriesContextAndTranscript(t *testing.T) {
 			{Role: "user", Body: "Waarom kiezen we hier voor een facade?"},
 		},
 	}
-	got := planChatPrompt(doc)
+	got := planChatPrompt(doc, planChatTools{})
 	for _, want := range []string{"PAYM-813", "Iets bouwen", "De service aanpassen", "Waarom kiezen we hier voor een facade?", "Reviewer:"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("chat prompt is missing %q:\n%s", want, got)

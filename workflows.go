@@ -821,6 +821,9 @@ type AppSettingsSignal struct {
 	// ShowTouchedSection carries the "Migrations & API changes" section setting
 	// (Kind "touchedSection"); nil means the default (off). See touchedsection.go.
 	ShowTouchedSection *bool `json:"showTouchedSection,omitempty"`
+	// RequestLogPath carries the request-log (identifier.db) location (Kind
+	// "requestLog"); "" switches it off. See requestlog.go.
+	RequestLogPath string `json:"requestLogPath,omitempty"`
 	// DebugMode carries the server-side Debug mode flag (Kind "debugMode");
 	// nil means off. See debug_trace.go.
 	DebugMode *bool `json:"debugMode,omitempty"`
@@ -2779,6 +2782,16 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		return nil, saveTouchedSectionFile(m.appDataDirOrDefault(), show)
 	})
 
+	// Activity: persist the request-log (identifier.db) location into
+	// request-log.json — saveRequestLogFile (requestlog.go) is its only writer.
+	engine.RegisterActivity("saveRequestLog", func(ctx context.Context, in []byte) ([]byte, error) {
+		var path string
+		if err := json.Unmarshal(in, &path); err != nil {
+			return nil, err
+		}
+		return nil, saveRequestLogFile(m.appDataDirOrDefault(), path)
+	})
+
 	// Activity: persist the server-side Debug mode flag (debug-server.json) —
 	// saveDebugServerFile (debug_trace.go) is the only writer of it.
 	engine.RegisterActivity("saveDebugServer", func(ctx context.Context, in []byte) ([]byte, error) {
@@ -4138,6 +4151,7 @@ func (m *TaskManager) SetAppDataDir(dir string) {
 	m.appDataDir = dir
 	loadBlankRowsFile(dir)
 	loadTouchedSectionFile(dir)
+	loadRequestLogFile(dir)
 	loadDebugServerFile(dir)
 	loadFileFiltersFile(dir)
 }
@@ -5201,6 +5215,10 @@ func appSettingsWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			show := sig.ShowTouchedSection != nil && *sig.ShowTouchedSection
 			if err := w.ExecuteActivity("saveTouchedSection", show, nil); err != nil {
 				return nil, fmt.Errorf("save touched section: %w", err)
+			}
+		case "requestLog":
+			if err := w.ExecuteActivity("saveRequestLog", sig.RequestLogPath, nil); err != nil {
+				return nil, fmt.Errorf("save request log: %w", err)
 			}
 		case "debugMode":
 			on := sig.DebugMode != nil && *sig.DebugMode

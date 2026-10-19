@@ -121,6 +121,12 @@ func planGenerateConversationID(key string) string {
 	return "plangen:" + key
 }
 
+// planTopicsConversationID is the live-progress id of the topics run (see
+// planTopics). Mirrored verbatim in src/plan.mjs (topicsConvId).
+func planTopicsConversationID(key string) string {
+	return "plantopics:" + key
+}
+
 func planExecuteConversationID(key string) string {
 	return "planexec:" + key
 }
@@ -173,6 +179,29 @@ const planAnswerTask = "task"
 // rewrites the artifact files — see writePlanArtifacts) and triggers no
 // regeneration.
 const planAnswerIntent = "intent"
+
+// planAnswerTopics is the Kind that (re)builds the Jira topics above the
+// chat (planTopic): everything known from Jira about this ticket, split into
+// topics the reviewer ticks on/off to decide the scope. Reviewer request:
+// "wat je weet door jira dingen, opgedeeld in onderwerpen en dat je dat boven
+// de chat kan aanvinken en uitvinken om mee te nemen". The page sends it
+// once, on its own, for a document without topics yet (doc.TopicsAt empty);
+// Text "regenerate" forces a fresh set over existing ones (the "Opnieuw
+// samenvatten" button). Without it, a document that already HAS topics is
+// left alone — a pure decision on the recorded document, so replay
+// reproduces it, and a second tab firing the same automatic request costs
+// nothing.
+const planAnswerTopics = "topics"
+
+// planAnswerTopic is the Kind that saves the reviewer's own state of ONE
+// topic: TopicID names it, TopicOff is the checkbox (unchecked = out of
+// scope), Text its (possibly edited) body. A save and nothing else, like
+// planAnswerTask — the next generation/chat turn/execution reads it.
+const planAnswerTopic = "topic"
+
+// planTopicsRegenerate is the Text that makes a planAnswerTopics signal
+// replace existing topics.
+const planTopicsRegenerate = "regenerate"
 
 // planAnswerRetry is the PlanAnswerSignal Kind that re-runs a swallowed-error
 // generation IN PLACE, without a new answer. planGenerate never fails the
@@ -246,6 +275,24 @@ type PlanAnswerSignal struct {
 	// re-validated by the HTTP handler (see chat_attachment.go). Never set for
 	// any other Kind.
 	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
+	// TopicID/TopicOff are the planAnswerTopic Kind's payload (Text is the
+	// body). See planTopic.
+	TopicID  string `json:"topicId,omitempty"`
+	TopicOff bool   `json:"topicOff,omitempty"`
+}
+
+// planTopic is one topic of what Jira tells about this ticket, shown above
+// the chat with a checkbox: Off (default false = included) is the reviewer's
+// scope decision, Body a short Markdown text (at most two sentences, unless
+// the source carries a table, an image or a lot of relevant data — then the
+// proper Markdown for it). Edited marks a body the reviewer rewrote. IDs are
+// assigned on our side (o1..on), never by the model.
+type planTopic struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	Off    bool   `json:"off,omitempty"`
+	Edited bool   `json:"edited,omitempty"`
 }
 
 // planBlock is one example-code block, as rendered in the page's third column.
@@ -369,6 +416,11 @@ type PlanHotfixSignal struct {
 	// Attachments: the chat carve-out's own carve-out — images the reviewer
 	// pasted/dragged into the composer, ids only (see chat_attachment.go).
 	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
+	// TopicID/TopicOff: the topic Kinds ride this gate too (see
+	// handlePlanSideSignal), so a topic edit made while the branch question
+	// stands is saved right away instead of after the gate.
+	TopicID  string `json:"topicId,omitempty"`
+	TopicOff bool   `json:"topicOff,omitempty"`
 }
 
 // PlanScopeSignal answers the scope question. Choice is always "parent" today
@@ -380,6 +432,8 @@ type PlanScopeSignal struct {
 	Kind        string              `json:"kind,omitempty"`
 	Text        string              `json:"text,omitempty"`
 	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
+	TopicID     string              `json:"topicId,omitempty"`
+	TopicOff    bool                `json:"topicOff,omitempty"`
 }
 
 // planAnswer is one stored reviewer answer (the Signal, kept on the document).
@@ -534,8 +588,18 @@ type planDoc struct {
 	// review tree's own Claude chat component, reused, but keyed on the Jira
 	// KEY (this document) rather than a GitHub PR number: there is no PR yet
 	// at planning time. See planChatReply/the plan_answer Kind "chat".
-	Chat      []planChatMessage `json:"chat,omitempty"`
-	UpdatedAt string            `json:"updatedAt,omitempty"`
+	Chat []planChatMessage `json:"chat,omitempty"`
+	// Topics is what Jira tells about this ticket, split into topics the
+	// reviewer ticks on/off above the chat (see planTopic/planAnswerTopics).
+	// TopicsAt is set once a topics run finished (success or not), so the
+	// page asks for them automatically only once; TopicsError is that run's
+	// failure reason — deliberately WITHOUT omitempty, for the same reason
+	// Error below has none (it is set by an Activity whose result is decoded
+	// into the already-populated workflow document).
+	Topics      []planTopic `json:"topics,omitempty"`
+	TopicsAt    string      `json:"topicsAt,omitempty"`
+	TopicsError string      `json:"topicsError"`
+	UpdatedAt   string      `json:"updatedAt,omitempty"`
 	// Error is a short reason the questions/tasks are empty (Jira or Claude
 	// unreachable, SLASH_CLAUDE=off). The page shows it as a note, never as an
 	// error wall — same "never cry wolf" rule as the Jira sections.
@@ -624,6 +688,94 @@ func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string, attachments [
 		return fmt.Errorf("plan: save chat reply: %w", err)
 	}
 	return nil
+}
+
+// handlePlanSideSignal handles every Kind that may arrive on ANY of the
+// tracker's three waits (the scope gate, the branch gate and the main
+// plan_answer loop): the chat and the topics above it. tembed can only
+// WaitSignal on one name at a time, so without this a topic edit made while
+// a gate stands would only be read after the gate AND the first generation —
+// the reported "als ik input aanpas, dan is dat niet aangepast (na een
+// refresh)". handled=false means the Kind is not a side signal and the
+// caller treats it as its own answer.
+func handlePlanSideSignal(w *tembed.Workflow, doc *planDoc, kind, text string, attachments []ChatAttachmentRef, topicID string, topicOff bool) (bool, error) {
+	switch kind {
+	case planAnswerChat:
+		return true, handlePlanChat(w, doc, text, attachments)
+	case planAnswerTopics:
+		return true, handlePlanTopics(w, doc, strings.TrimSpace(text) == planTopicsRegenerate)
+	case planAnswerTopic:
+		next, changed := upsertPlanTopic(doc.Topics, topicID, text, topicOff)
+		if !changed {
+			return true, nil
+		}
+		doc.Topics = next
+		if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+			return true, fmt.Errorf("plan: save topic: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// handlePlanTopics builds the topics (planTopics Activity) and saves them —
+// skipped when the document already has topics and this is not an explicit
+// regenerate (see planAnswerTopics).
+func handlePlanTopics(w *tembed.Workflow, doc *planDoc, regenerate bool) error {
+	if len(doc.Topics) > 0 && !regenerate {
+		return nil
+	}
+	if err := w.ExecuteActivity("planTopics", *doc, doc); err != nil {
+		return fmt.Errorf("plan: topics: %w", err)
+	}
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save topics: %w", err)
+	}
+	return nil
+}
+
+// planTopicIDPattern is the shape parsePlanTopics assigns (o1..on).
+var planTopicIDPattern = regexp.MustCompile(`^o[0-9]{1,3}$`)
+
+// maxPlanTopicLen bounds one edited topic body.
+const maxPlanTopicLen = 20000
+
+// validPlanTopicSignal checks a planAnswerTopic payload at the HTTP edge.
+func validPlanTopicSignal(id, text string) bool {
+	return planTopicIDPattern.MatchString(id) && len(text) <= maxPlanTopicLen
+}
+
+// dedupeStrings drops repeats, keeping the first occurrence's position.
+func dedupeStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// upsertPlanTopic is the pure fold of one planAnswerTopic signal: the topic
+// with that id gets the new checkbox state and, when text is non-empty and
+// different, the new body (marked Edited). An unknown id changes nothing.
+func upsertPlanTopic(topics []planTopic, id, text string, off bool) ([]planTopic, bool) {
+	text = strings.TrimSpace(text)
+	for i, tp := range topics {
+		if tp.ID != id {
+			continue
+		}
+		next := append([]planTopic(nil), topics...)
+		next[i].Off = off
+		if text != "" && text != tp.Body {
+			next[i].Body = text
+			next[i].Edited = true
+		}
+		return next, next[i] != tp
+	}
+	return topics, false
 }
 
 // handlePlanComments folds a freshly posted Jira comment back into the plan:
@@ -748,8 +900,8 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		for {
 			var scope PlanScopeSignal
 			w.WaitSignal(SignalPlanScope, &scope)
-			if scope.Kind == planAnswerChat {
-				if err := handlePlanChat(w, &doc, scope.Text, scope.Attachments); err != nil {
+			if handled, err := handlePlanSideSignal(w, &doc, scope.Kind, scope.Text, scope.Attachments, scope.TopicID, scope.TopicOff); handled {
+				if err != nil {
 					return nil, err
 				}
 				continue
@@ -780,8 +932,8 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var hf PlanHotfixSignal
 		for {
 			w.WaitSignal(SignalPlanHotfix, &hf)
-			if hf.Kind == planAnswerChat {
-				if err := handlePlanChat(w, &doc, hf.Text, hf.Attachments); err != nil {
+			if handled, err := handlePlanSideSignal(w, &doc, hf.Kind, hf.Text, hf.Attachments, hf.TopicID, hf.TopicOff); handled {
+				if err != nil {
 					return nil, err
 				}
 				hf = PlanHotfixSignal{}
@@ -943,8 +1095,8 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 		// The general chat about this ticket (reused from the review tree, see
 		// planChatMessage/.claude/docs/plan-page.md) — see handlePlanChat.
-		if sig.Kind == planAnswerChat {
-			if err := handlePlanChat(w, &doc, sig.Text, sig.Attachments); err != nil {
+		if handled, err := handlePlanSideSignal(w, &doc, sig.Kind, sig.Text, sig.Attachments, sig.TopicID, sig.TopicOff); handled {
+			if err != nil {
 				return nil, err
 			}
 			continue
@@ -1704,11 +1856,29 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			tools = []string{"Read"}
 			addDirs = []string{chatAttachmentConvDir(m.appDataDirOrDefault(), convID)}
 		}
+		// Planning happens in this chat now (reviewer request: "ik wil het met
+		// een chat kunnen plannen"), so the turn may look things up itself:
+		// the code, read-only, in the plan's werkmap (the same checkout the
+		// current-code panes read, planCurrentWorkDir), and the production
+		// request log through exactly `duckdb -readonly <path>` — a Bash
+		// permission PATTERN, so any other shell command is refused by the
+		// CLI itself. The production databases are not reachable from here on
+		// purpose: the reviewer runs those queries (see writePlanDataSources).
+		access := planChatTools{RequestLog: usableRequestLog()}
+		workDir := planCurrentWorkDir(ctx, m.dataDir, doc.Key)
+		if workDir != "" {
+			access.Code = true
+			tools = append(tools, "Read", "Grep", "Glob")
+		}
+		if access.RequestLog != "" {
+			tools = append(tools, "Bash(duckdb -readonly "+access.RequestLog+":*)")
+		}
 		result, err := m.claude.RunChat(ctx, claude.RunRequest{
 			Model:   claude.ModelOpus,
-			Prompt:  planChatPrompt(doc) + chatAttachmentPromptNote(attachmentPaths) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
-			Tools:   tools,
+			Prompt:  planChatPrompt(doc, access) + chatAttachmentPromptNote(attachmentPaths) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			Tools:   dedupeStrings(tools),
 			AddDirs: addDirs,
+			WorkDir: workDir,
 			OnEvent: chatProgressSink("", 0, convID, &checkoutDir),
 			Timeout: planClaudeTimeout,
 		})
@@ -1722,6 +1892,51 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		doc.Chat = append(doc.Chat, planChatMessage{Role: "assistant", Body: reply, CreatedAt: now})
 		doc.Chat = trimPlanChat(doc.Chat)
 		publishChatChanged("", 0, convID)
+		return json.Marshal(doc)
+	})
+	// Activity: build the Jira topics above the chat (see planTopic /
+	// planAnswerTopics) — ONE context-only Claude call answering JSON, with
+	// live progress under planTopicsConversationID so the page shows it the
+	// same way it shows a generation (livePane). Best-effort: a failure
+	// leaves the existing topics alone and records the reason on
+	// TopicsError; TopicsAt is set either way so the page does not keep
+	// re-asking on every load.
+	engine.RegisterActivity("planTopics", func(ctx context.Context, in []byte) ([]byte, error) {
+		var doc planDoc
+		if err := json.Unmarshal(in, &doc); err != nil {
+			return nil, err
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		doc.UpdatedAt = now
+		doc.TopicsAt = now
+		doc.TopicsError = ""
+		if m.claude == nil {
+			doc.TopicsError = "Claude is nu niet beschikbaar."
+			return json.Marshal(doc)
+		}
+		conv := planTopicsConversationID(doc.Key)
+		startChatProgress("", 0, conv)
+		defer finishChatProgress("", 0, conv)
+		setChatProgressLabel("", 0, conv, "onderwerpen uit Jira")
+		var checkoutDir string
+		result, err := m.claude.RunChat(ctx, claude.RunRequest{
+			Model:   claude.ModelOpus,
+			Prompt:  planTopicsPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			Timeout: planClaudeTimeout,
+			OnEvent: chatProgressSink("", 0, conv, &checkoutDir),
+		})
+		if err != nil {
+			m.logf("plan: topics %s: %v", doc.Key, err)
+			doc.TopicsError = err.Error()
+			return json.Marshal(doc)
+		}
+		topics, perr := parsePlanTopics(strings.TrimSpace(result.Text))
+		if perr != nil {
+			m.logf("plan: topics %s: %v", doc.Key, perr)
+			doc.TopicsError = perr.Error()
+			return json.Marshal(doc)
+		}
+		doc.Topics = topics
 		return json.Marshal(doc)
 	})
 	// Activity: persist the document (write, workflow-driven).

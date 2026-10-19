@@ -883,10 +883,21 @@ func coldStartArgs() []string {
 // --tools (verified with a manual `claude -p` run).
 func agenticToolUniverse(tools []string) []string {
 	universe := make([]string, 0, len(tools)+1)
+	seen := map[string]bool{}
 	for _, t := range tools {
 		if strings.HasPrefix(t, "mcp__") {
 			continue
 		}
+		// A permission pattern ("Bash(duckdb -readonly x.db:*)") narrows WHAT
+		// a tool may do via --allowedTools; --tools itself only knows the
+		// bare built-in name, so the pattern is reduced to that here.
+		if i := strings.IndexByte(t, '('); i > 0 {
+			t = t[:i]
+		}
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
 		universe = append(universe, t)
 	}
 	return append(universe, "Skill")

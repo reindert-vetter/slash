@@ -63,7 +63,7 @@ settings that already existed rather than an invented taxonomy:
 |---|---|---|
 | Weergave (`display`) | `theme`, `keyboardhints`, `blankrows`, `touchedsection`, `debug` | how the app looks, plus local recording — the reviewer's own "weergave/debug" grouping |
 | Taal (`language`) | `langui`, `langexplain`, `langreply`, `langcommit` | one setting per translatable output type, plus the fixed read-only commit-language row |
-| AI-assistent (`assistant`) | `autowarn`, `autoingestpref`, `praisewords` | everything that steers what the built-in AI assistant does automatically (including which words it doesn't count as an open point) |
+| AI-assistent (`assistant`) | `autowarn`, `autoingestpref`, `praisewords`, `requestlog` | everything that steers what the built-in AI assistant does automatically (including which words it doesn't count as an open point, and which request log the planning chat may query) |
 | Account & Jira (`account`) | `auth`, `checkout`, `aliases`, `notifyfilters` | who I am and which outside services/credentials this install talks to (gh/acli/Jira login, the PR-scoped checkout dir, GitHub identity/@mention aliases, Jira notification noise) |
 
 `TAB_DEFS` is simultaneously the tab bar's own order, each tab's `↑`/`↓` nav
@@ -167,6 +167,7 @@ still reachable, one per tab-panel").
 | Wie ben ik — GitHub-login | `GET /api/me` (`avatar.mjs`'s `ensureMe`/`meLogin`) | — | No, by explicit reviewer decision: "wie ben ik moet uit GitHub komen" |
 | Wie ben ik — extra @mention-aliassen | `GET /api/settings` (`me.aliases`) | new `app_settings` tracker, Kind `"aliases"` (see below) | Yes — new |
 | Praise-woorden | `GET /api/praisewords` | new `app_settings` tracker, Kind `"praiseWords"` (see below) | Yes — new |
+| Request-log (identifier.db) (`settings-row-requestlog`: the production access log, a DuckDB file, the planning chat may query read-only) | `GET /api/requestlog` → `{path, exists}` from `<appDataDir>/request-log.json` (`requestlog.go`); default `/Users/reindert/dev/plug-and-pay/identifier.db`, an explicit empty path = off | `app_settings` tracker, Kind `"requestLog"` → Activity `saveRequestLog`. The path is validated twice (handler + writer: absolute, plain path characters, `.db`; a `.wal` becomes its `.db`) because it reaches the claude CLI's permission pattern and `duckdb` as an argument | Yes — a text field saved on Enter/blur, with the word "gevonden"/"niet gevonden" next to it. See "What the chat may look up itself" in `plan-page.md` |
 | Jira-notificaties verbergen (`settings-row-notifyfilters`) | `GET /api/notifyfilters` (`notifyfilters.go`) | `app_settings` tracker, Kind `"notifyFilters"` → `notify-filters.json` (see below) | Yes — a list of texts he adds to himself |
 
 ### Werkmap: read-only here, by design

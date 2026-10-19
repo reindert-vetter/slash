@@ -59,13 +59,18 @@ const state = reactive({
   // ↓/Enter hands the keyboard back to that tab's first row. Ephemeral, not
   // in the URL — a cursor position, like state.activeRow itself.
   tabFocused: false,
-  editing: null, // null | 'aliases' | 'praisewords' | 'notifyfilters' — which row owns a focused text input
+  editing: null, // null | 'aliases' | 'praisewords' | 'notifyfilters' | 'requestlog' — which row owns a focused text input
   aliases: [],
   praiseWords: [],
   // The reviewer's own Jira-notification noise filter (GET /api/notifyfilters,
   // notifyfilters.go). A list he adds to himself; an EMPTY list is a real
   // state here ("hide nothing"), unlike praiseWords.
   notifyFilters: [],
+  // The production request log (identifier.db, DuckDB) the planning chat may
+  // query itself — GET /api/requestlog, requestlog.go. requestLogSaved is the
+  // word next to the field after a save ("opgeslagen"), never a colour alone.
+  requestLog: { path: '', exists: false, loaded: false },
+  requestLogSaved: '',
   appSettingsRunId: '',
   checkoutLoading: originPr != null,
   checkout: null, // the batch-fetched checkoutView for originPr, or null
@@ -123,7 +128,7 @@ watch(
 const TAB_DEFS = [
   { id: 'display', label: 'Weergave', rows: ['theme', 'keyboardhints', 'blankrows', 'touchedsection', 'debug'] },
   { id: 'language', label: 'Taal', rows: ['langui', 'langexplain', 'langreply', 'langcommit'] },
-  { id: 'assistant', label: 'AI-assistent', rows: ['autowarn', 'autoingestpref', 'praisewords'] },
+  { id: 'assistant', label: 'AI-assistent', rows: ['autowarn', 'autoingestpref', 'praisewords', 'requestlog'] },
   { id: 'account', label: 'Account & Jira', rows: ['auth', 'checkout', 'aliases', 'notifyfilters'] },
 ]
 const ROWS = TAB_DEFS.flatMap((tab) => tab.rows) // flat lookup, e.g. for input-focus targeting by row name
@@ -183,6 +188,18 @@ async function loadNotifyFilters() {
   }
 }
 
+async function loadRequestLog() {
+  try {
+    const res = await fetch('/api/requestlog')
+    if (res.ok) {
+      const data = await res.json()
+      state.requestLog = { path: data.path || '', exists: !!data.exists, loaded: true }
+    }
+  } catch (err) {
+    console.error('requestlog load failed:', err)
+  }
+}
+
 async function loadPraiseWords() {
   try {
     const res = await fetch('/api/praisewords')
@@ -222,6 +239,7 @@ async function init() {
     loadAliases(),
     loadPraiseWords(),
     loadNotifyFilters(),
+    loadRequestLog(),
     loadCheckout(),
     refreshDebugCount(),
   ])
@@ -290,6 +308,28 @@ async function saveNotifyFilters(next) {
   } catch (err) {
     console.error('save notify filters failed:', err)
   }
+}
+
+// saveRequestLog stores the request-log path (Kind "requestLog", same
+// app_settings tracker). The server normalizes it (a `.wal` becomes its
+// `.db`) and rejects anything that is not a plain absolute path, so the
+// reloaded value — not the typed one — is what the row shows afterwards.
+async function saveRequestLog(inputEl) {
+  const v = (inputEl.value || '').trim()
+  const runId = await ensureAppSettingsRun()
+  if (!runId) return
+  try {
+    const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/app_settings_update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'requestLog', requestLogPath: v }),
+    })
+    state.requestLogSaved = res.ok ? t('opgeslagen') : t('ongeldig pad — gebruik een absoluut pad naar een .db-bestand')
+  } catch (err) {
+    console.error('save request log failed:', err)
+  }
+  await loadRequestLog()
+  if (inputEl.isConnected) inputEl.value = state.requestLog.path
 }
 
 // addAlias/addPraiseWord read the input's DOM value directly and clear it
@@ -390,6 +430,9 @@ function activateRow(row) {
   } else if (row === 'notifyfilters') {
     state.editing = 'notifyfilters'
     requestAnimationFrame(() => focusRowInput('notifyfilters'))
+  } else if (row === 'requestlog') {
+    state.editing = 'requestlog'
+    requestAnimationFrame(() => focusRowInput('requestlog'))
   }
   // 'checkout' is read-only on this page (see checkoutRow) — no action, and
   // neither is 'langcommit': code/commits are always English by rule, so that
@@ -971,6 +1014,57 @@ function praiseWordsRow() {
   </div>`
 }
 
+// The production request log (identifier.db) the planning chat may query
+// read-only (see requestlog.go and "The planning chat" in
+// .claude/docs/plan-page.md). One uncontrolled text field, saved on Enter or
+// blur; the state next to it is a WORD ("gevonden"/"niet gevonden"), never a
+// colour alone. Keyed on the loaded path so the field re-seeds once the GET
+// lands (a keyed node does not re-run its static content).
+function requestLogRow() {
+  return html`<div
+    data-testid="settings-row-requestlog"
+    class="${() => rowCls('requestlog')}"
+    @click="${() => selectRow('requestlog')}"
+  >
+    ${rowLabel(
+      t('Request-log (identifier.db)'),
+      t('Het productie-request-log (DuckDB) dat de planningschat zelf mag raadplegen, alleen-lezen. Een .wal-bestand mag ook; leeg = niet gebruiken.'),
+    )}
+    <div class="contents">
+      ${() =>
+        [
+          html`<input
+            type="text"
+            data-testid="settings-requestlog-input"
+            value="${state.requestLog.path}"
+            placeholder="/Users/…/plug-and-pay/identifier.db"
+            class="w-full rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2.5 py-1.5 font-mono text-[12px] text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-300 dark:focus:ring-indigo-500/40"
+            @keydown="${(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.target.blur()
+              }
+            }}"
+            @blur="${(e) => {
+              if (e && e.target.value.trim() !== state.requestLog.path) saveRequestLog(e.target)
+            }}"
+            @focus="${() => (state.editing = 'requestlog')}"
+          />`.key('requestlog-input:' + (state.requestLog.loaded ? state.requestLog.path : '…')),
+        ]}
+    </div>
+    <p class="mt-1 text-[11.5px] text-slate-500 dark:text-zinc-400" data-testid="settings-requestlog-state">
+      ${() =>
+        !state.requestLog.loaded
+          ? ''
+          : (!state.requestLog.path
+              ? t('uit — de chat gebruikt geen request-log')
+              : state.requestLog.exists
+                ? '✓ ' + t('gevonden')
+                : '✗ ' + t('niet gevonden op dit pad')) + (state.requestLogSaved ? ' · ' + state.requestLogSaved : '')}
+    </p>
+  </div>`
+}
+
 // The Jira-notification noise filter — a list the reviewer adds to himself,
 // same chips+input shape as praiseWordsRow. Its own remove button is never
 // disabled: an empty list means "hide nothing".
@@ -1096,7 +1190,7 @@ function App() {
             ),
             langCommitRow(),
           ])}
-          ${tabPanel('assistant', 'settings-tab-panel-assistant', [autoWarnRow(), autoIngestPrefRow(), praiseWordsRow()])}
+          ${tabPanel('assistant', 'settings-tab-panel-assistant', [autoWarnRow(), autoIngestPrefRow(), praiseWordsRow(), requestLogRow()])}
           ${tabPanel('account', 'settings-tab-panel-account', [authRow(), checkoutRow(), aliasesRow(), notifyFiltersRow()])}
         </div>
         <p class="mx-auto mt-4 max-w-xl text-[12px] text-slate-400 dark:text-zinc-500">

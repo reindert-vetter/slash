@@ -129,7 +129,9 @@ that set stays small on purpose; a new topic file belongs in `.claude/docs/`.
 - `pages-and-routing.md` — the three routes and their static shells, plus the
   state that travels between the review tree and the PR overview.
 - `plan-page.md` — the `/plan/<JIRA-KEY>` planning page: the ticket + its own
-  running workflow tasks, the multiple-choice questions (each choice with its
+  running workflow tasks, the inline planning chat with the tickable/editable
+  Jira topics above it (what the chat may query itself: code, the request
+  log), the multiple-choice questions (each choice with its
   own input) plus the "wat er moet gebeuren" list, the example-code blocks and
   their arbitrarily deep drilled columns, the two gates before generation (a
   main task's subtask scope, a bug's hotfix/base-branch question), the `plan`

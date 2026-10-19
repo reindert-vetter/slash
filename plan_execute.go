@@ -892,6 +892,11 @@ func planExecutePrompt(doc planDoc) string {
 	writePlanSubtaskFocus(&b, doc)
 	writePlanSiblings(&b, doc)
 	writePlanBaseBranchWork(&b, doc.BaseBranchWork)
+	// The reviewer's scope decision on the Jira topics and the planning chat
+	// — where the plan is made now (see .claude/docs/plan-page.md) — so what
+	// was ticked, rewritten or agreed there also reaches the execution.
+	writePlanTopics(&b, doc)
+	writePlanChatTranscript(&b, doc, "GESPREK MET DE REVIEWER OVER DIT TICKET (wat hier is afgesproken geldt; bij twijfel gaat het laatste woord van de reviewer voor):")
 	if len(doc.Answers) > 0 {
 		b.WriteString("VASTSTAANDE KEUZES (de reviewer heeft deze al gemaakt, wijk hier niet van af):\n")
 		for _, a := range doc.Answers {

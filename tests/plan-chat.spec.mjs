@@ -1,8 +1,11 @@
 import { test, expect, appReady } from './_fixtures.mjs'
 
-// The general chat about a ticket ("/" on /plan/<KEY>) — reviewer request:
-// "ik wil de algemene chat openen door / te drukken. precies zoals in de
-// tree. die mag je hergebruiken". The UI (ClaudeChat.mjs's claudeChatColumn)
+// The planning chat about a ticket — always inline in the questions column,
+// right under the branch question and the Jira topics ("ik wil het met een
+// chat kunnen plannen … De vraag welke branch er gebruikt moet worden is
+// prima, maar ik wil daaronder gelijk kunnen chatten"); `/` jumps to its
+// composer. Originally a fullscreen overlay ("ik wil de algemene chat openen
+// door / te drukken. precies zoals in de tree. die mag je hergebruiken"). The UI (ClaudeChat.mjs's claudeChatColumn)
 // is the exact review-tree component; the backend behind it is this page's
 // own (plan_answer Signal, Kind "chat"), keyed on the Jira key rather than a
 // GitHub PR number — there is no PR yet at planning time. See
@@ -15,17 +18,15 @@ import { test, expect, appReady } from './_fixtures.mjs'
 // session, which always begins that script at its OWN first line
 // (claude.Fake.RunChat: an unseen session id has no chatPos yet). The
 // deterministic reply is therefore always the script's first line.
-test.describe('Plan page — the general chat (/)', () => {
-  test('/ opens the chat, a sent message round-trips through the Signal, Escape closes it', async ({ page }) => {
+test.describe('Plan page — the planning chat', () => {
+  test('/ focuses the inline chat, a sent message round-trips through the Signal', async ({ page }) => {
     await page.goto('/plan/TEST-901')
     await appReady(page)
 
-    await expect(page.getByTestId('plan-chat-overlay')).toBeHidden()
+    await expect(page.getByTestId('plan-inline-chat')).toBeVisible()
     await page.keyboard.press('/')
-    const overlay = page.getByTestId('plan-chat-overlay')
-    await expect(overlay).toBeVisible()
 
-    const composer = page.getByTestId('claude-chat-compose')
+    const composer = page.getByTestId('plan-inline-chat').getByTestId('claude-chat-compose')
     await expect(composer).toBeFocused()
     await composer.fill('Waarom kiezen we hier voor een facade?')
     await composer.press('Enter')
@@ -35,9 +36,6 @@ test.describe('Plan page — the general chat (/)', () => {
     // blocking Claude call server-side) lands.
     await expect(page.getByTestId('claude-chat-thread')).toContainText('Waarom kiezen we hier voor een facade?')
     await expect(page.getByTestId('claude-chat-thread')).toContainText('Ik heb naar de code gekeken', { timeout: 15000 })
-
-    await page.keyboard.press('Escape')
-    await expect(overlay).toBeHidden()
   })
 
   // Reviewer report: "ik typ hier iets, maar de chat is opeens weg"
@@ -73,11 +71,11 @@ test.describe('Plan page — the general chat (/)', () => {
     await expect(thread).toContainText('Ik heb naar de code gekeken', { timeout: 15000 })
   })
 
-  test('the mouse entry point (plan-chat-button) opens the same overlay', async ({ page }) => {
+  test('the mouse entry point (plan-chat-button) focuses the same composer', async ({ page }) => {
     await page.goto('/plan/TEST-902')
     await appReady(page)
     await page.getByTestId('plan-chat-button').click()
-    await expect(page.getByTestId('plan-chat-overlay')).toBeVisible()
+    await expect(page.getByTestId('plan-inline-chat').getByTestId('claude-chat-compose')).toBeFocused()
   })
 
   // Reviewer report: "reactie hierop zie ik niet in mijn conversatie
@@ -114,16 +112,5 @@ test.describe('Plan page — the general chat (/)', () => {
       timeout: 15000,
     })
     await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2)
-  })
-
-  test('a click on the backdrop closes the overlay', async ({ page }) => {
-    await page.goto('/plan/TEST-903')
-    await appReady(page)
-    await page.keyboard.press('/')
-    const overlay = page.getByTestId('plan-chat-overlay')
-    await expect(overlay).toBeVisible()
-    // Click the backdrop itself, not the card inside it.
-    await overlay.click({ position: { x: 5, y: 5 } })
-    await expect(overlay).toBeHidden()
   })
 })

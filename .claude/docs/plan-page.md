@@ -377,160 +377,123 @@ free text.
   (only the workflow FUNCTION's own control flow is,
   `.claude/rules/workflow-determinism.md`).
 
-## The "Intentie" field: shown, and editable
+## Planning in a chat: the Jira topics above it (replaced the "Intentie" form)
 
-Reviewer request, verbatim: *"in taak description eerste kolom moet de
-intentie zichtbaar zijn, maar dat moeten we ook kunnen aanpassen. intentie kan
-je halen uit jira taak en is een taak wat te maken heeft met de hoofdtaak."*
+Reviewer request, verbatim: *"het plannen van een jira taak moet anders. ik wil
+het met een chat kunnen plannen. De vraag welke branch er gebruikt moet worden
+is prima, maar ik wil daaronder gelijk kunnen chatten"*, and on the form:
+*"Chat vervangt formulier. geen formulier. ik wil dat je wat je weet door jira
+dingen, opdeeld in onderwerpen en dat je dat boven de chat kan aanvinken en
+uitvinken om mee te nemen, dus bepalen hoe groot de scope is, maar dat je per
+scope het nog kan aanpassen. Dat moet gaan om maximaal 2 zinnen, behalve als er
+tabellen en afbeeldingen aanwezig zijn, of heel veel gegeven relevant voor de
+ticket."*
 
-- **No new generation** — the existing, always-generated `intent.md`
-  (`renderPlanIntent`, see "Three stages, three files" above) IS the intent
-  text; `GET /api/plan` now also returns it as a top-level `intent` field
-  (`payload["intent"] = renderPlanIntent(doc)`), computed at read time next to
-  `artifacts`, never stored twice.
-- **Editable, but wholesale, not per-section** — `doc.intentOverride` (a new,
-  `omitempty` field on `planDoc`, absent/empty for every document before this
-  existed) replaces the auto-generated document ENTIRELY once set; merging a
-  free-form edit back into the Problem/Constraints/… sections would be
-  brittle, so `renderPlanIntent` just returns the override verbatim when it is
-  non-empty.
-- **No new Signal name** — tembed can only `WaitSignal` on one name at a time
-  (the same reason `planAnswerFollowup`/`planAnswerChat`/`planAnswerTask`
-  exist), so the edit rides on the EXISTING `plan_answer` Signal with
-  `kind:"intent"` (`planAnswerIntent`): `doc.IntentOverride =
-  strings.TrimSpace(sig.Text)`, then the ordinary `planSave` Activity (which
-  already rewrites the artifact files on every save, so intent.md on disk
-  reflects the override immediately). An empty `Text` clears the override.
-  Triggers no regeneration, same as `planAnswerTask`.
-- **Frontend** (`intentField`, `plan.mjs`): renders as one uncontrolled
-  `<textarea data-testid=plan-intent-section-body>` PER SECTION of intent.md
-  (see "A sectioned, GitHub-style editor" below) in column 0, each seeded via
-  a plain (non-`() =>`) static `value=`-equivalent (element CONTENT here,
-  since a `<textarea>`'s default value is its text content) — same "seed
-  once, save on blur" pattern as `plan-task-note`. Keyed on the loading state
-  (`'intent:' + (loading ? 'pending' : 'ready')`) rather than on
-  `state.intentText`/`doc.updatedAt`, so it remounts (and re-seeds) exactly
-  ONCE, right after the first real load — remounting on every later poll
-  would wipe an in-progress edit. A REMOTE edit from another tab while this
-  one is open is a known, accepted gap, same as `plan-task-note`.
-  `sendIntentOverride(text)` posts the Signal; a `data-testid=plan-intent-reset`
-  button appears only while `doc.intentOverride` is set, clearing it (empty
-  text) to revert to the auto-generated one.
-- **Bug, found and fixed alongside the retry fix above**: `tasks_api.go`'s
-  `plan_answer` handler validates which Kinds may arrive with an empty
-  `questionId` (`followup`/`chat`/`comment`/`task` only) and never added
-  `intent` to that list, so **every** intent edit was rejected outright with
-  `400 invalid plan answer` before it ever reached the workflow —
-  `sendIntentOverride` always failed silently. Only looked like it worked
-  because `tests/plan-intent-sections.spec.mjs` mocks the signal route at the
-  Playwright level rather than exercising the real Go handler. Fixed by
-  adding `planAnswerIntent` (and `planAnswerRetry`, see above) to the allowed
-  Kinds; verified against the real handler (not a mocked route) with a live
-  `POST /api/workflows/<runId>/signals/plan_answer` round trip.
+**The questions column now reads, top to bottom:** the scope/branch gate card
+(while it stands) → **"Wat Jira hierover zegt"** (the topics, `topicsCard`,
+`data-testid=plan-topics`) → **the planning chat** (`planInlineChat`,
+`data-testid=plan-inline-chat`) → Jira-opmerkingen → the generated questions,
+follow-up/regenerate rows and the task list, which stay as they were. The
+sectioned intent editor (`intentField`/`parseIntentSections`/
+`intentToSpecsHint`, the `planAnswerIntent` UI) and the fullscreen chat
+overlay are **gone**. `doc.intentOverride`/the `intent` Kind still exist on the
+backend so old documents keep rendering, but nothing sends it anymore.
 
-### A sectioned, GitHub-style editor: headings are fixed, only the text below them is editable
+### The topics (`planTopic`, `doc.topics`)
 
-Reviewer request, verbatim: *"maak intentie hoger en toegankelijker om aan te
-passen. misschien dat de markdown titels niet aangepast kan worden, alleen de
-description daaronder, meer github markdown editor ofzo."* `parseIntentSections`
-(`plan.mjs`) splits the seed text on every markdown heading line (`#`..`######`)
-into `{heading, body}` pairs; `intentField` renders each `heading` as a plain,
-non-editable `<div data-testid=plan-intent-heading>` and only the `body` below
-it as its own `<textarea data-testid=plan-intent-section-body>`
-(`intentSectionBody`) — so intent.md's own H1 title and every `##` section
-name can be READ but never accidentally retyped, only the prose under them
-can. A section with no heading at all (the leading segment before intent.md's
-own first `#`, normally empty) is rendered the same way, just without the
-label above it.
+- **Built by one Claude call**, Activity `planTopics` (`plan_workflow.go`,
+  prompt `planTopicsPrompt`/`parsePlanTopics` in `plan_prompt.go`): Opus, no
+  tools, the same `writePlanContext` facts the plan is built from (with the
+  document's own topics and answers left out — this is what builds them),
+  answering `{"topics":[{"title","body"}]}`. 3–8 topics, a body of at most two
+  sentences unless the source has a table, an image or a lot of relevant data
+  — then the proper Markdown for it. Ids `o1..on` are assigned on our side,
+  like `q1`/`t1`. Live progress streams under `plantopics:<KEY>`
+  (`planTopicsConversationID`/`topicsConvId`) into the card's own `livePane`.
+  `TopicsAt` is set on every finished run (success or not), `TopicsError`
+  (deliberately **no** `omitempty`, same reason as `Error`) carries a failure.
+- **Who starts it:** the page, once per load, for a document without
+  `topicsAt` (`maybeRequestTopics`): Signal Kind `"topics"`. The workflow skips
+  it when the document already has topics and `Text != "regenerate"`
+  (`handlePlanTopics`) — a pure decision on the recorded document, so a second
+  tab or a refresh mid-run costs nothing. "Opnieuw samenvatten" sends
+  `text:"regenerate"` and replaces the set. A topic edit or toggle never
+  regenerates anything.
+- **Per topic:** a checkbox SHAPE plus WORD (`☑ meenemen` / `☐ buiten
+  scope`, `data-topic-state=on|off`, the title struck through) — never colour
+  alone; the body rendered with `renderMarkdown` (so a table/image shows as
+  one); "bewerk" swaps it for a textarea with the raw Markdown, saved on blur.
+  Signal Kind `"topic"` with `topicId`/`topicOff`/`text`, folded by the pure
+  `upsertPlanTopic` and saved with `planSave` (an edited body is marked
+  `edited`, shown as the word "aangepast").
+- **Where it goes:** `writePlanTopics` writes the ticked topics (their own,
+  possibly edited text — "gaat voor op de omschrijving") and the unticked ones
+  by title as `BUITEN SCOPE` into `writePlanContext` (so `planPrompt`,
+  `planChatPrompt`) and into `planExecutePrompt`; `intent.md` gets a `## Scope`
+  checklist (`renderPlanIntent`).
 
-**One edit still saves the WHOLE document, not just that section.** Every
-section's own `@blur` handler (`intentSectionBody`'s `save`) walks EVERY
-sibling `[data-testid=plan-intent-section-body]` inside the shared
-`data-testid=plan-intent-sections` container — reading each one's LIVE current
-`.value`, never the `sections` array snapshot taken at mount time — pairs each
-with its own (unchanged) heading, read back off that same field's own
-`data-section-heading` attribute (also not a snapshot, see the bug below), and
-reconstructs the document via `buildIntentFromSections` (heading + blank line +
-body, joined with a blank line between sections) before calling
-`sendIntentOverride` once.
-Deliberately not a per-section override on the document: `doc.intentOverride`
-stays the single wholesale field described above, so nothing on the backend
-needed to change — this is purely a frontend editing affordance on top of it.
-The reconstructed text does not byte-for-byte preserve the original's blank-line
-layout, which is accepted: once an override exists the document is no longer
-regenerated from scratch anyway.
+### Edits must survive a refresh, and reach every later action
 
-**"Hoger" (taller), literally:** stacking one heading + textarea per section
-(instead of the previous single 6-row textarea for the whole document) makes
-the block noticeably taller on its own, satisfying the reviewer's separate
-"the field's bottom edge should move down, the top stays where it is" request
-— no page layout change was needed for this, the wrapping card already had no
-fixed/max height.
+Reported against the old intent field: *"als ik input aanpas, dan is dat niet
+aangepast (na een refresh) en nieuwe tekst moet ook meegenomen worden in
+vervolgacties"*. Three causes, each closed for the topics:
 
-Test: `tests/plan-intent-sections.spec.mjs` ("a heading is a fixed label, only
-the text below it is editable, and an edit saves the whole document").
+1. **The signal name.** The intent edit always rode `plan_answer`, which the
+   tracker only reads after the scope/branch gate AND the first generation.
+   Topic Kinds ride whatever the tracker waits on (`chatSignalName()`), and
+   `handlePlanSideSignal` handles chat/topics/topic in **all three** waits
+   (scope gate, branch gate, main loop) and `continue`s — a topic signal on
+   `plan_hotfix` must never be read as the branch answer
+   (`TestPlanTopicsRideTheHotfixGate`). The HTTP handlers validate the Kinds on
+   all three signals (`validPlanTopicSignal`).
+2. **Save-on-blur alone loses an immediate F5.** The text being typed lives in
+   a plain (non-reactive) `topicDrafts` map and is mirrored into
+   `sessionStorage` (`plan-topic-pending:<KEY>`) on every input; `pagehide`
+   flushes it with `fetch(…, {keepalive:true})`, and the next load restores it
+   as `state.topicPending` (shown immediately) and re-sends it once
+   (`resendPendingTopics`) until the stored document says the same
+   (`dropSettledTopics`).
+3. **No prompt read the override.** See "Where it goes" above; the chat
+   transcript itself now also travels into `planPrompt` and
+   `planExecutePrompt` (`writePlanChatTranscript`), since that is where the
+   plan is made.
 
-**Bug, fixed afterwards: an empty intent left NO field at all, and generated
-text never showed up on its own.** `parseIntentSections('')` returns an empty
-list, so the block rendered zero textareas — in stage 1 (intent), where writing
-the intent IS the job, there was nothing to type into, and the placeholder the
-old single textarea always carried was gone with it. `intentSections()` is the
-fix: the same parse, but never empty — one heading-less `{heading: null, body:
-''}` section stands in, the honest equivalent of that old empty field. Two
-arrow.js-shaped follow-ons came with it, both straight out of
-`.claude/rules/arrowjs-pitfalls.md`:
+**Accepted gap:** the topics are mouse-only — ↑/↓ in column 1 still walks
+`navRows()` (options, tasks, …) and skips them; `/` reaches the chat.
 
-- the list is now its own `${() => intentSections().map(...)}` FUNCTION
-  binding instead of a static `.map()` of a mount-time snapshot inside the
-  conditional template (the "fifth variant"), so a section that only exists
-  after a later poll actually appears;
-- `intentSectionBody`'s `.key()` carries the section's own CONTENT next to its
-  position, because a keyed node is reused WITHOUT re-running its bindings —
-  with a position-only key the first field kept showing the empty text it
-  mounted with even once the generated intent had arrived. A poll bringing
-  back the same text keeps the same key, so an edit in progress is still never
-  clobbered; only genuinely changed text re-seeds.
+**Replay:** no new step in the workflow body for an existing history — the
+new Activities only run in response to the new Signal Kinds, which no old
+history carries (`.claude/rules/workflow-determinism.md`). Tests:
+`plan_topics_test.go`, `tests/plan-referenced-intent.spec.mjs` (toggle, edit,
+immediate reload).
 
-The same staleness is why `save` reads each heading off the field's own
-`data-section-heading` rather than a captured array: that array goes stale the
-moment the list grows, and a blur would then rebuild intent.md with the wrong
-headings. Test: `tests/plan-intent-sections.spec.mjs` ("an empty intent still
-offers one field, and generated text arrives without a reload").
+### What the chat may look up itself
 
-### Where it sits, and when it can be typed in, depends on the phase
+`planChatReply` is no longer a tool-less completion:
 
-Follow-up request: *"laat mij intentie in 2e kolom zien als je nog in stap 1
-zit, als je in stap 2 zit, dan mag het zoals nu, maar alleen editbaar als je
-enter erop drukt"*. ONE component, two placements, decided by
-`intentInQuestionsColumn()` on top of `planPhaseNow()` — the frontend mirror of
-`planPhase` (`plan_artifacts.go`): it prefers the server's own
-`state.artifacts.phase` and falls back to the same "nothing generated yet is
-stage 1" rule, so a response without an `artifacts` block still lands on a real
-phase.
+- **Code:** `Read/Grep/Glob` with `WorkDir` = the plan's werkmap
+  (`planCurrentWorkDir`, the same checkout the current-code panes read) — only
+  when one resolves.
+- **The production request log:** `Bash(duckdb -readonly <path>:*)`, a
+  permission PATTERN, so the CLI refuses any other shell command. The path is
+  the settings-page "Request-log (identifier.db)" row (`requestlog.go`, default
+  `/Users/reindert/dev/plug-and-pay/identifier.db`; a `.wal` is normalized to
+  its `.db` — DuckDB replays its WAL itself), only granted when the file
+  exists. `modules/claude`'s `agenticToolUniverse` reduces such a pattern to
+  its bare tool name for `--tools`. The prompt (`writePlanDataSources`) carries
+  the load-bearing gotchas of plug-and-pay's `search-in-requests` skill (UTC,
+  per-day coverage first, `last` reserved, report a lock rather than copy).
+  Read-only, so no write-boundary carve-out is involved.
+- **Production MySQL/ClickHouse:** never from here (slash has no credentials,
+  by design). The reviewer runs them: the prompt asks for ONE query at a time
+  in a `sql` fence, with what it proves, naming MySQL vs ClickHouse, then wait
+  for the pasted result — the way plug-and-pay's `data-change-investigator`
+  hands queries over.
 
-- **Phase `intent` (stage 1)** — the field renders at the TOP of the questions
-  column (`questionsColumn`, `data-intent-place="questions"`), as its own card,
-  never collapsed and directly typable. Writing the intent IS stage 1's work,
-  so nothing stands between the reviewer and the caret; column 0 shows no
-  intent block at all in this phase.
-- **Phase `specs`/`plan` (stage 2+)** — the historical spot under the ticket
-  description (`data-intent-place="ticket"`), still collapsing while the
-  questions column has the keyboard (see "The questions column doubles in
-  width…" below), and **read-only until Enter unlocks it**
-  (`state.intentEditing`, `data-locked`): click/Tab focuses, `Enter` (never a
-  newline — the handler `preventDefault`s its own key) unlocks, `Escape` and
-  blur lock it again. By then the reviewer is answering questions, and a stray
-  keystroke in a passed stage should not silently rewrite the intent. The state
-  is carried by a WORD next to the label ("vergrendeld — Enter om te bewerken"
-  / "bewerken", `data-testid=plan-intent-lock-label`), never by a colour, per
-  the colourblind rule.
-
-The `readonly` attribute is bound as the plain, undecorated name with a
-function binding returning `'true'`/`false` — not `?readonly=`/`.readonly=`,
-which this vendored arrow.js does not support (see
-`.claude/rules/arrowjs-pitfalls.md`). The component's `.key()` now carries the
-placement too (`intent:<place>:<ready|pending>`), so each spot keeps its own
-one-time seed. Test: `tests/plan-intent-phase.spec.mjs`.
+Verified live (a separate instance on a scratch data dir) against BUG-5195:
+topics generated, a toggle + an edit survived an immediate reload and reached
+`intent.md`, and the chat answered a request-log question by running duckdb
+itself while the branch question still stood.
 
 ### A dedicated Jira-opmerkingen column next to the ticket
 
@@ -1632,16 +1595,16 @@ document every answer already lives on.
   `ClaudeChat.mjs`'s file header. `retryAllBusy`/`queued` stay stubbed to their
   inert value on purpose: this page's chat still has no retry ladder or
   queueing (a single blocking call per message, never an agentic multi-tool
-  turn). `openPlanChat`/`closePlanChat` (`state.chatOpen`) gate a fullscreen
-  overlay (`planChatOverlay`) that mirrors the tree's own
-  `generalChatOverlay.mjs` shape (backdrop click / Escape closes it) —
-  ephemeral, not in the URL or `localStorage`, exactly like that overlay. `/`
-  always opens it, from any column, mirroring the tree's own "`/` always opens
-  the PR menu" rule; mouse entry point: `plan-chat-button` in `ticketCard`'s
-  "Weergave" row.
-- **Remaining accepted gap**: no cancel, no retry, no werkmap/code-edit
-  capability — this chat can only talk, never touch code (that is what "Plan
-  uitvoeren" is for). A hiccup (`SLASH_CLAUDE=off`, or the CLI erroring) still
+  turn). The chat used to be a fullscreen overlay
+  (`planChatOverlay`); it is now **inline** in the questions column
+  (`planInlineChat`, see "Planning in a chat" above). `/` (from any column),
+  the first F5 of a dictation and `plan-chat-button` in `ticketCard`'s
+  "Weergave" row all run `openPlanChat`, which focuses column 1 and puts the
+  caret in that composer.
+- **Remaining accepted gap**: no cancel, no retry, no code-edit capability —
+  this chat can read code and the request log (see "What the chat may look up
+  itself" above) but never change anything (that is what "Plan uitvoeren" is
+  for). A hiccup (`SLASH_CLAUDE=off`, or the CLI erroring) still
   appends a fixed assistant line saying so, rather than leaving the
   reviewer's own message answered by nothing.
 

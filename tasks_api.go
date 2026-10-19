@@ -1575,12 +1575,13 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// real text, and a task message a real title, or there is nothing
 			// to signal at all.
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask && body.Kind != planAnswerIntent && body.Kind != planAnswerRetry && body.Kind != planAnswerRegenerate) ||
+				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask && body.Kind != planAnswerIntent && body.Kind != planAnswerRetry && body.Kind != planAnswerRegenerate && body.Kind != planAnswerTopics && body.Kind != planAnswerTopic) ||
 				// A chat message needs real text OR at least one image — see
 				// s.planChatAttachments, and chat_attachment.go for why images
 				// alone are a complete message.
 				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "" && len(body.Attachments) == 0) ||
-				(body.Kind == planAnswerTask && strings.TrimSpace(body.TaskTitle) == "") {
+				(body.Kind == planAnswerTask && strings.TrimSpace(body.TaskTitle) == "") ||
+				(body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text)) {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)
 				return
 			}
@@ -1616,7 +1617,15 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// The general chat about this ticket rides on this same signal
 			// while the gate stands (Kind "chat", see handlePlanChat in
 			// plan_workflow.go) — needs real text and nothing else validated.
-			if body.Kind == planAnswerChat {
+			// The topics above the chat ride it too (see handlePlanSideSignal).
+			if body.Kind == planAnswerTopics || body.Kind == planAnswerTopic {
+				if body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text) {
+					http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
+					return
+				}
+				body.Attachments = nil
+				body.Branch = ""
+			} else if body.Kind == planAnswerChat {
 				if strings.TrimSpace(body.Text) == "" && len(body.Attachments) == 0 {
 					http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
 					return
@@ -1656,7 +1665,13 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// while the gate stands (Kind "chat", see handlePlanChat in
 			// plan_workflow.go) — the only shape allowed through without
 			// Choice == "parent".
-			if body.Kind == planAnswerChat {
+			if body.Kind == planAnswerTopics || body.Kind == planAnswerTopic {
+				if body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text) {
+					http.Error(w, "invalid plan scope", http.StatusBadRequest)
+					return
+				}
+				body.Attachments = nil
+			} else if body.Kind == planAnswerChat {
 				if strings.TrimSpace(body.Text) == "" && len(body.Attachments) == 0 {
 					http.Error(w, "invalid plan scope", http.StatusBadRequest)
 					return
@@ -1848,6 +1863,16 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				// A plain boolean; nothing to validate (nil = default shown).
 			case "touchedSection":
 				// A plain boolean; nothing to validate (nil = default off).
+			case "requestLog":
+				// The path reaches the claude CLI's permission pattern and
+				// duckdb as an argument — validated here and again in
+				// saveRequestLogFile (.claude/rules/conventions.md).
+				p, ok := normalizeRequestLogPath(body.RequestLogPath)
+				if !ok {
+					http.Error(w, "invalid request log path", http.StatusBadRequest)
+					return
+				}
+				body.RequestLogPath = p
 			case "debugMode":
 				// A plain boolean; nothing to validate (nil = off).
 			case "fileFilter":

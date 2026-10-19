@@ -30,6 +30,7 @@ func writePlanContext(b *strings.Builder, doc planDoc) {
 		desc = "(geen omschrijving in Jira)"
 	}
 	b.WriteString("OMSCHRIJVING:\n" + desc + "\n\n")
+	writePlanTopics(b, doc)
 
 	// Context from the other side of the parent/subtask relation. A subtask is
 	// planned WITH its main task in view (but the plan covers only the
@@ -217,6 +218,7 @@ func planPrompt(doc planDoc, mode string) string {
 	var b strings.Builder
 	b.WriteString("Je helpt een ontwikkelaar een Jira-ticket om te zetten in een scherp uitvoerplan.\n\n")
 	writePlanContext(&b, doc)
+	writePlanChatTranscript(&b, doc, "GESPREK MET DE REVIEWER OVER DIT TICKET (wat hier is afgesproken weegt zwaarder dan de omschrijving):")
 
 	// A follow-up round must not ask the same thing twice, so it sees every
 	// question already on the document (answered or not) — appendPlanQuestions
@@ -553,7 +555,7 @@ const maxPlanCommentLen = 1200
 // ticket, then adds the plan built so far and the conversation itself.
 // Deliberately asks for plain prose, not JSON: this is a side conversation
 // next to the plan, not another way to edit the questions/tasks.
-func planChatPrompt(doc planDoc) string {
+func planChatPrompt(doc planDoc, tools planChatTools) string {
 	var b strings.Builder
 	b.WriteString("Je bent Claude en voert een los gesprek met een ontwikkelaar die dit Jira-ticket aan het plannen is — naast de vragen en de takenlijst die al apart worden opgesteld.\n\n")
 	writePlanContext(&b, doc)
@@ -571,14 +573,145 @@ func planChatPrompt(doc planDoc) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("GESPREK TOT NU TOE:\n")
+	writePlanDataSources(&b, tools)
+	writePlanChatTranscript(&b, doc, "GESPREK TOT NU TOE:")
+	b.WriteString("\nBeantwoord de LAATSTE reviewer-boodschap hierboven. Je plant dit ticket SAMEN met de reviewer in dit gesprek: denk mee over wat er moet gebeuren, zoek waar nodig zelf dingen uit, en stel scherpe vragen. Kort en concreet, in het Nederlands, in gewoon proza (geen JSON, en alleen een code-fence als dat echt iets verduidelijkt — een query staat wél altijd in een fence). Wat in dit gesprek wordt afgesproken gaat automatisch mee naar het opstellen en uitvoeren van het plan; jij past het plandocument hier niet zelf aan.\n")
+	return b.String()
+}
+
+// planChatTools says which tools a plan chat turn has, so the prompt only
+// promises what the run can actually do (see planChatReply).
+type planChatTools struct {
+	// Code: Read/Grep/Glob in the plan's werkmap (a checkout of the repo).
+	Code bool
+	// RequestLog: the configured identifier.db path (DuckDB), queryable
+	// through `duckdb -readonly <path>`; "" when not configured/not found.
+	RequestLog string
+}
+
+// writePlanDataSources tells the chat what it can look at itself and what the
+// reviewer can look up for it. Reviewer request: "Neem mee dat de gebruiker
+// productie queries kan draaien in zowel mysql als clickhouse en dat
+// identifier.db kan gebruiken om requests logs te kunnen raadplegen". The
+// production databases are run BY THE REVIEWER (slash has no credentials for
+// them, by design) — one query at a time, the way plug-and-pay's own
+// data-change-investigator agent hands them over. The request log rules are
+// the load-bearing gotchas of plug-and-pay's search-in-requests skill.
+func writePlanDataSources(b *strings.Builder, tools planChatTools) {
+	b.WriteString("WAT JE KUNT RAADPLEGEN:\n")
+	if tools.Code {
+		b.WriteString("- De code: je draait in een checkout van de repository en mag Read/Grep/Glob gebruiken om te kijken hoe het nu werkt. Doe dat als het antwoord ervan afhangt, in plaats van te gokken.\n")
+	}
+	b.WriteString("- Productiedata (MySQL en ClickHouse): de reviewer kan read-only queries op productie draaien en het resultaat terugplakken. Heb je data nodig, geef dan ÉÉN query tegelijk in een ```sql-fence, met één regel ervoor wat de query doet en wat de uitkomst zou bewijzen, en wacht op het resultaat voor je verdergaat. Zeg of het MySQL (de applicatiedatabase) of ClickHouse (de statistieken: orders/order_items/subscriptions/products, ClickHouse-dialect) is. Alleen SELECT, met een LIMIT, en met een concrete tenant/id als die bekend is.\n")
+	if tools.RequestLog != "" {
+		fmt.Fprintf(b, "- Het productie-request-log: een DuckDB-bestand dat je ZELF mag bevragen met `duckdb -readonly %s -c \"<sql>\"` (alleen precies dat commando, alleen lezen). Tabel `requests` met kolommen datetime, host, ip, method, path, query, route_name, tenant_id, user_agent, user_id, version. Let op: `datetime` is UTC (Amsterdam is UTC+1/UTC+2); `path` heeft geen leidende slash en geen querystring; `query` is bij POST meestal leeg; `last` is een gereserveerd woord (gebruik `max(datetime) AS last_seen`); het bestand bevat NIET elke dag — tel eerst per dag (`select cast(datetime as date) d, count(*) from requests group by d order by d`) voor je uit nul hits iets concludeert. Krijg je een lock-fout, zeg dan dat het bestand in een ander programma open staat; kopieer het niet.\n", tools.RequestLog)
+	}
+	b.WriteString("\n")
+}
+
+// writePlanTopics writes the reviewer's scope decision on the Jira topics
+// (planTopic): the ticked ones with their (possibly edited) text as fixed
+// context, the unticked ones by title as explicitly out of scope. Shared by
+// every prompt that reads writePlanContext, plus planExecutePrompt — the
+// reported "nieuwe tekst moet ook meegenomen worden in vervolgacties".
+func writePlanTopics(b *strings.Builder, doc planDoc) {
+	if len(doc.Topics) == 0 {
+		return
+	}
+	var on, off []planTopic
+	for _, tp := range doc.Topics {
+		if tp.Off {
+			off = append(off, tp)
+		} else {
+			on = append(on, tp)
+		}
+	}
+	if len(on) > 0 {
+		b.WriteString("SCOPE — DE ONDERWERPEN DIE DE REVIEWER HEEFT AANGEVINKT (zijn eigen tekst gaat voor op de omschrijving en de opmerkingen):\n")
+		for _, tp := range on {
+			fmt.Fprintf(b, "- %s: %s\n", tp.Title, planTrim(tp.Body, 3000))
+		}
+		b.WriteString("\n")
+	}
+	if len(off) > 0 {
+		b.WriteString("BUITEN SCOPE — DOOR DE REVIEWER UITGEVINKT (hier hoort het plan NIETS mee te doen):\n")
+		for _, tp := range off {
+			fmt.Fprintf(b, "- %s\n", tp.Title)
+		}
+		b.WriteString("\n")
+	}
+}
+
+// writePlanChatTranscript writes the planning chat (doc.Chat) under the given
+// header. The chat is where the plan is now made, so generation and execution
+// read it too, not only the next chat turn.
+func writePlanChatTranscript(b *strings.Builder, doc planDoc, header string) {
+	if len(doc.Chat) == 0 {
+		return
+	}
+	b.WriteString(header + "\n")
 	for _, m := range doc.Chat {
 		who := "Reviewer"
 		if m.Role == "assistant" {
-			who = "Jij (Claude)"
+			who = "Claude"
 		}
-		fmt.Fprintf(&b, "%s: %s\n", who, planTrim(m.Body, 4000))
+		fmt.Fprintf(b, "%s: %s\n", who, planTrim(m.Body, 4000))
 	}
-	b.WriteString("\nBeantwoord de LAATSTE reviewer-boodschap hierboven. Kort en concreet, in het Nederlands, in gewoon proza (geen JSON, en alleen een code-fence als dat echt iets verduidelijkt). Als het antwoord de vragen of de takenlijst zou moeten veranderen, zeg dat in woorden — jij past dat document hier niet zelf aan.\n")
+	b.WriteString("\n")
+}
+
+// planTopicsPrompt asks for the topics above the chat: everything Jira tells
+// about this ticket (description, main task, comments, merged work, related
+// tickets) split into topics — see planTopic. The document's own topics are
+// left out of the context on purpose: this is what builds them.
+func planTopicsPrompt(doc planDoc) string {
+	var b strings.Builder
+	b.WriteString("Je vat samen wat er in Jira over dit ticket bekend is, opgedeeld in onderwerpen. De ontwikkelaar vinkt per onderwerp aan of het in de scope van dit ticket hoort, en kan de tekst aanpassen.\n\n")
+	ctxDoc := doc
+	ctxDoc.Topics = nil
+	ctxDoc.Answers = nil
+	writePlanContext(&b, ctxDoc)
+	b.WriteString(`Antwoord met ÉÉN JSON-object en niets anders:
+{"topics":[{"title":"kort onderwerp (max 6 woorden)","body":"de inhoud"}]}
+
+Regels:
+- 3 tot 8 onderwerpen, elk over één ding (bijv. het probleem zoals de klant het ziet, de verklaring tot nu toe, wat al is gedaan/gemerged, een randvoorwaarde, een open vraag). Geen dubbelingen.
+- body is MAXIMAAL 2 zinnen. Uitzondering: staat er in de bron een tabel, een afbeelding of heel veel gegevens die relevant zijn voor het ticket (bedragen, ids, datums, tenant-ids), neem die dan over in het juiste Markdown-formaat: een Markdown-tabel, een afbeelding als ![omschrijving](url) met de echte url uit de bron, of een korte lijst.
+- Alleen wat er echt staat; verzin niets. Noem concrete waarden (tenant-id, bedragen, datums) letterlijk.
+- Schrijf in het Nederlands.
+`)
 	return b.String()
+}
+
+// maxPlanTopics bounds the topic list.
+const maxPlanTopics = 10
+
+// parsePlanTopics reads planTopicsPrompt's answer and numbers the topics on
+// our side (o1..on).
+func parsePlanTopics(raw string) ([]planTopic, error) {
+	body := planJSONObject(raw)
+	if body == "" {
+		return nil, fmt.Errorf("plan: no JSON object in the topics answer")
+	}
+	var v struct {
+		Topics []struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+		} `json:"topics"`
+	}
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		return nil, fmt.Errorf("plan: parse topics: %w", err)
+	}
+	out := make([]planTopic, 0, len(v.Topics))
+	for _, tp := range v.Topics {
+		title, text := strings.TrimSpace(tp.Title), strings.TrimSpace(tp.Body)
+		if title == "" || text == "" || len(out) >= maxPlanTopics {
+			continue
+		}
+		out = append(out, planTopic{ID: fmt.Sprintf("o%d", len(out)+1), Title: planTrim(title, 120), Body: planTrim(text, 6000)})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("plan: the topics answer held no topics")
+	}
+	return out, nil
 }

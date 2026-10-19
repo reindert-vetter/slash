@@ -434,6 +434,20 @@ func renderPlanIntent(doc planDoc) string {
 		b.WriteString("_The ticket carries no description._\n\n")
 	}
 
+	// The reviewer's scope decision on the Jira topics above the planning
+	// chat (planTopic) — ticked ones in, unticked ones explicitly out.
+	if len(doc.Topics) > 0 {
+		b.WriteString("## Scope\n\n")
+		for _, tp := range doc.Topics {
+			mark := "x"
+			if tp.Off {
+				mark = " "
+			}
+			fmt.Fprintf(&b, "- [%s] **%s** — %s\n", mark, tp.Title, oneLine(tp.Body))
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("## Proposed outcome\n\n")
 	fmt.Fprintf(&b, "%s is done when the work described above is implemented and reviewable as a pull request.\n\n", doc.Key)
 	// The same WHAT/HOW split the generation prompt opens a subtask with (see

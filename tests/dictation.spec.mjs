@@ -381,9 +381,8 @@ test.describe('F5 dictation — plan page (/plan/<KEY>)', () => {
     await page.goto('/plan/TEST-901')
     await appReady(page)
 
-    await expect(page.getByTestId('plan-chat-overlay')).toBeHidden()
     await pressF5(page)
-    await expect(page.getByTestId('plan-chat-overlay')).toBeVisible()
+    await expect(page.getByTestId('plan-inline-chat').getByTestId('claude-chat-compose')).toBeFocused()
     await page.waitForTimeout(500)
     await pressF5(page)
 
@@ -399,8 +398,8 @@ test.describe('F5 dictation — plan page (/plan/<KEY>)', () => {
     await appReady(page)
 
     await page.keyboard.press('/')
-    await expect(page.getByTestId('plan-chat-overlay')).toBeVisible()
-    const composer = page.getByTestId('claude-chat-compose')
+    const composer = page.getByTestId('plan-inline-chat').getByTestId('claude-chat-compose')
+    await expect(composer).toBeFocused()
     await composer.fill('eerste alinea')
 
     await toggleF5For(page, 500)

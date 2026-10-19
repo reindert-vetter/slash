@@ -139,9 +139,11 @@ test.describe('Plan page — questions column keyboard/mouse navigation', () => 
 
     // A real mouse click (not Playwright's auto-scrolling .click()) on a
     // DIFFERENT option's own field, from this deeper column.
-    const target = await page
-      .locator('[data-testid="plan-option"][data-option-id="q1o2"] input[data-testid="plan-option-input"]')
-      .boundingBox()
+    // The Jira topics and the planning chat sit above the questions now, so
+    // the field may start below the fold.
+    const field = page.locator('[data-testid="plan-option"][data-option-id="q1o2"] input[data-testid="plan-option-input"]')
+    await field.scrollIntoViewIfNeeded()
+    const target = await field.boundingBox()
     await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2)
     await page.mouse.down()
     await page.mouse.up()
@@ -176,9 +178,11 @@ test.describe('Plan page — questions column keyboard/mouse navigation', () => 
     await page.keyboard.press('ArrowRight')
     await page.keyboard.press('ArrowRight') // opens q1o1's block column (state.col: 2)
 
-    const target = await page
-      .locator('[data-testid="plan-option"][data-option-id="q1o2"] input[data-testid="plan-option-input"]')
-      .boundingBox()
+    // The Jira topics and the planning chat sit above the questions now, so
+    // the field may start below the fold.
+    const field = page.locator('[data-testid="plan-option"][data-option-id="q1o2"] input[data-testid="plan-option-input"]')
+    await field.scrollIntoViewIfNeeded()
+    const target = await field.boundingBox()
     await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2)
     await page.mouse.down()
     await page.mouse.up()

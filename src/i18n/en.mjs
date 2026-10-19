@@ -978,4 +978,28 @@ export const EN = {
   'slash is up-to-date': 'slash is up to date',
   gecontroleerd: 'checked',
   'Nu controleren': 'Check now',
+
+  // ── the planning chat + Jira topics (src/plan.mjs) ─────────────────────
+  'Wat Jira hierover zegt': 'What Jira says about this',
+  'Opnieuw samenvatten': 'Summarize again',
+  'Vink aan wat in de scope hoort. Een aangepaste tekst gaat mee naar de chat, het plan en de uitvoering.':
+    'Tick what belongs in scope. An edited text is passed on to the chat, the plan and the execution.',
+  'Claude vat de Jira-informatie samen in onderwerpen…': 'Claude is summarizing the Jira information into topics…',
+  'Kon geen onderwerpen maken: {reason}': 'Could not build topics: {reason}',
+  'geen onderwerpen': 'no topics',
+  'buiten scope': 'out of scope',
+  meenemen: 'include',
+  aangepast: 'edited',
+  bewerk: 'edit',
+  'Plan dit ticket in de chat': 'Plan this ticket in the chat',
+  'onderwerpen uit Jira': 'topics from Jira',
+  // ── request-log row (src/settings.mjs) ───────────────────────────────
+  'Request-log (identifier.db)': 'Request log (identifier.db)',
+  'Het productie-request-log (DuckDB) dat de planningschat zelf mag raadplegen, alleen-lezen. Een .wal-bestand mag ook; leeg = niet gebruiken.':
+    'The production request log (DuckDB) the planning chat may query itself, read-only. A .wal file is fine too; empty = do not use.',
+  'uit — de chat gebruikt geen request-log': 'off — the chat uses no request log',
+  gevonden: 'found',
+  'niet gevonden op dit pad': 'not found at this path',
+  opgeslagen: 'saved',
+  'ongeldig pad — gebruik een absoluut pad naar een .db-bestand': 'invalid path — use an absolute path to a .db file',
 }
