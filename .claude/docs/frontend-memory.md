@@ -1014,6 +1014,17 @@ known ~20% post from the earlier campaign), ~30ms arrow.js flush, ~25ms
 paneHTML string build. Getting those presses under 200ms would need
 virtualizing/trimming the biggest diff DOMs — a design change, not a tweak.
 
+**Warm-up ahead of Space (`warmUpAhead`, home.mjs).** 200ms after the cursor
+settles (debounced `watch`, token-superseded), `ensureCode` is called for the
+next/previous index block, the unit's own unapproved-call subtree
+(`firstUnapprovedCallSiteInUnit`) and `findNextUnapproved`'s landing path, so a
+Space or manual step never awaits `/api/code`. Only the code cache is warmed;
+the plan is never stored (nothing to go stale). Measured honestly: on PRs
+13997/14103 (warm server, ~10ms per `/api/code`) the before/after latency is
+within noise (Space ~30-65ms either way, list ArrowDown the same) because the
+look-ahead preview already fetches the next block and the walk's cold cost is
+small. It only pays off where a fetch is slow or queued.
+
 ## A SINGLE huge block — a different scaling axis than the campaign above
 
 The Sep 2026 campaign above measured PR 13451/13255 (601/166 blocks, many

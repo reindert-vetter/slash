@@ -13657,6 +13657,57 @@ function spaceKey() {
   })
 }
 
+// Warm-up: once the cursor has settled, fetch the code Space (and a manual
+// step) would otherwise have to WAIT for. findNextUnapproved awaits ensureCode
+// per cold block (sequential /api/code round trips), and stepping to the next/
+// previous index block shows "loading" until its code arrives. Only the
+// ensureCode cache is warmed — the plan itself is never stored, so nothing can
+// go stale (the real Space press recomputes against the then-current state).
+// Debounced, and a plain-variable token supersedes an older in-flight run
+// (watch also fires on same-value writes, see arrowjs-pitfalls.md).
+let warmUpTimer = null
+let warmUpToken = 0
+function warmUpAhead(token) {
+  if (token !== warmUpToken || menu.open || !state.blocks.length) return
+  const warm = (b) => {
+    if (b && b.kind !== 'comment' && b.kind !== 'test_class') ensureCode(b)
+  }
+  warm(state.blocks[state.selected + 1])
+  warm(state.blocks[state.selected - 1])
+  // Space first tries descendIntoUnapprovedCall (the unit's own unapproved
+  // call children) — walking it fetches exactly the code that press awaits.
+  try {
+    const ctx = approveContext()
+    const b = ctx.b
+    if (b && ctx.mode === 'diff' && b.category !== 'TRANSLATION') {
+      const units = navUnitsOf(b, blockRows(b), ctx.gran)
+      const unit = isRangeGran(ctx.gran) ? rangeUnit(units, ctx.change, ctx.anchor) : units[ctx.change]
+      if (unit) {
+        firstUnapprovedCallSiteInUnit(b, unit).then((site) => {
+          if (!site || token !== warmUpToken) return
+          warm(site.kid)
+          for (const kid of site.found.path) warm(kid)
+        })
+      }
+    }
+  } catch {}
+  findNextUnapproved().then((target) => {
+    if (!target || token !== warmUpToken) return
+    const root = state.blocks[target.root]
+    if (root && target.methodIdx != null) warm(root.methods && root.methods[target.methodIdx])
+    else warm(root)
+    for (const kid of target.path) warm(kid)
+  })
+}
+watch(
+  () => [state.selected, state.change, state.gran, state.mode, state.focusLevel, state.drill, state.drillCursor, state.classMethodSel, state.blocks.length],
+  () => {
+    clearTimeout(warmUpTimer)
+    const token = ++warmUpToken
+    warmUpTimer = setTimeout(() => warmUpAhead(token), 200)
+  },
+)
+
 // "Sluit menu" is pinned first (withClose); the menu opens on the 2nd item
 // (defaultSel), so "Keur ... goed" stays the default Enter action.
 const COMMANDS = withClose([
