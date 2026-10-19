@@ -93,3 +93,28 @@ export function paletteClass(label) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
   return LABEL_PALETTE[h % LABEL_PALETTE.length]
 }
+
+// migrationParts — a Laravel migration's `up`/`down` method, split into what
+// tells two of them apart: the direction, the migration's own name and its
+// date. A migration is an anonymous class (`return new class extends
+// Migration`), so its label is the bare method name and a PR touching a dozen
+// migrations used to show a dozen indistinguishable "up"/"down" rows.
+//
+// Display only: `b.label` itself stays "up"/"down", because comments store
+// and match on it (modules/comments' `label` column, `c.label === s.label`).
+// Returns null for anything that isn't such a method.
+//
+//   modules/Statistics/Database/Migrations/2026_10_19_100000_clickhouse_v4.php
+//   → { dir: 'up', name: 'clickhouse_v4', date: '2026-10-19' }
+export function migrationParts(b) {
+  if (!b || b.class || (b.name !== 'up' && b.name !== 'down')) return null
+  const file = String(b.file || '')
+  if (!/(^|\/)migrations\//i.test(file)) return null
+  const base = file.split('/').pop().replace(/\.php$/, '')
+  const m = /^(\d{4})_(\d{2})_(\d{2})_\d{6}_(.+)$/.exec(base)
+  return {
+    dir: b.name,
+    name: m ? m[4] : base,
+    date: m ? `${m[1]}-${m[2]}-${m[3]}` : '',
+  }
+}

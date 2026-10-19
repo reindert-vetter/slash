@@ -739,6 +739,11 @@ func TestCategoryForTypeDirectory(t *testing.T) {
 		// Http/Resources/, matched earlier).
 		"modules/Affiliates/Resources/lang/en/includes.php": "TRANSLATION",
 		"modules/Pages/Http/Resources/PageResource.php":     "RESOURCE",
+		// A module's migrations live under a capitalised Database/Migrations/,
+		// with or without a layer — they used to fall through to OTHER.
+		"database/migrations/2026_10_01_120000_add_tenant_id_to_policies_table.php":                   "MIGRATION",
+		"modules/Statistics/Database/Migrations/2026_10_19_100000_clickhouse_subscriptions_v4.php":    "MIGRATION",
+		"modules/Memberships/Internal/Database/Migrations/2026_09_30_120000_add_name_to_settings.php": "MIGRATION",
 	}
 	for path, want := range cases {
 		if got := categoryFor(path); got != want {

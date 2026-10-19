@@ -378,7 +378,13 @@ var categoryRules = []categoryRule{
 	// gets "TRAIT" from classifyFile's Block.IsTrait override, regardless of
 	// path. See .claude/docs/blocks-and-ingest.md.
 	{func(p string) bool { return hasSeg(p, "Traits/") }, "TRAIT"},
-	{func(p string) bool { return hasSeg(p, "database/migrations/") }, "MIGRATION"},
+	// A module keeps its migrations under modules/<Name>/[<Layer>/]Database/
+	// Migrations/ — capitalised, unlike the top-level Laravel directory. Without
+	// the second form those fell through to OTHER: no MIGRATION badge, no top
+	// tier in the block index, and resolveMigrationModels skipped them.
+	{func(p string) bool {
+		return hasSeg(p, "database/migrations/") || hasSeg(p, "Database/Migrations/")
+	}, "MIGRATION"},
 	{func(p string) bool { return hasSeg(p, "database/factories/") }, "FACTORY"},
 	// The three Laravel HTTP-layer directories match on the `Http/<Dir>/`
 	// segment, NOT on an `app/` prefix: a module keeps the very same convention

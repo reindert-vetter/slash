@@ -197,6 +197,8 @@ export const EN = {
   'klaar om te pushen — Enter': 'ready to push — Enter',
   '{n} commit{plural} nog niet gepusht naar {ref}': '{n} commit{plural} not yet pushed to {ref}',
   'de PR-branch': 'the PR branch',
+  'Migratie up — voert de wijziging door': 'Migration up — applies the change',
+  'Migratie down — draait de wijziging terug': 'Migration down — reverts the change',
   'Ongepusht — deze wijziging staat lokaal op de PR-branch, maar is nog niet gepusht':
     'Not pushed — this change is local on the PR branch, but not pushed yet',
   'Claude past dit bestand nu aan; nog niet geland in de review-tree': 'Claude is editing this file now; not yet landed in the review tree',

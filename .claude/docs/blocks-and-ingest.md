@@ -969,6 +969,40 @@ sorting last is the one part of the old behavior that was kept unchanged.
 the 2026-08-25 decision): a fixed category tier is back on top — see the
 next section.
 
+### A migration's up/down row: glyph, name and date instead of "up"
+
+A Laravel migration is an anonymous class (`return new class extends
+Migration`), so its `up`/`down` block's label is the bare method name and a PR
+touching a dozen migrations showed a dozen indistinguishable `up`/`down` rows.
+`migrationParts(b)` (`src/blockPath.mjs`: empty class, name `up`/`down`, a
+`migrations/` directory in the path, any case) splits the file name into the
+migration's name (date prefix `YYYY_MM_DD_HHMMSS_` and `.php` stripped) and its
+date; `migrationLabel(b, card)` (`Block.mjs`) renders it in **both** the index
+row (`BlockList.mjs`) and the card title:
+
+```
+ MIGRATION  ▲  …add_billing_amount_to_subscriptions   0/1  -/+
+               2023-07-23
+```
+
+- **Direction is a glyph only** (▲ up, ▼ down) — reviewer request "up down
+  alleen icons". The shape carries the meaning; the word sits in
+  `title`/`aria-label` (colourblind rule).
+- **The name truncates at its START**, ellipsis on the left — reviewer request:
+  the distinguishing words of a migration name sit at the end, the first ones
+  (`clickhouse_`, `add_`) are shared. Done with `direction: rtl` on the
+  truncating box plus a `<bdi>` around the text so it still reads left to right.
+  The full path is the `title`.
+- **The date is in the row, on its own line** under the name (a two-line row
+  is fine, reviewer's call).
+- **Display only — `b.label` stays `up`/`down`.** Comments store and match on
+  the label (`modules/comments`' `label` column, `c.label === s.label` in
+  `home.mjs`/`RelatedPanel.mjs`), and `home.mjs` splits labels on `::`; changing
+  `makeLabel` would orphan every existing comment on a migration. Search still
+  matches the file path, so typing the migration's name finds it.
+
+Test: `tests/migration-label.spec.mjs`.
+
 ### A fixed category tier first: MIGRATION, ROUTE, CONTROLLER, REQUEST, RESOURCE
 
 Reviewer request: "migraties bovenaan de blokken index, daarna routing,
@@ -1134,6 +1168,14 @@ never a label invented from whatever the directory happens to be called.
 Deliberately absent from it: `Resources` (under a module that's the assets/lang
 directory — the API resource is `Http/Resources/`, matched earlier), and
 `Http`/`Database`/`Tests` (already covered by the earlier, more specific rules).
+**Including `Database/Migrations/`:** the MIGRATION rule matches both the
+top-level `database/migrations/` and a module's capitalised
+`modules/<Name>/[<Layer>/]Database/Migrations/`. It used to match only the
+lowercase form, so every module migration fell through to `OTHER` — no
+MIGRATION pill, no top tier in the index, skipped by `resolveMigrationModels`
+(found on PR 14273, `modules/Statistics/Database/Migrations/`). Test:
+`TestCategoryForTypeDirectory`. Stored column → a PR needs a re-ingest
+("Regenerate") to pick it up.
 The generic table runs **after** every explicit rule above, so those keep
 winning.
 

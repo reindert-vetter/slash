@@ -8,7 +8,7 @@ import { categoryClass, categoryLabel, categoryTitle } from './BlockList.mjs'
 import { translationBlockView, translationChangeUnits } from './translationDiff.mjs'
 import { avatarHtmlString } from './avatar.mjs'
 import { renderMarkdown } from './markdown.mjs'
-import { splitBlockPath, paletteClass } from './blockPath.mjs'
+import { splitBlockPath, paletteClass, migrationParts } from './blockPath.mjs'
 import { parseAutoWidthPx, resizeHandle, splitDividerHandle } from './columnWidth.mjs'
 import { ShortcutHintBar } from './shortcutHints.mjs'
 import Prism from './vendor/prism.js'
@@ -1845,7 +1845,7 @@ export default function Block(b, opts = {}) {
                 >`
               : ''}
           <h2 class="truncate font-mono text-sm font-semibold text-slate-800 dark:text-zinc-200">
-            ${() => (blockOldLabel(b) ? '+ ' : '') + (b.label || '')}
+            ${() => (migrationParts(b) ? migrationLabel(b, true) : (blockOldLabel(b) ? '+ ' : '') + (b.label || ''))}
           </h2>
         </span>
         <span
@@ -3351,6 +3351,47 @@ function rowCellHTML(r, i, sideKey, group, approved, commented, wrap, focused = 
     i,
     commentRange,
   )}</div>`
+}
+
+// migrationLabel replaces the bare "up"/"down" label of a Laravel migration
+// method (see migrationParts in blockPath.mjs) in both the block index row
+// (BlockList.mjs) and the card title: a ▲/▼ glyph for the direction — the
+// SHAPE carries it, the word sits in title/aria-label (colourblind rule) —
+// then the migration's name with its date on its own line underneath.
+//
+// The name truncates at its START ("…add_billing_amount_to_subscriptions"):
+// a migration name's distinguishing words sit at the end, and its first ones
+// ("clickhouse_", "add_") are shared by many. Done with `direction: rtl` on
+// the truncating box plus a <bdi> around the text, so the ellipsis lands on
+// the left while the name itself still reads left-to-right.
+//
+// Every slot is a plain string in every instance of this shape (the date may
+// be ''), so the static interpolations are safe — see the statically
+// interpolated template pitfall in .claude/rules/arrowjs-pitfalls.md.
+export function migrationLabel(b, card = false) {
+  const m = migrationParts(b)
+  const word = m.dir === 'up' ? t('Migratie up — voert de wijziging door') : t('Migratie down — draait de wijziging terug')
+  const nameCls =
+    'block truncate text-left font-mono text-slate-800 dark:text-zinc-200 ' +
+    (card ? 'text-sm font-semibold' : 'text-[13px]')
+  return html`<span data-testid="migration-label" class="flex min-w-0 flex-1 items-center gap-2">
+    <span
+      data-testid="migration-dir"
+      data-dir="${m.dir}"
+      class="shrink-0 text-xs leading-none text-slate-500 dark:text-zinc-400"
+      title="${word}"
+      aria-label="${word}"
+      >${m.dir === 'up' ? '▲' : '▼'}</span
+    >
+    <span class="flex min-w-0 flex-1 flex-col">
+      <span data-testid="migration-name" class="${nameCls}" style="direction: rtl" title="${b.file || ''}"
+        ><bdi>${m.name}</bdi></span
+      >
+      <span data-testid="migration-date" class="font-mono text-[11px] font-normal text-slate-500 dark:text-zinc-400"
+        >${m.date}</span
+      >
+    </span>
+  </span>`
 }
 
 // pathPills renders the MODULE and LAYER a block lives in, next to the

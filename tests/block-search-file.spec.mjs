@@ -24,7 +24,9 @@ test.describe('PR Review Tree — searching startpunten by file path', () => {
     // A bare directory name works the same way.
     await box.fill('migrations')
     await expect(rows).toHaveCount(1)
-    await expect(rows.nth(0)).toContainText('up')
+    // A migration's up/down row shows the migration's name, not "up"
+    // (migrationLabel, Block.mjs).
+    await expect(rows.nth(0)).toContainText('add_type_to_addresses_table')
 
     // A test_class row has no file of its own — it matches through its
     // grouped method's path (tests/Feature/Addresses/AddressTypeTest.php).

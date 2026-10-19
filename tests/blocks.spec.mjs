@@ -40,7 +40,11 @@ const EXPECTED_LABELS = [
 // TestMethodsColumn/DetailPanel — the active method's own Block() card is
 // unaffected by grouping), so EXPECTED_LABELS itself stays unchanged for
 // that purpose.
-const EXPECTED_ROW_LABELS = EXPECTED_LABELS.map((l, i) => (i === 8 ? 'AddressTypeTest' : l))
+// Index 0, the migration's `up`, shows the migration's name instead of the
+// bare method name (migrationLabel, Block.mjs).
+const EXPECTED_ROW_LABELS = EXPECTED_LABELS.map((l, i) =>
+  i === 8 ? 'AddressTypeTest' : i === 0 ? 'add_type_to_addresses_table' : l,
+)
 
 test.describe('PR Review Tree — block list', () => {
   test.beforeEach(async ({ page }) => {

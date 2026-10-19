@@ -3,9 +3,9 @@
 // parent (home.mjs) mounts it and owns the keyboard navigation.
 
 import { html } from './vendor/arrow.js'
-import { movedLabel, removedLabel } from './Block.mjs'
+import { movedLabel, removedLabel, migrationLabel } from './Block.mjs'
 import { avatarHTML, identityOf } from './avatar.mjs'
-import { paletteClass } from './blockPath.mjs'
+import { paletteClass, migrationParts } from './blockPath.mjs'
 import { batch, batchItemFor, BATCH_STATE_LABEL } from './commentBatch.mjs'
 import { claudeTurnFor } from './claudeTurns.mjs'
 import { isChatUnread, ensureChatUnread } from './chatUnread.mjs'
@@ -1098,11 +1098,16 @@ function row(state, b, i) {
       >
       ${() => categoryOrAvatar(b)}
       ${() => chatUnreadIcon(b)}
-      <span
-        class="flex-1 truncate font-mono text-[13px] text-slate-800 dark:text-zinc-200"
-        title="${b.label}"
-        >${b.label}</span
-      >
+      ${() =>
+        // A migration's up/down gets its name + date instead of the bare
+        // method name (migrationLabel, Block.mjs); every other row is unchanged.
+        migrationParts(b)
+          ? migrationLabel(b)
+          : html`<span
+              class="flex-1 truncate font-mono text-[13px] text-slate-800 dark:text-zinc-200"
+              title="${b.label}"
+              >${b.label}</span
+            >`}
       ${() => removedPill(b)} ${() => movedPill(b)}
       ${() => unpushedPill(state, b)}
       ${() => editingPill(state, b)}
