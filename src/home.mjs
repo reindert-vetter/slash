@@ -229,7 +229,7 @@ import { relativeTime } from './relativeTime.mjs'
 // problems card of our own — see "The Taken block" in
 // .claude/docs/detail-layout.md.
 import { fetchProblems } from './problems.mjs'
-import { initDebugLog, logAction } from './debugLog.mjs'
+import { initDebugLog, logAction, perfFetch, setPerfContext, notePerfCodeArrived } from './debugLog.mjs'
 import {
   loadColumnWidths,
   colWidthStyle,
@@ -296,6 +296,10 @@ initAuthStatusPopup()
 // reported bug. It installs its own listeners — nothing in the nav chain below
 // knows about it.
 initDebugLog()
+setPerfContext(
+  () =>
+    `blk=${state.blockRef} blocks=${state.blocks.length} approveQ=${approveSignalOrder.length} codeReq=${codeRequested.size}`,
+)
 
 // The PR under review comes from the path. Two shapes, and the first one is the
 // historical one, unchanged:
@@ -2939,11 +2943,13 @@ async function drainApproveSignals() {
       const body = approveSignalPending.get(key)
       approveSignalPending.delete(key)
       try {
-        await fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        })
+        await perfFetch('approve-signal ' + key, () =>
+          fetch(`/api/workflows/${state.approveRunId}/signals/set`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          }),
+        )
       } catch (_) {
         /* best-effort — the local state is already updated */
       }
@@ -7986,13 +7992,14 @@ async function ensureCode(b) {
       params.set('oldName', b.oldName)
       params.set('oldClass', b.oldClass || '')
     }
-    const res = await fetch(`/api/code?${params}`)
+    const res = await perfFetch('code ' + key, () => fetch(`/api/code?${params}`))
     if (!res.ok) {
       b.code = { error: `code load failed: ${res.status}` }
       state.codeVersion++
       return
     }
     b.code = await res.json()
+    if (curBlock() === b) notePerfCodeArrived(key)
     // Signal that this block's code arrived so the DetailPanel rebuilds its card
     // (keyed on the code-loaded state) — a reliable re-render path that doesn't
     // depend on the diff's own `b.code` binding re-firing (see the codeVersion

@@ -52,6 +52,15 @@ test.describe('debug mode', () => {
     expect(session.page).toBe('/pr/12903')
     expect(session.at).toBeTruthy()
 
+    // Each step key also yields a key-to-paint latency line (perf:step).
+    await expect
+      .poll(async () => (await readLog(page)).filter((e) => e.type === 'action' && e.key === 'perf:step').length)
+      .toBeGreaterThan(0)
+    const step = (await readLog(page)).find((e) => e.key === 'perf:step')
+    expect(step.durationMs).toBeGreaterThan(0)
+    expect(step.detail).toContain('ArrowDown')
+    expect(step.detail).toContain('blocks=')
+
     const keys = events.filter((e) => e.type === 'key' && e.key === 'ArrowDown')
     expect(keys.length).toBeGreaterThanOrEqual(2)
 

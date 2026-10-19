@@ -185,8 +185,63 @@ export async function debugLogCount() {
 // logAction records a NAMED action that no raw key/click can be read back
 // from — today only the command palette's own runCommand (home.mjs), where the
 // key that ran it says "Enter" and nothing about which command that was.
-export function logAction(name, detail) {
-  record({ type: 'action', key: name, detail: detail ? String(detail) : '', url: location.href })
+export function logAction(name, detail, durationMs) {
+  const ev = { type: 'action', key: name, detail: detail ? String(detail) : '', url: location.href }
+  if (durationMs > 0) ev.durationMs = Math.round(durationMs * 10) / 10
+  record(ev)
+}
+
+// ── perf events: "why is a step SOMETIMES slow" ────────────────────────────
+// All no-ops while debug mode is off. home.mjs supplies a context string
+// (block ref, PR size, pending approve signals) via setPerfContext.
+let perfContext = () => ''
+export function setPerfContext(fn) {
+  perfContext = fn
+}
+let perfInflight = 0
+let lastStep = null // {t0, key} of the latest nav key, for perf:code-wait
+
+// perfFetch wraps a fetch-like promise factory: logs perf:fetch when it took
+// >=150ms or overlapped another tracked request (the code-behind-approve case).
+export async function perfFetch(label, run) {
+  if (!debugMode.enabled) return run()
+  const t0 = performance.now()
+  const overlapped = perfInflight > 0
+  perfInflight++
+  let status = 'throw'
+  try {
+    const res = await run()
+    status = res && res.status != null ? res.status : 'ok'
+    return res
+  } finally {
+    const dur = performance.now() - t0
+    const inflightAtEnd = perfInflight - 1
+    perfInflight--
+    if (dur >= 150 || overlapped || inflightAtEnd > 0) {
+      logAction('perf:fetch', `${label} status=${status} overlapped=${overlapped} ${perfContext()}`, dur)
+    }
+  }
+}
+
+// notePerfCodeArrived: a block's code landed; if a nav step happened <3s ago
+// and that block is the current one, log how long the step waited for it.
+export function notePerfCodeArrived(label) {
+  if (!debugMode.enabled || !lastStep) return
+  const wait = performance.now() - lastStep.t0
+  if (wait < 3000) logAction('perf:code-wait', `after ${lastStep.key} ${label} ${perfContext()}`, wait)
+}
+
+const STEP_KEYS = new Set([' ', 'ArrowDown', 'ArrowUp'])
+function trackStep(e, inField) {
+  if (inField || !STEP_KEYS.has(e.key)) return
+  const t0 = performance.now()
+  const key = (e.shiftKey ? 'shift+' : '') + (e.key === ' ' ? 'Space' : e.key)
+  lastStep = { t0, key }
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      logAction('perf:step', `${key} ${perfContext()}`, performance.now() - t0)
+    }, 0)
+  })
 }
 
 // heapKB reads performance.memory.usedJSHeapSize where available (Chrome
@@ -350,6 +405,7 @@ function onKey(e) {
     target: targetOf(active),
     detail: active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') ? 'in-text-field' : '',
   })
+  trackStep(e, !!active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'))
   noteUrlChange()
 }
 

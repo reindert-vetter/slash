@@ -103,6 +103,14 @@ mechanism (or a new one) actually fired.
   vantage point for "was this anywhere near the measured leak's territory",
   nothing more precise than that.
 
+## `perf:*` actions: "why is a step SOMETIMES slow"
+
+Plain `action` lines (no Go change; `durationMs` carries the time), all no-ops while off:
+
+- `perf:step` — Space/↓/↑ (also Shift+): keydown to first paint (rAF + next macrotask). `detail` = key + `blk=<ref> blocks=<PR size> approveQ=<pending approve signals> codeReq=<code fetches so far>` (`setPerfContext` in `home.mjs`).
+- `perf:fetch` — `/api/code` (`ensureCode`) and approve-signal POSTs (`drainApproveSignals`), via `perfFetch`; logged only if >=150ms or overlapping another tracked request (the suspected "code waits behind a slow approve signal").
+- `perf:code-wait` — the current block's code arrived <3s after a step key; `durationMs` = how long that step waited for it.
+
 ## Instrumentation: own listeners, not per-page nav code
 
 `debugLog.mjs` registers its **own** capture-phase `keydown`/`click` listeners
