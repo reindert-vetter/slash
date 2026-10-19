@@ -1030,6 +1030,7 @@ function row(state, b, i) {
         // stays as an extra signal on a selected row, since a large chunk of
         // the Playwright suite already asserts bg-indigo-50 there.
         'flex cursor-default items-center gap-2 border px-3 py-2 text-sm ' +
+        (topTitleRow(b) ? 'flex-wrap ' : '') +
         (rowHandedOff(state, i)
           ? 'border-slate-400 dark:border-zinc-600 bg-slate-100 dark:bg-zinc-800/70 ring-1 ring-inset ring-slate-300 dark:ring-zinc-600'
           : rowFocused(state, i)
@@ -1098,16 +1099,25 @@ function row(state, b, i) {
       >
       ${() => categoryOrAvatar(b)}
       ${() => chatUnreadIcon(b)}
+      ${() => topTitle(b)}
       ${() =>
-        // A migration's up/down gets its name + date instead of the bare
-        // method name (migrationLabel, Block.mjs); every other row is unchanged.
+        // A migration's up/down: its name + date sit on their own line above
+        // (topTitle); here only the ▲/▼ remains. Every other row is unchanged.
         migrationParts(b)
-          ? migrationLabel(b)
-          : html`<span
-              class="flex-1 truncate font-mono text-[13px] text-slate-800 dark:text-zinc-200"
-              title="${b.label}"
-              >${b.label}</span
-            >`}
+          ? html`<span
+              data-testid="migration-dir"
+              data-dir="${migrationParts(b).dir}"
+              aria-label="${migrationParts(b).dir === 'up' ? t('Migratie up — voert de wijziging door') : t('Migratie down — draait de wijziging terug')}"
+              class="flex-1 text-xs leading-none text-slate-500 dark:text-zinc-400"
+              >${migrationParts(b).dir === 'up' ? '▲' : '▼'}</span
+            >`
+          : b.fileDeleted
+            ? html`<span class="flex-1"></span>`
+            : html`<span
+                class="flex-1 truncate font-mono text-[13px] text-slate-800 dark:text-zinc-200"
+                title="${b.label}"
+                >${b.label}</span
+              >`}
       ${() => removedPill(b)} ${() => movedPill(b)}
       ${() => unpushedPill(state, b)}
       ${() => editingPill(state, b)}
@@ -1120,6 +1130,38 @@ function row(state, b, i) {
       >
     </div>
   `.key(rowKey(b))
+}
+
+// topTitleRow: a migration row or a deleted-file row puts its title on its own
+// full-width line above the badge/icons row, so the icons never truncate it.
+function topTitleRow(b) {
+  return !!(migrationParts(b) || b.fileDeleted)
+}
+
+function topTitle(b) {
+  const m = migrationParts(b)
+  if (m)
+    return html`<span
+      data-testid="block-row-top-title"
+      class="order-first flex w-full min-w-0 items-baseline gap-2 font-mono"
+      ><span
+        data-testid="migration-name"
+        class="min-w-0 flex-1 truncate text-left text-[13px] text-slate-800 dark:text-zinc-200"
+        style="direction: rtl"
+        title="${b.file || ''}"
+        ><bdi>${m.name}</bdi></span
+      ><span data-testid="migration-date" class="shrink-0 text-[11px] text-slate-500 dark:text-zinc-400"
+        >${m.date}</span
+      ></span
+    >`
+  if (b.fileDeleted)
+    return html`<span
+      data-testid="block-row-top-title"
+      class="order-first w-full min-w-0 truncate font-mono text-[13px] text-slate-800 dark:text-zinc-200"
+      title="${b.label}"
+      >${b.label}</span
+    >`
+  return ''
 }
 
 // rowKey — every index row's keyed identity. The item's own stable `id` first:

@@ -11,7 +11,7 @@ test('a migration up() row and card show glyph, migration name and date', async 
   await page.goto('/pr/12903')
   const row = page.getByTestId('block-row').nth(0)
   await expect(row.getByTestId('category-pill')).toHaveText('MIGRATION')
-  const label = row.getByTestId('migration-label')
+  const label = row
   await expect(label.getByTestId('migration-dir')).toHaveText('▲')
   await expect(label.getByTestId('migration-dir')).toHaveAttribute('aria-label', /up/)
   await expect(label.getByTestId('migration-name')).toHaveText('add_type_to_addresses_table')
