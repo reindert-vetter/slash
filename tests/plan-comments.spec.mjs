@@ -226,3 +226,76 @@ test.describe('Plan page — the comments panel folds to the last ~2.5 comments'
     await expect(page.getByTestId('plan-comments-expand-hint')).toHaveCount(0)
   })
 })
+
+// Reviewer request: "chat message zijn soms onderliggende van andere message,
+// dat moet je dan laten indenten". Jira threads one level deep (parentId,
+// filled server-side by plan_comments.go's withCommentParents); a reply is NOT
+// always adjacent to its parent in Jira's flat list, so the panel reorders
+// each reply under its parent, indents it, and ↓ walks that same order. Enter
+// on a comment replies to it: posted under the thread's ROOT (Jira rejects a
+// reply to a reply), with the replied-to author pre-mentioned.
+test.describe('Plan page — threaded Jira comments', () => {
+  test('a reply sits indented under its parent; Enter replies to the thread root', async ({ page }) => {
+    await page.route('**/api/jira/comments*', (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          groups: [
+            {
+              key: 'TEST-903',
+              title: 'Threaded comments',
+              relation: 'self',
+              comments: [
+                { id: '1', author: 'Alice', created: '2026-01-01T10:00:00Z', body: 'Root A' },
+                { id: '2', author: 'Bob', created: '2026-01-02T10:00:00Z', body: 'Root B' },
+                { id: '3', author: 'Carol', accountId: 'acc-carol', created: '2026-01-03T10:00:00Z', body: 'Reply to A', parentId: '1' },
+                { id: '4', author: 'Dave', created: '2026-01-04T10:00:00Z', body: 'Orphan reply', parentId: '99' },
+              ],
+            },
+          ],
+          canPost: true,
+          canMention: false,
+        },
+      }),
+    )
+    let posted = null
+    await page.route('**/api/workflows/jira_comment', (route) => {
+      posted = route.request().postDataJSON()
+      return route.fulfill({ json: { ok: true, runId: 'r1' } })
+    })
+
+    await page.goto('/plan/TEST-903')
+    await appReady(page)
+    const rows = page.getByTestId('plan-comment-row')
+    await expect(rows).toHaveCount(4)
+    // Thread order: A, its reply, then B; the orphan (parent cut off) stays top-level.
+    await expect(rows.nth(0)).toContainText('Root A')
+    await expect(rows.nth(1)).toContainText('Reply to A')
+    await expect(rows.nth(1)).toHaveAttribute('data-comment-depth', '1')
+    await expect(rows.nth(2)).toContainText('Root B')
+    await expect(rows.nth(2)).toHaveAttribute('data-comment-depth', '0')
+    await expect(rows.nth(3)).toHaveAttribute('data-comment-depth', '0')
+    const rootBox = await rows.nth(0).boundingBox()
+    const replyBox = await rows.nth(1).boundingBox()
+    expect(replyBox.x).toBeGreaterThan(rootBox.x + 10)
+
+    // Enter into the comments, ↓ to the reply: the walk follows thread order.
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('ArrowDown')
+    await expect(rows.nth(1)).toHaveAttribute('data-comment-cursor', 'true')
+    await expect(page.getByTestId('plan-comment-row-reply')).toHaveCount(1)
+
+    // Enter replies: composer under the thread, Carol pre-mentioned.
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('plan-comment-thread-composer')).toBeVisible()
+    await expect(page.getByTestId('plan-comment-reply-to')).toContainText('Carol')
+    const input = page.getByTestId('plan-comment-reply-input')
+    await expect(input).toHaveValue('@Carol ')
+    await input.pressSequentially('eens')
+    await page.getByTestId('plan-comment-reply-send').click()
+    await expect.poll(() => posted).not.toBeNull()
+    expect(posted.parentId).toBe('1')
+    expect(posted.key).toBe('TEST-903')
+    expect(posted.mentions).toEqual([{ accountId: 'acc-carol', text: '@Carol' }])
+  })
+})

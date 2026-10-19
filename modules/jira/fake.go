@@ -33,6 +33,8 @@ type Fake struct {
 	Posted []PostedComment
 	// PostErr, if set, is what AddComment returns instead of posting.
 	PostErr error
+	// parents is what CommentParents returns per issue key.
+	parents map[string]map[string]string
 	// users is what Users returns for any query (a fake never searches).
 	users []User
 	// Transitions records every Transition call, in order, so a test can
@@ -63,8 +65,26 @@ func (f *Fake) Transition(_ context.Context, key, status string) error {
 
 // PostedComment is one recorded AddComment call.
 type PostedComment struct {
-	Key string
-	ADF json.RawMessage
+	Key      string
+	ParentID string
+	ADF      json.RawMessage
+}
+
+// SetCommentParents programs CommentParents for key.
+func (f *Fake) SetCommentParents(key string, parents map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.parents == nil {
+		f.parents = map[string]map[string]string{}
+	}
+	f.parents[key] = parents
+}
+
+// CommentParents returns the programmed id → parent map (nil if none).
+func (f *Fake) CommentParents(_ context.Context, key string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.parents[key], nil
 }
 
 // SetUsers programs Users to return list for every query.
@@ -75,13 +95,13 @@ func (f *Fake) SetUsers(list []User) {
 }
 
 // AddComment records the call and returns a synthetic comment id.
-func (f *Fake) AddComment(_ context.Context, key string, adf json.RawMessage) (string, error) {
+func (f *Fake) AddComment(_ context.Context, key, parentID string, adf json.RawMessage) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.PostErr != nil {
 		return "", f.PostErr
 	}
-	f.Posted = append(f.Posted, PostedComment{Key: key, ADF: adf})
+	f.Posted = append(f.Posted, PostedComment{Key: key, ParentID: parentID, ADF: adf})
 	return fmt.Sprintf("fake-%d", len(f.Posted)), nil
 }
 

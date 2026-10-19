@@ -13,7 +13,8 @@ package jira
 // so both live here on one auth path instead of half a feature per transport.
 // These are documented, supported endpoints — unlike the GraphQL bell feed:
 //
-//	POST /rest/api/3/issue/{key}/comment   {"body": <ADF>}
+//	POST /rest/api/3/issue/{key}/comment   {"body": <ADF>[, "parentId": <n>]}
+//	GET  /rest/api/3/issue/{key}/comment   (only to read each reply's parentId)
 //	GET  /rest/api/3/user/search?query=…
 //
 // Only AddComment writes, and only from the postJiraComment Activity of the
@@ -177,14 +178,21 @@ func mentionLeaves(line string, mentions []Mention) []adfLeaf {
 // AddComment posts one comment on key and returns the new comment's id. The
 // key is validated against keyPattern before it reaches the URL, and the body
 // is already an ADF document built by BuildCommentADF.
-func (m *Module) AddComment(ctx context.Context, key string, adf json.RawMessage) (string, error) {
+//
+// parentID, when non-empty, makes the comment a REPLY to that comment: the
+// payload then carries Jira Cloud's own `parentId` (a number). Not in
+// Atlassian's published OpenAPI spec, but verified live against PAYM-813:
+// Jira stores it and returns it on GET /issue/{key}/comment. Jira only threads
+// ONE level deep — a reply to a reply is rejected with 400 ("Cannot create new
+// child comments") — so a caller must always pass the thread's ROOT comment.
+func (m *Module) AddComment(ctx context.Context, key, parentID string, adf json.RawMessage) (string, error) {
 	if !keyPattern.MatchString(key) {
 		return "", fmt.Errorf("jira: invalid issue key %q", key)
 	}
 	if len(adf) == 0 {
 		return "", fmt.Errorf("jira: empty comment body")
 	}
-	payload, err := json.Marshal(map[string]json.RawMessage{"body": adf})
+	payload, err := addCommentPayload(parentID, adf)
 	if err != nil {
 		return "", err
 	}
@@ -193,6 +201,69 @@ func (m *Module) AddComment(ctx context.Context, key string, adf json.RawMessage
 		return "", err
 	}
 	return parseAddCommentResponse(body), nil
+}
+
+// commentIDPattern bounds a comment id before it reaches a payload or URL:
+// Jira's comment ids are plain decimal numbers.
+var commentIDPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
+
+// ValidCommentID reports whether id looks like a Jira comment id.
+func ValidCommentID(id string) bool {
+	return commentIDPattern.MatchString(id)
+}
+
+// addCommentPayload builds the POST body — pure, so the parentId shape is
+// unit-testable without a network. An empty parentID yields exactly the old
+// top-level payload.
+func addCommentPayload(parentID string, adf json.RawMessage) ([]byte, error) {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" {
+		return json.Marshal(map[string]json.RawMessage{"body": adf})
+	}
+	if !ValidCommentID(parentID) {
+		return nil, fmt.Errorf("jira: invalid parent comment id %q", parentID)
+	}
+	return json.Marshal(map[string]json.RawMessage{"body": adf, "parentId": json.RawMessage(parentID)})
+}
+
+// CommentParents reads which comment of key is a reply to which: comment id →
+// parent comment id, only for replies. Read-only. Its own REST call because
+// `acli` (which Issue() reads comments through) drops the field entirely, and
+// so does the issue endpoint's `fields=comment` — only the dedicated comment
+// endpoint returns `parentId` (undocumented, see AddComment).
+func (m *Module) CommentParents(ctx context.Context, key string) (map[string]string, error) {
+	if !keyPattern.MatchString(key) {
+		return nil, fmt.Errorf("jira: invalid issue key %q", key)
+	}
+	body, err := restCall(ctx, http.MethodGet, "/rest/api/3/issue/"+key+"/comment?maxResults=5000", nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseCommentParents(body), nil
+}
+
+// parseCommentParents maps the comment-list payload onto id → parentId.
+// parentId comes back as a JSON number; json.Number keeps it exact.
+func parseCommentParents(body []byte) map[string]string {
+	var raw struct {
+		Comments []struct {
+			ID       string      `json:"id"`
+			ParentID json.Number `json:"parentId"`
+		} `json:"comments"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&raw); err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, c := range raw.Comments {
+		id, parent := strings.TrimSpace(c.ID), strings.TrimSpace(c.ParentID.String())
+		if id != "" && parent != "" && parent != "0" {
+			out[id] = parent
+		}
+	}
+	return out
 }
 
 // parseAddCommentResponse picks the new comment's id off the 201 body. A

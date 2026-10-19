@@ -636,6 +636,7 @@ export const EN = {
   'de AI-melding': 'the AI finding',
   'mijn comment': 'my comment',
   Beantwoorden: 'Reply',
+  'Reactie op {name}': 'Reply to {name}',
   'Chat met Claude': 'Chat with Claude',
   'Zet op GitHub': 'Put on GitHub',
   'Alleen {noun}': 'Only {noun}',

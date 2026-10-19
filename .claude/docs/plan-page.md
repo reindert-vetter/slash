@@ -2625,7 +2625,8 @@ never duplicates) and, if a task list already exists, regenerates it
 (`planGenerate` with `Mode:"tasks"`) — the reviewer's own instruction that a
 new comment must feed the task list exactly like an answer does.
 
-Scope, deliberately: reading + replying + mentions only. No drafts, no
+Scope, deliberately: reading + replying (also to one specific comment, see
+"Threaded comments" below) + mentions only. No drafts, no
 reactions, no resolve/ignore, no AI-generated titles — unlike the review
 tree's PR-comment panel, which has all of those; a smaller, read-mostly
 feature was the explicit ask here.
@@ -2706,6 +2707,71 @@ home.mjs/Block.mjs/RelatedPanel.mjs").
   `@` mention, picking a suggestion, sending, and seeing the new comment
   reappear in the panel after the automatic refresh — all with zero console
   errors.
+
+### Threaded comments: a reply sits indented under its parent, and Enter replies to one comment
+
+Reviewer request: *"chat message zijn soms onderliggende van andere message,
+dat moet je dan laten indenten"*, extended to *replying* to one specific
+comment as well.
+
+**Where the parent relation comes from.** Jira Cloud's own reply feature
+stores a `parentId` on a reply. It is **not** in Atlassian's published OpenAPI
+spec (the `Comment` schema lists no such field, and community answers from
+late 2025 still say there is no REST support), but it is live:
+`GET /rest/api/3/issue/{key}/comment` returns it as a number on every reply.
+Two other read paths drop it — `acli jira workitem view --fields comment`
+(what `jira.Module.Issue()` reads through) and the issue endpoint's own
+`?fields=comment` — so `Issue()` never sees it. `jira.Module.CommentParents`
+is therefore one extra REST call per issue, made only by the panel
+(`plan_comments.go`'s `withCommentParents`, at most `1+maxCommentIssues`
+calls, inside the existing day-long cache, and only with the API token
+configured). Best-effort: without a token or on any error the list is simply
+flat, as before. `jira.Comment.ParentID` (`omitempty`) carries it to the page;
+the prompt context (`Issue()` callers) is deliberately unchanged.
+
+**Posting a reply** reuses the same `jira_comment` workflow: its input gained
+`parentId` (validated as a plain decimal id in `validJiraCommentInput`, both in
+the handler and in the workflow body), which `AddComment` sends as a NUMERIC
+`parentId` next to `body`. Verified live on `PAYM-813` (test comments 108070
+→ 108071, 108073 left there on purpose): a reply to a top-level comment is
+stored and read back with its `parentId`; a reply to a REPLY is rejected with
+400 *"Cannot create new child comments"* — **Jira threads exactly one level
+deep**. A run recorded before the field existed replays unchanged (empty =
+top-level).
+
+**Frontend (`src/plan.mjs`).**
+
+- `threadComments(comments)` orders one group as threads: each top-level
+  comment directly followed by its replies, chronological within each. This
+  REORDERS, not just indents — in Jira's flat list a reply is not always
+  adjacent to its parent (BUG-5195: 101568 answers 100993 with 101481 in
+  between). A reply whose parent fell outside the list (`maxIssueComments`
+  cut-off) shows as top-level. `commentFlatList` uses the same order, so ↓
+  walks exactly what is on screen; `commentId` keeps the ORIGINAL index as its
+  fallback.
+- `commentRow` indents a reply via `COMMENT_DEPTH_CLS`: a left margin plus a
+  vertical rule (shape, not colour — the colourblind rule), and carries
+  `data-comment-depth`. The row's `.key()` includes the depth so a changed
+  parent relation re-mounts the row instead of reusing stale static classes.
+- **Enter on the active comment** (inside `commentsActive()`) and the small
+  "↳ Beantwoorden" button that shows **only on the active row**
+  (`data-testid=plan-comment-row-reply`) both run `replyToComment(entry)`.
+  It opens the single composer with `state.commentReplyParent` = the thread's
+  ROOT id (because of Jira's one-level rule) and `state.commentReplyTo` = the
+  chosen comment's author, shown as "↳ Reactie op <naam>"
+  (`data-testid=plan-comment-reply-to`). Replying to a reply also pre-fills
+  that author as a real picked mention (`@Name `), so the person actually
+  answered is still addressed even though Jira hangs the comment under the
+  root. Space inside the comments still does nothing.
+- The composer for a thread reply renders right after that thread's LAST row,
+  indented like a reply (`threadedRowsWithComposer`,
+  `data-testid=plan-comment-thread-composer`); the card's bottom
+  "Beantwoorden" stays the plain new-comment-on-the-ticket composer.
+
+Tests: `TestAddCommentPayload`, `TestParseCommentParents`
+(`modules/jira/comments_test.go`), `TestJiraCommentWorkflowPostsReply` +
+the `ParentID` cases in `TestValidJiraCommentInput` (`jira_comment_test.go`),
+and "threaded Jira comments" in `tests/plan-comments.spec.mjs`.
 
 ### The comments block is a stop of its own in the → chain
 

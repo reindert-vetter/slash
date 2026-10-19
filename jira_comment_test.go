@@ -16,6 +16,9 @@ func TestValidJiraCommentInput(t *testing.T) {
 	if err := validJiraCommentInput(ok); err != nil {
 		t.Fatalf("valid input rejected: %v", err)
 	}
+	if err := validJiraCommentInput(JiraCommentInput{Key: "PAYM-813", Body: "x", ParentID: "108070"}); err != nil {
+		t.Fatalf("valid reply rejected: %v", err)
+	}
 	bad := []JiraCommentInput{
 		{Key: "not a key", Body: "x"},
 		{Key: "813", Body: "x"},        // the bare numeric form the page's route accepts is not a Jira key
@@ -23,6 +26,7 @@ func TestValidJiraCommentInput(t *testing.T) {
 		{Key: "PAYM-813", Body: strings.Repeat("x", 40<<10)},
 		{Key: "PAYM-813", Body: "x", Mentions: []jira.Mention{{AccountID: "a b/c", Text: "@x"}}},
 		{Key: "PAYM-813", Body: "x", Mentions: []jira.Mention{{AccountID: "638f", Text: ""}}},
+		{Key: "PAYM-813", Body: "x", ParentID: "12a"}, // a comment id is plain decimal
 	}
 	for _, in := range bad {
 		if err := validJiraCommentInput(in); err == nil {
@@ -74,5 +78,24 @@ func TestJiraCommentWorkflowPostsOnce(t *testing.T) {
 	}
 	if res.Key != "PAYM-813" || res.CommentID == "" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+// TestJiraCommentWorkflowPostsReply pins that a reply's parent comment id
+// travels from the run's input all the way to the module write.
+func TestJiraCommentWorkflowPostsReply(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	f := &jira.Fake{}
+	m.jira = f
+	engine := tembed.New(tembed.NewMemoryStore())
+	m.engine = engine
+	m.registerJiraCommentActivities(engine)
+	engine.RegisterWorkflow(WorkflowJiraComment, jiraCommentWorkflow)
+
+	if _, err := m.StartJiraComment(JiraCommentInput{Key: "PAYM-813", Body: "eens", ParentID: " 108070 "}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if len(f.Posted) != 1 || f.Posted[0].ParentID != "108070" {
+		t.Fatalf("posted = %+v, want one reply to 108070", f.Posted)
 	}
 }

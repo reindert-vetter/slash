@@ -174,11 +174,43 @@ func (m *TaskManager) PlanComments(ctx context.Context, key string, fresh bool) 
 		}
 		groups[i].URL = issue.URL
 	}
+	if view.CanPost {
+		for i := range groups {
+			groups[i].Comments = m.withCommentParents(ctx, groups[i].Key, groups[i].Comments)
+		}
+	}
 	view.Groups = groups
 	planCommentsMu.Lock()
 	planCommentsCache[key] = planCommentsCacheEntry{view: view, at: time.Now()}
 	planCommentsMu.Unlock()
 	return view, nil
+}
+
+// withCommentParents fills each comment's ParentID, so the panel can indent a
+// reply under the comment it answers. One extra REST call per issue (acli,
+// which Issue() reads through, drops the field — see jira.CommentParents),
+// only made with the API token configured and cached with the rest of the
+// panel. Best-effort: on any failure the list simply stays flat. Returns a
+// copy, never mutating the slice Issue() handed out.
+func (m *TaskManager) withCommentParents(ctx context.Context, key string, comments []jira.Comment) []jira.Comment {
+	if len(comments) == 0 {
+		return comments
+	}
+	parents, err := m.jira.CommentParents(ctx, key)
+	if err != nil {
+		m.logf("plan comments: read reply parents %s: %v", key, err)
+		return comments
+	}
+	if len(parents) == 0 {
+		return comments
+	}
+	out := append([]jira.Comment(nil), comments...)
+	for i := range out {
+		if p, ok := parents[out[i].ID]; ok {
+			out[i].ParentID = p
+		}
+	}
+	return out
 }
 
 // jiraTokenConfigured reports whether posting/searching is possible at all —

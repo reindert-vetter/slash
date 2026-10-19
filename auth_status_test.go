@@ -84,8 +84,12 @@ func (unreachableFeedJira) IssueSprints(context.Context, string) ([]jira.Sprint,
 
 func (unreachableFeedJira) VerifyCredentials(context.Context) error { return nil }
 
-func (unreachableFeedJira) AddComment(context.Context, string, json.RawMessage) (string, error) {
+func (unreachableFeedJira) AddComment(context.Context, string, string, json.RawMessage) (string, error) {
 	return "", nil
+}
+
+func (unreachableFeedJira) CommentParents(context.Context, string) (map[string]string, error) {
+	return nil, nil
 }
 
 func (unreachableFeedJira) Users(context.Context, string, int) ([]jira.User, error) {

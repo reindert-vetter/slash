@@ -261,6 +261,13 @@ const state = reactive({
   // Only one at a time, mirroring the option/hotfix rows' own single-cursor
   // discipline elsewhere on this page.
   commentReplyKey: '',
+  // When the open composer is a REPLY to one specific comment: that thread's
+  // ROOT comment id (Jira threads only one level deep, so a reply to a reply
+  // is posted under the same root) and the author of the comment the
+  // reviewer chose, for the composer's own "Reactie op …" heading. Both ''
+  // for a plain new comment on the ticket.
+  commentReplyParent: '',
+  commentReplyTo: '',
   commentReplyText: '',
   // Mentions picked for the OPEN composer, each {accountId, text} exactly as
   // jira.Mention expects — only ever added by the reviewer picking a
@@ -1011,22 +1018,45 @@ async function loadComments(refresh) {
 
 // openCommentReply/closeCommentReply gate ONE open composer at a time (a
 // group's own ticket key, '' meaning none) — the same single-cursor
-// discipline the rest of this page follows.
-function openCommentReply(key) {
+// discipline the rest of this page follows. parentId/replyTo make it a reply
+// to one comment (see state.commentReplyParent); mention, when given, is
+// pre-filled as a real picked mention (a reply to a REPLY: Jira hangs it
+// under the thread's root, so the @-mention is what still addresses the
+// person actually answered).
+function openCommentReply(key, parentId = '', replyTo = '', mention = null) {
   state.commentReplyKey = key
-  state.commentReplyText = ''
-  state.commentMentions = []
+  state.commentReplyParent = parentId
+  state.commentReplyTo = replyTo
+  const prefill = mention ? mention.text + ' ' : ''
+  state.commentReplyText = prefill
+  state.commentMentions = mention ? [mention] : []
   state.commentMentionQuery = ''
   state.commentMentionResults = []
   state.commentSendError = ''
   requestAnimationFrame(() => {
     const el = document.querySelector('[data-testid="plan-comment-reply-input"]')
-    if (el) el.focus()
+    if (!el) return
+    if (prefill) el.value = prefill
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
   })
+}
+
+// replyToComment opens the composer as a reply to one flattened comment entry
+// (commentFlatList's shape) — what both Enter on the active comment and its
+// own "Beantwoorden" button run. A thread root without a Jira id (never the
+// case for a real comment) cannot be replied to.
+function replyToComment(entry) {
+  if (!entry || !state.comments.canPost || !entry.root || !entry.root.id) return
+  const c = entry.c
+  const mention = entry.depth > 0 && c.accountId && c.author ? { accountId: c.accountId, text: '@' + c.author } : null
+  openCommentReply(entry.group.key, entry.root.id, c.author || '', mention)
 }
 
 function closeCommentReply() {
   state.commentReplyKey = ''
+  state.commentReplyParent = ''
+  state.commentReplyTo = ''
   state.commentReplyText = ''
   state.commentMentions = []
   state.commentMentionQuery = ''
@@ -1110,7 +1140,7 @@ async function sendCommentReply(key) {
     const res = await fetch('/api/workflows/jira_comment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, body, mentions: state.commentMentions }),
+      body: JSON.stringify({ key, body, mentions: state.commentMentions, parentId: state.commentReplyParent || undefined }),
     })
     if (!res.ok) {
       state.commentSendError = t('Versturen mislukt.')
@@ -1644,13 +1674,50 @@ function commentId(groupKey, c, i) {
   return groupKey + ':' + (c.id || c.created || i)
 }
 
+// threadComments orders one group's comments as threads: every top-level
+// comment followed directly by its replies (c.parentId, filled server-side —
+// see plan_comments.go's withCommentParents), each list in Jira's own
+// chronological order. A reply is NOT always adjacent to its parent in Jira's
+// flat list (another top-level comment can sit in between), which is why
+// this reorders rather than only indenting. A reply whose parent is not in
+// the list (cut off by maxIssueComments) is shown as a top-level comment.
+// Returns {c, i, depth, root}: i is the ORIGINAL index (commentId's
+// fallback), root the thread's top-level comment (what a reply is posted
+// under).
+function threadComments(comments) {
+  const list = Array.isArray(comments) ? comments : []
+  const ids = new Set(list.map((c) => c.id).filter(Boolean))
+  const kids = new Map()
+  const roots = []
+  list.forEach((c, i) => {
+    const p = c.parentId
+    if (p && p !== c.id && ids.has(p)) {
+      if (!kids.has(p)) kids.set(p, [])
+      kids.get(p).push({ c, i })
+    } else roots.push({ c, i })
+  })
+  const out = []
+  const seen = new Set()
+  const walk = (e, depth, root) => {
+    if (seen.has(e.i)) return
+    seen.add(e.i)
+    out.push({ c: e.c, i: e.i, depth, root })
+    ;(kids.get(e.c.id) || []).forEach((k) => walk(k, depth + 1, root))
+  }
+  roots.forEach((r) => walk(r, 0, r.c))
+  // Defensive: a parent cycle leaves entries unreached — never drop one.
+  list.forEach((c, i) => walk({ c, i }, 0, c))
+  return out
+}
+
 // commentFlatList flattens every group's comments into ONE ordered list —
 // exactly like navRows() flattens every question's options — so ↓ walks
 // straight from one ticket's last comment into the next ticket's first one.
+// Threaded order (threadComments), so ↓ walks exactly what the panel shows.
 function commentFlatList() {
   const out = []
   ;(state.comments.groups || []).forEach((g) => {
-    ;(g.comments || []).forEach((c, i) => out.push({ id: commentId(g.key, c, i), group: g, c }))
+    threadComments(g.comments).forEach(({ c, i, depth, root }) => out.push({ id: commentId(g.key, c, i), group: g, c, depth, root }))
   })
   return out
 }
@@ -2163,11 +2230,13 @@ function onKeydown(e) {
         openPlanMenu()
         return
       }
-      // Already navigating the comments themselves — nothing further to do
-      // with Enter/Space here (← is what leaves that mode, see ArrowLeft
-      // above); without this guard curRow() below would just re-enter it.
+      // Already navigating the comments themselves: Enter replies to the
+      // active comment (same as its own "Beantwoorden" button); Space does
+      // nothing (← is what leaves that mode, see ArrowLeft above). Without
+      // this guard curRow() below would just re-enter it.
       if (commentsActive()) {
         e.preventDefault()
+        if (e.key === 'Enter') replyToComment(commentFlatList().find((x) => x.id === state.commentCursor))
         return
       }
       const row = curRow()
@@ -3974,10 +4043,20 @@ function commentMentionPicker() {
 }
 
 // commentReplyComposer is one group's own reply field — only rendered while
-// state.commentReplyKey equals that group's key (single-composer discipline).
+// state.commentReplyKey equals that group's key (single-composer discipline):
+// at the bottom of the card for a new comment, or right under a thread
+// (threadedRowsWithComposer) when state.commentReplyParent makes it a reply.
 function commentReplyComposer(group) {
   return html`
     <div class="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2 dark:border-zinc-700 dark:bg-zinc-800/60" data-testid="plan-comment-composer">
+      <div class="contents">
+        ${() =>
+          state.commentReplyParent
+            ? html`<p class="mb-1 text-[11px] font-medium text-slate-600 dark:text-zinc-300" data-testid="plan-comment-reply-to">
+                ↳ ${t('Reactie op {name}', { name: state.commentReplyTo || t('onbekend') })}
+              </p>`
+            : ''}
+      </div>
       <textarea
         rows="2"
         placeholder="${t('Typ een antwoord… (@ om iemand te noemen)')}"
@@ -4023,7 +4102,14 @@ function commentReplyComposer(group) {
 // above). data-comment-cursor is a SEPARATE marker from the top-level
 // navRows() data-cursor, so scrollCommentCursorIntoView never picks up a
 // stray top-level row.
-function commentRow(c, groupKey, i) {
+// COMMENT_DEPTH_CLS indents a reply under the comment it answers: a left
+// margin PLUS a vertical rule — shape carries the meaning, never colour alone
+// (the reviewer is colourblind). Index 0 keeps the original top-level look.
+const COMMENT_DEPTH_CLS = ['-mx-1.5 px-1.5 ', 'ml-6 pl-2.5 pr-1.5 border-l-2 border-l-slate-300 dark:border-l-zinc-600 ']
+
+function commentRow(entry, groupKey) {
+  const { c, i } = entry
+  const depth = Math.min(entry.depth || 0, COMMENT_DEPTH_CLS.length - 1)
   const id = commentId(groupKey, c, i)
   // active is the RING — where ↑/↓ currently is. A comment's own text is
   // ALWAYS shown in full, never clamped: "collapsing" this page's comments is
@@ -4033,9 +4119,11 @@ function commentRow(c, groupKey, i) {
   return html`
     <div
       class="${() =>
-        'rounded-md py-1.5 px-1.5 -mx-1.5 border-t border-slate-100 first:border-t-0 dark:border-zinc-800 ' +
+        'rounded-md py-1.5 border-t border-slate-100 first:border-t-0 dark:border-zinc-800 ' +
+        COMMENT_DEPTH_CLS[depth] +
         (active() ? 'ring-2 ring-inset ring-indigo-400 bg-indigo-50/50 dark:ring-indigo-500 dark:bg-indigo-500/10' : '')}"
       data-testid="plan-comment-row"
+      data-comment-depth="${String(entry.depth || 0)}"
       data-comment-cursor="${() => (active() ? 'true' : 'false')}"
       @click="${(e) => {
         e.stopPropagation()
@@ -4054,10 +4142,26 @@ function commentRow(c, groupKey, i) {
             data-testid="plan-comment-body"
             .innerHTML="${() => renderMarkdown(c.body || '')}"
           ></div>
+          <div class="contents">
+            ${() =>
+              active() && state.comments.canPost && entry.root && entry.root.id && state.commentReplyParent !== entry.root.id
+                ? html`<button
+                    type="button"
+                    class="mt-1 rounded-md px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-500/10"
+                    data-testid="plan-comment-row-reply"
+                    @click="${(e) => {
+                      e.stopPropagation()
+                      replyToComment({ ...entry, group: (state.comments.groups || []).find((g) => g.key === groupKey) })
+                    }}"
+                  >
+                    ↳ ${t('Beantwoorden')}
+                  </button>`
+                : ''}
+          </div>
         </div>
       </div>
     </div>
-  `.key('c:' + id)
+  `.key('c:' + id + ':' + depth)
 }
 
 // commentGroupCard is one ticket's own block: header (key + relation word +
@@ -4086,12 +4190,12 @@ function commentGroupCard(group) {
       <div class="contents">
         ${() =>
           comments.length
-            ? comments.map((c, i) => commentRow(c, group.key, i))
+            ? threadedRowsWithComposer(group)
             : [html`<p class="py-1 text-[11.5px] italic text-slate-400 dark:text-zinc-500">${t('geen opmerkingen')}</p>`.key('empty:' + group.key)]}
       </div>
       <div class="contents">
         ${() =>
-          state.comments.canPost && state.commentReplyKey !== group.key
+          state.comments.canPost && !(state.commentReplyKey === group.key && !state.commentReplyParent)
             ? html`<button
                 type="button"
                 class="mt-1.5 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-500/10"
@@ -4102,9 +4206,34 @@ function commentGroupCard(group) {
               </button>`
             : ''}
       </div>
-      <div class="contents">${() => (state.commentReplyKey === group.key ? commentReplyComposer(group) : '')}</div>
+      <div class="contents">
+        ${() => (state.commentReplyKey === group.key && !state.commentReplyParent ? commentReplyComposer(group) : '')}
+      </div>
     </div>
   `.key('cg:' + group.key)
+}
+
+// threadedRowsWithComposer is one group's comment rows in thread order, with
+// the reply composer slotted in right after the LAST row of the thread being
+// replied to — indented like a reply, since that is where the posted comment
+// will appear. The plain "new comment on the ticket" composer stays at the
+// bottom of the card (commentGroupCard).
+function threadedRowsWithComposer(group) {
+  const entries = threadComments(group.comments)
+  const replyRoot = state.commentReplyKey === group.key ? state.commentReplyParent : ''
+  const out = []
+  entries.forEach((entry, n) => {
+    out.push(commentRow(entry, group.key))
+    const next = entries[n + 1]
+    if (replyRoot && entry.root && entry.root.id === replyRoot && (!next || next.root !== entry.root)) {
+      out.push(
+        html`<div class="ml-6 border-l-2 border-l-slate-300 pl-2.5 dark:border-l-zinc-600" data-testid="plan-comment-thread-composer">
+          ${commentReplyComposer(group)}
+        </div>`.key('composer:' + group.key + ':' + replyRoot),
+      )
+    }
+  })
+  return out
 }
 
 // commentsPanel sits at the TOP of the questions index (kolom 2), per

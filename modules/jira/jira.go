@@ -107,7 +107,11 @@ type Comment struct {
 	AccountID string `json:"accountId,omitempty"`
 	AvatarURL string `json:"avatarUrl,omitempty"`
 	Created   string `json:"created,omitempty"`
-	Body      string `json:"body"`
+	// ParentID is the comment this one replies to (Jira threads one level
+	// deep). Not filled by Issue() — acli drops it — but by the plan page's
+	// comment panel via CommentParents; empty for a top-level comment.
+	ParentID string `json:"parentId,omitempty"`
+	Body     string `json:"body"`
 }
 
 // maxIssueComments bounds how many comments one issue contributes: a long
@@ -154,7 +158,11 @@ type Client interface {
 	// an issue and returns the new comment's id. The ONLY write method of this
 	// module: called from the postJiraComment Activity, never from a handler
 	// (.claude/rules/workflows-write-boundary.md).
-	AddComment(ctx context.Context, key string, adf json.RawMessage) (string, error)
+	// parentID, when non-empty, posts it as a reply to that (root) comment.
+	AddComment(ctx context.Context, key, parentID string, adf json.RawMessage) (string, error)
+	// CommentParents reads comment id → parent comment id for the replies on
+	// an issue (read-only, see comments.go: acli drops the field).
+	CommentParents(ctx context.Context, key string) (map[string]string, error)
 	// Users searches the people who can be @-mentioned in a comment (read-only,
 	// see comments.go).
 	Users(ctx context.Context, query string, limit int) ([]User, error)

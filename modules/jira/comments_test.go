@@ -116,3 +116,34 @@ func TestParseAddCommentResponse(t *testing.T) {
 		t.Fatalf("id = %q, want empty", got)
 	}
 }
+
+// TestAddCommentPayload pins the POST body: unchanged for a top-level
+// comment, plus a NUMERIC parentId for a reply (the shape verified live on
+// PAYM-813), and a malformed parent id never reaches Jira.
+func TestAddCommentPayload(t *testing.T) {
+	adf := json.RawMessage(`{"type":"doc","version":1,"content":[]}`)
+	top, err := addCommentPayload("", adf)
+	if err != nil || string(top) != `{"body":{"type":"doc","version":1,"content":[]}}` {
+		t.Fatalf("top-level payload = %s, %v", top, err)
+	}
+	reply, err := addCommentPayload("108070", adf)
+	if err != nil || string(reply) != `{"body":{"type":"doc","version":1,"content":[]},"parentId":108070}` {
+		t.Fatalf("reply payload = %s, %v", reply, err)
+	}
+	if _, err := addCommentPayload("1,2", adf); err == nil {
+		t.Fatalf("malformed parent id accepted")
+	}
+}
+
+// TestParseCommentParents maps only the replies, from the shape GET
+// /issue/{key}/comment returns (parentId a number, absent on a root).
+func TestParseCommentParents(t *testing.T) {
+	body := []byte(`{"comments":[{"id":"96844"},{"id":"96977","parentId":96844},{"id":"101568","parentId":100993}]}`)
+	got := parseCommentParents(body)
+	if len(got) != 2 || got["96977"] != "96844" || got["101568"] != "100993" {
+		t.Fatalf("parents = %v", got)
+	}
+	if parseCommentParents([]byte(`not json`)) != nil {
+		t.Fatalf("garbage should parse to nil")
+	}
+}

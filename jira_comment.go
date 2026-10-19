@@ -36,6 +36,11 @@ type JiraCommentInput struct {
 	Key      string         `json:"key"`
 	Body     string         `json:"body"`
 	Mentions []jira.Mention `json:"mentions,omitempty"`
+	// ParentID, when set, posts the comment as a reply to that comment — the
+	// thread's ROOT, since Jira threads only one level deep (see
+	// jira.Module.AddComment). Empty is the old top-level comment, so a run
+	// recorded before this field existed replays unchanged.
+	ParentID string `json:"parentId,omitempty"`
 }
 
 // JiraCommentResult is what the run leaves in its own history.
@@ -59,6 +64,9 @@ func validJiraCommentInput(in JiraCommentInput) error {
 	}
 	if len(body) > jira.MaxCommentBody {
 		return fmt.Errorf("jira comment: body too long")
+	}
+	if p := strings.TrimSpace(in.ParentID); p != "" && !jira.ValidCommentID(p) {
+		return fmt.Errorf("jira comment: invalid parent comment id %q", in.ParentID)
 	}
 	if len(in.Mentions) > 20 {
 		return fmt.Errorf("jira comment: too many mentions")
@@ -105,7 +113,7 @@ func (m *TaskManager) registerJiraCommentActivities(engine *tembed.Engine) {
 			return nil, fmt.Errorf("jira comment: no jira client")
 		}
 		key := strings.ToUpper(strings.TrimSpace(arg.Key))
-		id, err := m.jira.AddComment(ctx, key, jira.BuildCommentADF(arg.Body, arg.Mentions))
+		id, err := m.jira.AddComment(ctx, key, strings.TrimSpace(arg.ParentID), jira.BuildCommentADF(arg.Body, arg.Mentions))
 		if err != nil {
 			m.logf("jira comment: post %s: %v", key, err)
 			return nil, err
@@ -128,6 +136,7 @@ func (m *TaskManager) StartJiraComment(in JiraCommentInput) (string, error) {
 	}
 	in.Key = strings.ToUpper(strings.TrimSpace(in.Key))
 	in.Body = strings.TrimSpace(in.Body)
+	in.ParentID = strings.TrimSpace(in.ParentID)
 	return m.engine.StartWorkflow(WorkflowJiraComment, in)
 }
 

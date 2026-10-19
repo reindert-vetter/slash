@@ -1421,8 +1421,12 @@ func (e errJira) IssueSprints(context.Context, string) ([]jira.Sprint, error) { 
 
 func (e errJira) VerifyCredentials(context.Context) error { return nil }
 
-func (e errJira) AddComment(context.Context, string, json.RawMessage) (string, error) {
+func (e errJira) AddComment(context.Context, string, string, json.RawMessage) (string, error) {
 	return "", e.err
+}
+
+func (e errJira) CommentParents(context.Context, string) (map[string]string, error) {
+	return nil, e.err
 }
 
 func (e errJira) Users(context.Context, string, int) ([]jira.User, error) { return nil, nil }
