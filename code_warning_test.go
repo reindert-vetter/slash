@@ -317,7 +317,7 @@ func TestCodeWarningReviewReturnsFindingsWhenTurnBudgetHit(t *testing.T) {
 		PR: pr, Files: []string{"app/Services/OrderService.php"}, BlockCount: 1, MaxFindings: 2,
 		MaxTurns: 2, // reached mid-way through the 3 scripted turns
 	}
-	findings, ok := runCodeWarningReview(context.Background(), fake, dataDir, arg)
+	findings, _, ok := runCodeWarningReview(context.Background(), fake, dataDir, arg)
 	if !ok {
 		t.Fatal("ok = false, want true — the call really ran")
 	}

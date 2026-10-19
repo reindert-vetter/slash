@@ -3105,9 +3105,15 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: list comments: %w", err)
 		}
+		// A finding the reviewer is working on (a Claude chat or a reply in
+		// its thread) is NOT replaced: deleting it mid-conversation left the
+		// chat aimed at a thread that no longer existed. It stays, and the
+		// fresh pass gets it as context (warningReviewArg.Kept) and may
+		// explicitly report it resolved — see runAgenticReview.
+		chatConvs := m.chatConversationSet(ctx, arg.Repo, arg.PR)
 		removed := 0
 		for _, c := range list {
-			if c.Source != "ai" || !fileSet[c.File] {
+			if c.Source != "ai" || !fileSet[c.File] || warningEngaged(c, chatConvs) {
 				continue
 			}
 			// A finding the reviewer RESOLVED is dismissed for good: remember it
@@ -3157,9 +3163,10 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err != nil {
 			return nil, fmt.Errorf("code_warning: list comments: %w", err)
 		}
+		chatConvs := m.chatConversationSet(ctx, arg.Repo, arg.PR)
 		removed := 0
 		for _, c := range list {
-			if c.Source != "ai" || c.Kind != "ai_warning" {
+			if c.Source != "ai" || c.Kind != "ai_warning" || warningEngaged(c, chatConvs) {
 				continue
 			}
 			if err := m.Signal(c.RunID, ReactionSignal{
@@ -3212,6 +3219,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, fmt.Errorf("code_warning: list existing comments: %w", err)
 		}
 		arg.Existing = existingLineCommentsInScope(list, arg.Files)
+		arg.Kept = keptWarningsInScope(list, arg.Files, m.chatConversationSet(ctx, arg.Repo, arg.PR))
 		if m.warndismiss != nil {
 			dismissed, err := m.warndismiss.List(ctx, arg.Repo, arg.PR)
 			if err != nil {
@@ -3233,7 +3241,27 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		// body) — scaled with this run's own scope size, see
 		// codeWarningMaxTurnsForScope.
 		arg.MaxTurns = codeWarningMaxTurns(len(arg.Files))
-		findings, ok := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
+		findings, resolved, ok := runCodeWarningReview(ctx, m.claude, m.dataDir, arg)
+		// A kept (engaged) finding the model explicitly reported as resolved
+		// by the current code is superseded now, through the same delete
+		// Signal supersedeFileWarnings uses (Source "ai", so it never counts
+		// as a reviewer dismissal). Inside this Activity rather than as a
+		// workflow step of its own, so codeWarningWorkflow's Activity sequence
+		// — and with it every recorded history — is unchanged. Best-effort
+		// per comment, like the supersede itself.
+		for _, id := range resolved {
+			for _, k := range arg.Kept {
+				if k.ID != id {
+					continue
+				}
+				if err := m.Signal(k.RunID, ReactionSignal{
+					ID: "sys-" + newUIReactionID(), Source: "ai", Action: "delete",
+				}); err != nil {
+					m.logf("code_warning: resolved kept warning %s not superseded: %v", k.RunID, err)
+				}
+			}
+		}
+		findings = dropKeptRepeats(findings, arg.Kept)
 		// Record every file the model was actually asked to review as
 		// "reviewed at this hash" (modules/warnreviewed), so the next run can
 		// skip it while it stays unchanged — only once the agentic call itself

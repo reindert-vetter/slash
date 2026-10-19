@@ -2035,7 +2035,7 @@ func applyChatCommentAction(ctx context.Context, tm *TaskManager, arg chatCommen
 	c, ok, err := tm.comments.Get(ctx, arg.ConversationID)
 	if err != nil || !ok || c.Status == "deleting" || c.Status == "deleted" {
 		tm.logf("claude_chat: comment_action skipped — comment %s not found/deleted (pr=%d, err=%v)", arg.ConversationID, arg.PR, err)
-		saveChatActionOutcome(ctx, tm.chat, arg, "De comment-thread bestaat niet meer.")
+		saveChatActionOutcome(ctx, tm.chat, arg, "De comment-thread is intussen verwijderd (bijvoorbeeld vervangen door een nieuwe AI-controle), dus dit kan daar niet meer worden geplaatst.")
 		return
 	}
 

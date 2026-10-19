@@ -1662,6 +1662,27 @@ a manually triggered, low-frequency action.
   comment on it is deleted via the **existing delete Signal** on its own
   Execution — best-effort per comment (an already-closed run can't be signalled
   and must not block the rest). A file **outside** scope keeps its old warnings.
+  - **Except a finding the reviewer is working on** (`warningEngaged`,
+    `code_warning.go`): still open, and either a Claude conversation with at
+    least one message under its id (`chat.ConversationsWithMessages`) or a
+    real reply from someone other than the check (`Source` not
+    `ai`/`system`, not a bare `/resolve`/`/reopen`). Reported bug (PR 14252):
+    a push re-ran the check while the reviewer chatted with Claude about a
+    finding, the supersede deleted it, and "even voorstel als comment" then
+    failed with "De comment-thread bestaat niet meer." — the chat pointed at
+    a deleted thread. `purgeOrphanWarnings` skips it too.
+  - **A kept finding is not kept forever.** `runAgenticReview` hands it to
+    the fresh pass as a numbered list (`warningReviewArg.Kept`,
+    `keptWarningsInScope`); `code_warning.md` says never to report one again
+    and to answer `{"resolves": n}` only when the current code clearly
+    resolves kept finding n. `resolvedKeptWarnings` validates n, and that one
+    finding is then deleted via the same `Source:"ai"` delete Signal (so it
+    never counts as a reviewer dismissal). Done inside the `runAgenticReview`
+    Activity, not as a new workflow step, so `codeWarningWorkflow`'s Activity
+    sequence and every recorded history stay unchanged. Hard floor next to the
+    prompt rule: `dropKeptRepeats` drops a fresh finding whose text
+    fingerprint (`warndismiss.Fingerprint`, same file) equals a kept one's.
+    Tests: `code_warning_engaged_test.go`.
 - **Every warning is a normal `task_code_comment` Execution** — no new comment
   machinery: `createWarningComment` calls `StartCodeComment` with `Source:"ai"`
   + `Local:true` (never to GitHub) and `Author:"AI check"`. Being a full

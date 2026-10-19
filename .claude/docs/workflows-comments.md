@@ -2516,7 +2516,12 @@ JSON used to sit in the visible prose untouched.
      `logf` and surfaced as a `KindError` turn.
   2. **The comment must still exist and not be `deleting`/`deleted`**
      (`comments.Module.Get`, a new read method — `WHERE id = ?`, mirrors
-     `List`/`Search`'s shared `query`).
+     `List`/`Search`'s shared `query`). Its error text names the likely cause
+     ("…intussen verwijderd (bijvoorbeeld vervangen door een nieuwe
+     AI-controle)…"), since retrying can never help. The usual cause — an AI
+     risk finding superseded by a re-run while the reviewer was chatting
+     about it (PR 14252) — no longer happens: an engaged finding is kept,
+     see "Auto-supersede" in `.claude/docs/workflows-analysis.md`.
 
   Past that point the two actions diverge — **a later, explicit correction
   from Reindert**: "Claude mag namens mij een bericht sturen, ik wil het

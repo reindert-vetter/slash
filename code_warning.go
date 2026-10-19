@@ -59,7 +59,8 @@ type warningReviewArg struct {
 	JiraDescription string `json:"jiraDescription,omitempty"`
 	// Existing is the open, non-AI conversation already on this PR (Source !=
 	// "ai" — an old AI comment in scope was already deleted by
-	// supersedeFileWarnings before this Activity runs): the line comments on a
+	// supersedeFileWarnings before this Activity runs, except an engaged one,
+	// which travels separately as Kept below): the line comments on a
 	// file in scope, the PR-wide comments, and each thread's replies. Same
 	// purpose as the two description fields — it says what has already been
 	// discussed — so the model can tell whether a risk it wants to flag has
@@ -76,6 +77,14 @@ type warningReviewArg struct {
 	// like Existing above — not a second Go-side hard filter; that hard floor
 	// (dropDismissedFindings) still runs unconditionally after this call.
 	PastDismissed []dismissedFinding `json:"pastDismissed,omitempty"`
+	// Kept is every earlier AI finding of this same check, on a file in scope,
+	// that supersedeFileWarnings deliberately left standing because the
+	// reviewer is working on it (warningEngaged: a Claude conversation or a
+	// reviewer reply in its thread). Numbered 1-based in the prompt; the model
+	// must not report it again, and may answer {"resolves": n} when the
+	// current code clearly resolves kept finding n — runAgenticReview then
+	// supersedes exactly that one. Filled in by the runAgenticReview Activity.
+	Kept []keptWarning `json:"kept,omitempty"`
 	// MaxTurns bounds the number of agentic steps (the CLI's own num_turns —
 	// see ChatEventTurn) this run may take before it is asked to wrap up
 	// early instead of exploring further. 0 (or unset — an older recorded
@@ -109,11 +118,26 @@ type existingLineComment struct {
 	ID string `json:"id,omitempty"`
 }
 
+// keptWarning is one earlier AI finding that survived supersedeFileWarnings
+// because the reviewer is engaged with it (see warningReviewArg.Kept).
+type keptWarning struct {
+	ID      string   `json:"id"`
+	RunID   string   `json:"runId"`
+	File    string   `json:"file"`
+	Line    int      `json:"line"`
+	Body    string   `json:"body"`
+	Replies []string `json:"replies,omitempty"` // "<author>: <body>", in stored order
+}
+
 // warningFinding is one entry of the JSON array the model is asked to return.
+// Resolves is the alternative entry shape {"resolves": n}: "kept finding n
+// (1-based, warningReviewArg.Kept) is resolved by the current code" — such an
+// entry is never a finding itself (see runCodeWarningReview).
 type warningFinding struct {
-	File string `json:"file"`
-	Line int    `json:"line"`
-	Text string `json:"text"`
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Text     string `json:"text"`
+	Resolves int    `json:"resolves,omitempty"`
 }
 
 // warningAuthor is the display name every AI-authored warning comment carries
@@ -263,9 +287,13 @@ func codeWarningTurnCounter(maxTurns int, steer chan<- string) (func(claude.Chat
 // (runAgenticReview, workflows.go) uses it to decide whether the files in
 // scope may be recorded as reviewed (modules/warnreviewed): a call that never
 // really happened must not be recorded as having checked anything.
-func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string, arg warningReviewArg) ([]warningFinding, bool) {
+//
+// The middle return value lists the IDs of the kept findings (arg.Kept) the
+// model reported as resolved via a {"resolves": n} entry — validated against
+// arg.Kept, deduplicated, in Kept order.
+func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string, arg warningReviewArg) ([]warningFinding, []string, bool) {
 	if cl == nil || len(arg.Files) == 0 {
-		return nil, false
+		return nil, nil, false
 	}
 	baseDir, headDir := worktreeDirs(dataDir, arg.Repo, arg.PR)
 	// Which lines this PR actually changed, per file in scope — used twice: to
@@ -296,7 +324,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	}
 	res, err := cl.RunChat(ctx, req)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	// Logged unconditionally (not just when nudged): this is the one place
 	// that can compare an unlimited run against a bounded one on real data
@@ -307,6 +335,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	log.Printf("code_warning: pr %d review done — scopeFiles=%d maxTurns=%d cliTurns=%d nudged=%v cost=$%.4f tokens(in=%d out=%d cacheRead=%d cacheCreate=%d)",
 		arg.PR, len(arg.Files), arg.MaxTurns, u.NumTurns, *nudged, u.TotalCostUSD, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
 	findings := parseWarningFindings(res.Text)
+	resolved := resolvedKeptWarnings(findings, arg.Kept)
 
 	// Hallucination guard: only trust a finding whose file is one we actually
 	// told the model about — never a fabricated path elsewhere in the worktree.
@@ -316,7 +345,7 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	}
 	kept := make([]warningFinding, 0, len(findings))
 	for _, f := range findings {
-		if f.File == "" || f.Line <= 0 || strings.TrimSpace(f.Text) == "" || !allowed[f.File] {
+		if f.Resolves != 0 || f.File == "" || f.Line <= 0 || strings.TrimSpace(f.Text) == "" || !allowed[f.File] {
 			continue
 		}
 		// Changed-lines guard (see changedLineSets): the model may LOOK
@@ -338,7 +367,112 @@ func runCodeWarningReview(ctx context.Context, cl claude.Client, dataDir string,
 	if arg.MaxFindings > 0 && len(kept) > arg.MaxFindings {
 		kept = kept[:arg.MaxFindings]
 	}
-	return kept, true
+	return kept, resolved, true
+}
+
+// resolvedKeptWarnings maps the model's {"resolves": n} entries onto the IDs
+// of kept (1-based n). An out-of-range or repeated n is ignored, and the
+// result follows kept's own order, so it is deterministic regardless of the
+// order the model listed them in.
+func resolvedKeptWarnings(findings []warningFinding, kept []keptWarning) []string {
+	hit := make(map[int]bool)
+	for _, f := range findings {
+		if f.Resolves >= 1 && f.Resolves <= len(kept) {
+			hit[f.Resolves-1] = true
+		}
+	}
+	var out []string
+	for i, k := range kept {
+		if hit[i] {
+			out = append(out, k.ID)
+		}
+	}
+	return out
+}
+
+// warningEngaged reports whether the reviewer is working on an AI finding: it
+// is still open and either has a Claude conversation with at least one
+// message (chatConvs, keyed by comment id == conversation id) or a real reply
+// from someone other than the check itself (Source not "ai"/"system", not a
+// bare /resolve//reopen status trace). Such a finding is kept by
+// supersedeFileWarnings/purgeOrphanWarnings instead of being replaced: wiping
+// it mid-conversation left the chat pointing at a deleted thread ("De
+// comment-thread bestaat niet meer.", PR 14252).
+func warningEngaged(c comments.Comment, chatConvs map[string]bool) bool {
+	if c.Source != "ai" || c.Status != "open" {
+		return false
+	}
+	if chatConvs[c.ID] {
+		return true
+	}
+	for _, r := range c.Reactions {
+		if r.Source == "ai" || r.Source == "system" {
+			continue
+		}
+		body := strings.TrimSpace(r.Body)
+		if body == "" || body == resolveSentinel || body == reopenSentinel {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// keptWarningsInScope collects the engaged AI findings (warningEngaged) on a
+// file in scope, ordered by file, line, id — the numbering the prompt and
+// resolvedKeptWarnings share.
+func keptWarningsInScope(list []comments.Comment, files []string, chatConvs map[string]bool) []keptWarning {
+	allowed := make(map[string]bool, len(files))
+	for _, f := range files {
+		allowed[f] = true
+	}
+	var out []keptWarning
+	for _, c := range list {
+		if !allowed[c.File] || !warningEngaged(c, chatConvs) {
+			continue
+		}
+		k := keptWarning{ID: c.ID, RunID: c.RunID, File: c.File, Line: c.Line, Body: c.Body}
+		for _, r := range c.Reactions {
+			body := strings.TrimSpace(r.Body)
+			if body == "" || body == resolveSentinel || body == reopenSentinel {
+				continue
+			}
+			k.Replies = append(k.Replies, r.Author+": "+body)
+		}
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		if out[i].Line != out[j].Line {
+			return out[i].Line < out[j].Line
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// dropKeptRepeats is the hard floor behind the prompt's "don't report a kept
+// finding again": a fresh finding on the same file whose text fingerprint
+// (warndismiss.Fingerprint) equals a kept one's is dropped, so a kept
+// warning is never joined by a near-identical twin.
+func dropKeptRepeats(findings []warningFinding, kept []keptWarning) []warningFinding {
+	if len(kept) == 0 {
+		return findings
+	}
+	seen := make(map[string]bool, len(kept))
+	for _, k := range kept {
+		seen[k.File+"\x00"+warndismiss.Fingerprint(k.Body)] = true
+	}
+	out := findings[:0:0]
+	for _, f := range findings {
+		if seen[f.File+"\x00"+warndismiss.Fingerprint(f.Text)] {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // changedLineSets returns, per file in scope, the head-side lines this PR
@@ -439,6 +573,15 @@ func warningPrompt(arg warningReviewArg, changed map[string]*fileChangeSet) stri
 			}
 			fmt.Fprintf(&b, "- %s — %s: %s\n", where, c.Author, clipForPrompt(c.Body, maxPromptComment))
 			for _, r := range c.Replies {
+				fmt.Fprintf(&b, "    reply — %s\n", clipForPrompt(r, maxPromptComment))
+			}
+		}
+	}
+	if len(arg.Kept) > 0 {
+		b.WriteString("\nEarlier findings of this same check that the reviewer is still discussing, kept open on purpose, numbered (see the system prompt's rule about them — never report one again; answer {\"resolves\": <number>} for one the current code clearly resolves):\n")
+		for i, k := range arg.Kept {
+			fmt.Fprintf(&b, "%d. %s:%d — %s\n", i+1, k.File, k.Line, clipForPrompt(k.Body, maxPromptComment))
+			for _, r := range k.Replies {
 				fmt.Fprintf(&b, "    reply — %s\n", clipForPrompt(r, maxPromptComment))
 			}
 		}
@@ -832,4 +975,24 @@ func anchoredWarning(dataDir string, pr int, blocks []Block, f warningFinding) (
 		in.BlockWide = true
 	}
 	return in, b.ID()
+}
+
+// chatConversationSet returns the ids of every conversation of the PR with at
+// least one Claude chat message (modules/chat), for warningEngaged. Best-
+// effort: no chat module or a read error yields an empty set, i.e. the
+// pre-existing "supersede every AI finding in scope" behaviour.
+func (m *TaskManager) chatConversationSet(ctx context.Context, repo string, pr int) map[string]bool {
+	out := map[string]bool{}
+	if m.chat == nil {
+		return out
+	}
+	ids, err := m.chat.ConversationsWithMessages(ctx, repo, pr)
+	if err != nil {
+		m.logf("code_warning: list chat conversations pr=%d: %v", pr, err)
+		return out
+	}
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out
 }

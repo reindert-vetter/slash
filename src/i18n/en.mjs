@@ -914,6 +914,7 @@ export const EN = {
   // The planning page's follow-up questions and the concrete half of a task
   // (see .claude/docs/plan-page.md).
   'Al gemerged hierover': 'Already merged on this',
+  'De comment-thread is intussen verwijderd (bijvoorbeeld vervangen door een nieuwe AI-controle), dus dit kan daar niet meer worden geplaatst.': 'The comment thread has since been deleted (for example replaced by a new AI check), so this can no longer be placed there.',
   'Vervolgvragen om het plan te perfectioneren': 'Follow-up questions to perfect the plan',
   'Claude stelt nieuwe vragen op basis van je antwoorden en stelt daarna de takenlijst opnieuw op.':
     'Claude asks new questions based on your answers and then rebuilds the task list.',
