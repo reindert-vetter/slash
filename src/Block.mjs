@@ -174,19 +174,18 @@ export function highlightForLang(code, lang) {
 // expected to embed SQL).
 const SQL_LINE_COMMENT_RE = /^[ \t]*--(?:[ \t][^\n]*)?$/gm
 function highlightPhpWithSqlComments(code, grammar, grammarName) {
-  let result = ''
-  let lastIndex = 0
-  let m
   SQL_LINE_COMMENT_RE.lastIndex = 0
-  while ((m = SQL_LINE_COMMENT_RE.exec(code))) {
-    const codePart = code.slice(lastIndex, m.index)
-    if (codePart) result += Prism.highlight(codePart, grammar, grammarName)
-    result += `<span class="token comment">${escapeHtml(m[0])}</span>`
-    lastIndex = SQL_LINE_COMMENT_RE.lastIndex
-  }
-  const rest = code.slice(lastIndex)
-  if (rest) result += Prism.highlight(rest, grammar, grammarName)
-  return result
+  if (!SQL_LINE_COMMENT_RE.test(code)) return Prism.highlight(code, grammar, grammarName)
+  // One bare line (a diff row): the whole line is the comment, no Prism needed.
+  if (!code.includes('\n')) return `<span class="token comment">${escapeHtml(code)}</span>`
+  // Several lines: highlight the WHOLE code in one Prism call (splitting at a
+  // comment line cut through an open PHP string and left the first chunk with
+  // zero tokens), then wrap comment lines in the finished HTML. A line that
+  // carries tags (a string closing on it, interpolation) is left untouched.
+  return Prism.highlight(code, grammar, grammarName).replace(
+    /^[ \t]*--(?:[ \t][^<\n]*)?$/gm,
+    (line) => `<span class="token comment">${line}</span>`,
+  )
 }
 
 // langForFile picks the Prism grammar (and CSS-scope class, see index.html's

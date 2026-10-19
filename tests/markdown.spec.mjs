@@ -8,6 +8,24 @@ import { test, expect, evaluateSettled, appReady } from './_fixtures.mjs'
 // Prism CSS from index.html) instead of round-tripping the pr_status
 // workflow just to get a specific body string in.
 test.describe('PR Review Tree — Markdown rendering', () => {
+  test('keeps highlighting before a SQL comment inside a multi-line PHP string', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await appReady(page)
+    const r = await evaluateSettled(page, async () => {
+      const { highlightForLang } = await import('/src/Block.mjs')
+      const code = '<?php\n\ndeclare(strict_types=1);\n\n$q = "\n  SELECT 1,\n  -- note here\n  2\n";'
+      const host = document.createElement('code')
+      host.className = 'language-php'
+      host.innerHTML = highlightForLang(code, 'php')
+      return {
+        keyword: host.querySelector('.token.keyword')?.textContent,
+        comment: [...host.querySelectorAll('.token.comment')].map((e) => e.textContent.trim()),
+      }
+    })
+    expect(r.keyword).toBe('declare')
+    expect(r.comment).toContain('-- note here')
+  })
+
   test('renders headings, lists, bold, links, images and Prism-highlighted code fences', async ({ page }) => {
     await page.goto('/pr/12903')
 

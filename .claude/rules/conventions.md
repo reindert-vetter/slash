@@ -177,6 +177,17 @@ whitespace-only, so the line-start anchor rules it out too. No accepted
 false-positive edge case survives. Verified against the vendored Prism
 grammar directly.
 
+**Superseded: the raw-code split is gone for multi-line code.** Splitting at a
+comment line cut through a still-open PHP string (a multi-line ClickHouse
+query), so the first chunk ended in an unterminated `"` and Prism returned
+ZERO tokens for it: a whole file (`<?php`, `declare`, `use`, class) rendered in
+one colour in the code-preview card (PR 14273). Now: a single bare line (a diff
+row) is wrapped directly as a comment; multi-line code goes through ONE
+`Prism.highlight` call and the comment lines are then wrapped in the finished
+HTML (`^[ \t]*--...$` with no `<`, so a line carrying tags stays untouched).
+The "Trade-off" paragraph below describes the old split and no longer applies.
+Test: `tests/markdown.spec.mjs` ("keeps highlighting before a SQL comment").
+
 Trade-off for the "whole block, one Prism call" sites: pulling a whole
 comment LINE out of the raw code before Prism sees it means that line no
 longer shares Prism's string-tokenisation context with its neighbours (moot
