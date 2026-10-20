@@ -357,6 +357,7 @@ function prUidHere() {
   return REPO ? REPO + '#' + PR : String(PR)
 }
 
+let ffBothCache = { src: null, both: false }
 const state = reactive({
   pr: PR,
   // repo — the repo NAME from the path ("" = the primary repo). Read-only for the
@@ -657,6 +658,9 @@ const state = reactive({
   // fileFilter — 'all' | 'backend' | 'frontend': hides vue/ts/js-family files
   // (backend) or only .php files (frontend) from the index. Ephemeral, not in the URL.
   fileFilter: 'all',
+  // fileFilterVisible — the filter row only shows (and a stored filter only
+  // applies) when the PR changes BOTH .php and frontend-family files.
+  fileFilterVisible: false,
   onFileFilter: setFileFilter,
   // lineCommentsCollapsed — when true, hides the rows of the "Comments op
   // regels" section (BlockList.mjs's lineCommentHeading/renderList) without
@@ -3910,6 +3914,7 @@ function recomputeLeftList() {
   // and also deliberately not applied to an ordinary top-level block with
   // total 0 (see the general "zero changed rows" case in
   // .claude/docs/approval.md), which keeps its own index slot as before.
+  if (state.fileFilterVisible !== prHasBothKinds()) state.fileFilterVisible = prHasBothKinds()
   const visibleBlocks = state.allBlocks.filter(
     (b) =>
       !hidden.has(b.id) &&
@@ -4915,7 +4920,23 @@ function clampSelectedToVisible() {
 // fileFilterIgnores in filefilter.go.
 const FRONTEND_FILE_RE = /\.(vue|[cm]?[jt]sx?)$/i
 const PHP_FILE_RE = /\.php$/i
+function prHasBothKinds() {
+  const src = state.allBlocks
+  if (ffBothCache.src === src) return ffBothCache.both
+  let php = false
+  let fe = false
+  for (const b of src) {
+    if (!b.file || isPrDescriptionBlock(b)) continue
+    if (PHP_FILE_RE.test(b.file)) php = true
+    else if (FRONTEND_FILE_RE.test(b.file)) fe = true
+    if (php && fe) break
+  }
+  ffBothCache = { src, both: php && fe }
+  return php && fe
+}
+
 function fileFilterAllows(mode, file) {
+  if (!prHasBothKinds()) return true
   if (mode === 'backend') return !FRONTEND_FILE_RE.test(file || '')
   if (mode === 'frontend') return !PHP_FILE_RE.test(file || '')
   return true

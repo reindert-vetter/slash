@@ -5,6 +5,17 @@ import { test, expect } from './_fixtures.mjs'
 // ook op bestandsnaam kunnen zoeken". A test_class row, which stands in for
 // several methods, also matches on any of its methods' label/category/file.
 // Fixture: the main PR 12903 blocks (tests/fixtures/blocks.json).
+// The filter row only exists for a PR that changes BOTH .php and frontend-family
+// files; PR 12903 is all PHP, so mixed tests append one .vue block to /api/blocks.
+async function mixPr(page) {
+  await page.route('**/api/blocks?pr=12903*', async (route) => {
+    const res = await route.fetch()
+    const list = await res.json()
+    list.push({ pr: 12903, file: 'resources/js/App.vue', class: '', name: 'setup', category: 'COMPONENT', line: 1, endLine: 9, status: 'modified', side: 'new' })
+    await route.fulfill({ response: res, json: list })
+  })
+}
+
 test.describe('PR Review Tree — searching startpunten by file path', () => {
   test('a path fragment filters the list, a directory name too, and a class name still works', async ({
     page,
@@ -59,28 +70,36 @@ test.describe('PR Review Tree — searching startpunten by file path', () => {
     await expect(page.getByTestId('block-row')).toHaveCount(1)
   })
 
-  // File-type filter (Alles / Backend / Frontend): PR 12903 is all PHP, so
-  // Backend keeps everything and Frontend (hides only .php) leaves nothing.
+  // File-type filter (Alles / Backend / Frontend): with one .vue block mixed in:
+  // Backend hides it, Frontend (hides only .php) keeps just it.
   test('the file filter switches between Alles, Backend and Frontend', async ({ page }) => {
+    await mixPr(page)
     await page.goto('/pr/12903')
     const rows = page.getByTestId('block-row')
-    await expect(rows).toHaveCount(11)
+    await expect(rows).toHaveCount(12)
     await page.getByTestId('file-filter-frontend').click()
-    await expect(rows).toHaveCount(0)
+    await expect(rows).toHaveCount(1)
     await expect(page.getByTestId('file-filter-frontend')).toContainText('✓')
     await page.getByTestId('file-filter-backend').click()
     await expect(rows).toHaveCount(11)
     await page.getByTestId('file-filter-all').click()
-    await expect(rows).toHaveCount(11)
+    await expect(rows).toHaveCount(12)
+  })
+
+  test('the file filter row is hidden for a PR with only one kind of file', async ({ page }) => {
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-row')).toHaveCount(11)
+    await expect(page.getByTestId('file-filter')).toHaveCount(0)
   })
 
   // The filter is a per-PR setting persisted through the app_settings tracker:
   // it survives a reload, and everything it hides counts as done (ignored fill).
-  test('the file filter persists per PR and ignored rows fill the progress bar', async ({ page }) => {
+  test('the file filter persists per PR and ignored rows count in the progress bar', async ({ page }) => {
+    await mixPr(page)
     await page.goto('/pr/12903')
-    await expect(page.getByTestId('block-row')).toHaveCount(11)
+    await expect(page.getByTestId('block-row')).toHaveCount(12)
     await page.getByTestId('file-filter-frontend').click()
-    await expect(page.getByTestId('review-progress-ignored')).toHaveAttribute('class', /w-\[100\.00%\]/)
+    await expect(page.getByTestId('review-progress-ignored')).toBeVisible()
     await expect.poll(async () => (await (await page.request.get('/api/filefilters')).json()).filters['12903']).toBe('frontend')
     await page.reload()
     await expect(page.getByTestId('file-filter-frontend')).toContainText('✓')

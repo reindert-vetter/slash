@@ -202,7 +202,10 @@ export default function BlockList(state, isPrWideComposing = () => false, onReve
               : ''}
         </div>
         ${() => approvalSummaryLine(state)}
-        <div class="mt-2 flex gap-1" data-testid="file-filter" role="group">
+        <div class="contents">
+          ${() =>
+            state.fileFilterVisible
+              ? html`<div class="mt-2 flex gap-1" data-testid="file-filter" role="group">
           ${() =>
             [['all', 'Alles'], ['backend', 'Backend'], ['frontend', 'Frontend']].map(([m, label]) =>
               html`<button
@@ -219,6 +222,8 @@ export default function BlockList(state, isPrWideComposing = () => false, onReve
                 ${() => (state.fileFilter === m ? '✓ ' : '') + label}
               </button>`.key(m),
             )}
+        </div>`
+              : ''}
         </div>
         <input
           id="block-search"
