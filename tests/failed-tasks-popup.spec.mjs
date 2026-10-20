@@ -280,4 +280,37 @@ test.describe('global failed-tasks dialog', () => {
     await expect(row).toContainText('Review insturen is niet gelukt')
     await expect(row).toContainText('you cannot review your own PR')
   })
+
+  // A review sent while the server was down (a restart) has no run to resume:
+  // "Alles opnieuw proberen" must re-send that same review, not silently keep
+  // the row (reported on PR 14291).
+  test('retry-all re-sends a review that got no answer from the server', async ({ page }) => {
+    await page.route('**/api/problems', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, failedRuns: [], logErrors: [], failedPosts: [], prTitles: {} }) }),
+    )
+    const posts = []
+    await page.route('**/api/workflows/submit_review', (route) => {
+      posts.push(route.request().postDataJSON())
+      if (posts.length === 1) return route.abort('connectionrefused')
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, runId: 'run-ok' }) })
+    })
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('/')
+    const rows = page.getByTestId('command-row')
+    await rows.filter({ hasText: 'GitHub' }).click()
+    await rows.filter({ hasText: 'PR keuren' }).click()
+    await rows.filter({ hasText: 'Keur de HELE PR goed' }).click()
+    await rows.filter({ hasText: 'Goedkeuren en sluiten' }).click()
+
+    const dialog = page.getByTestId('failed-tasks-dialog')
+    await expect(dialog.getByTestId('problem-client')).toContainText('geen antwoord van de server')
+    await dialog.getByTestId('failed-tasks-retry-all').click()
+    await expect(dialog).toBeHidden()
+    expect(posts).toHaveLength(2)
+    expect(posts[1]).toEqual(posts[0])
+    expect(posts[1].event).toBe('APPROVE')
+  })
 })

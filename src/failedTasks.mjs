@@ -144,11 +144,39 @@ export async function showFailedTasksNow() {
 // showClientFailure adds a failure that has no run and no read-model row (the
 // request was refused before any workflow started, or never got an answer) to
 // the same dialog, and opens it. In memory only.
+// `retry` (optional) re-runs the failed action itself: "Alles opnieuw proberen"
+// takes the row out and calls it; the action re-adds its own row if it fails
+// again. Without it there is nothing to redo, so retry-all only clears the row.
 let clientFailureSeq = 0
-export function showClientFailure({ title, error }) {
+export function showClientFailure({ title, error, retry }) {
   fs.snoozedUntil = 0
   writeSnooze(0)
-  fs.clientFailures = [...fs.clientFailures, { id: ++clientFailureSeq, title: title || '', error: error || '' }]
+  fs.clientFailures = [
+    ...fs.clientFailures,
+    { id: ++clientFailureSeq, title: title || '', error: error || '', retry: typeof retry === 'function' ? retry : null },
+  ]
+}
+
+// retryClientFailures clears every client failure and re-runs the ones that
+// carry a `retry`. Returns {retried, failed}: an action that resolves to false
+// (or throws) counts as failed — it put its own row back already.
+async function retryClientFailures() {
+  const list = fs.clientFailures
+  fs.clientFailures = []
+  let retried = 0
+  let failed = 0
+  for (const f of list) {
+    if (!f.retry) continue
+    let ok = false
+    try {
+      ok = (await f.retry()) !== false
+    } catch (err) {
+      console.error('client failure retry threw:', err)
+    }
+    if (ok) retried++
+    else failed++
+  }
+  return { retried, failed }
 }
 
 // totalCount — every row the dialog lists, of all three kinds.
@@ -246,8 +274,20 @@ async function retryAll() {
   fs.note = t('Bezig met opnieuw proberen…')
   // The failed posts first: they are no runs, so retry-all below never sees
   // them. Their outcome only shows in the note when one could not be sent.
-  let postFails = 0
+  // Client failures first: they never reached the server, so neither the
+  // posts nor retry-all below know about them.
+  const client = await retryClientFailures()
+  let postFails = client.failed
+  const clientOk = client.retried
   for (const p of fs.posts) if (await signalRetryPost(p)) postFails++
+  if (fs.rows.length === 0) {
+    // Nothing for retry-all to resume — don't call it (it would only add a
+    // pointless round trip, or an unrelated error note when it is down).
+    fs.note = t('{n} hervat, {s} overgeslagen.', { n: clientOk + fs.posts.length - (postFails - client.failed), s: postFails })
+    fs.busy = false
+    await refreshFailedTasks()
+    return
+  }
   try {
     const res = await fetch('/api/workflows/retry-all', {
       method: 'POST',
@@ -258,7 +298,10 @@ async function retryAll() {
     if (!res.ok || !body || !body.ok) {
       fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(res, body) + ')'
     } else {
-      fs.note = t('{n} hervat, {s} overgeslagen.', { n: (body.retried || 0) + fs.posts.length - postFails, s: (body.skipped || 0) + postFails })
+      fs.note = t('{n} hervat, {s} overgeslagen.', {
+        n: (body.retried || 0) + clientOk + fs.posts.length - (postFails - client.failed),
+        s: (body.skipped || 0) + postFails,
+      })
     }
   } catch (err) {
     fs.note = t('Opnieuw proberen is niet gelukt.') + ' (' + failureReason(null, null) + ')'
@@ -412,7 +455,7 @@ function dialog() {
           <button
             type="button"
             data-testid="failed-tasks-ignore-all"
-            disabled="${() => fs.busy || fs.rows.length === 0}"
+            disabled="${() => fs.busy || fs.rows.length + fs.clientFailures.length === 0}"
             title="${t('Verwijder alle mislukte taken uit de lijst zonder ze opnieuw te proberen')}"
             class="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800/60"
             @click="${(e) => {
@@ -423,6 +466,10 @@ function dialog() {
                 fs.confirmIgnoreAll = true
                 return
               }
+              // Client failures live only here, so ignoring them is just
+              // dropping the rows — no server call.
+              fs.clientFailures = []
+              fs.confirmIgnoreAll = false
               ignoreRuns(fs.rows.map((r) => r.runId))
             }}"
           >

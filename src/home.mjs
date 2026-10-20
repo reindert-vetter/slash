@@ -9465,7 +9465,7 @@ async function submitReview(event, body = '') {
           const j = JSON.parse(text)
           if (j && typeof j.error === 'string' && j.error) reason = j.error
         } catch (_) {}
-        showClientFailure({ title: t('Review insturen is niet gelukt'), error: reason })
+        showClientFailure({ title: t('Review insturen is niet gelukt'), error: reason, retry: () => submitReview(event, body) })
       }
       pollWorkflows()
       return false
@@ -9475,7 +9475,10 @@ async function submitReview(event, body = '') {
     return true
   } catch (err) {
     console.error('submit_review network error:', err)
-    showClientFailure({ title: t('Review insturen is niet gelukt'), error: t('geen antwoord van de server') })
+    // retry: "Alles opnieuw proberen" in the failed-tasks dialog re-sends this
+    // same review on the reviewer's own click (typically: the server was
+    // restarting). No navigation afterwards — that only happens from the menu.
+    showClientFailure({ title: t('Review insturen is niet gelukt'), error: t('geen antwoord van de server'), retry: () => submitReview(event, body) })
     return false
   }
 }

@@ -1701,6 +1701,13 @@ exactly as it is; this is a second, **push** surface on top of it.
   the window this modal reopens over every page. Both POST
   `/api/workflows/ignore-runs` with the run ids, which **permanently deletes**
   those runs (`WorkflowIgnoreRuns` → `engine.DeleteRun`, see
+     A row may carry a `retry` closure: "Alles opnieuw proberen" drops every
+     client row and re-runs the ones that have it (the action re-adds its own
+     row if it fails again); "Alles negeren" just drops them. `submitReview`
+     passes itself, so a review sent while the server was restarting ("geen
+     antwoord van de server", seen on PR 14291) is re-sent on the reviewer's
+     click — without the menu's "en ga naar overzicht" navigation. Before
+     this, retry-all silently did nothing for such a row.
   `.claude/docs/tembed-endpoints.md`), so the rows leave the dialog, this
   drawer and the review tree's Taken block at once. The per-row button
   (`data-testid=problem-ignore`) lives in `problems.mjs`'s own `problemRunRow`
