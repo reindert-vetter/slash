@@ -41,10 +41,11 @@ test('the PR description is the first index block, approvable per line, reset pe
   await expect(first).toContainText('PR-titel & omschrijving')
 
   // Rows: 0 title, 1 blank, 2 "First line.", 3 "Second line." — the group
-  // at gran=group covers all of them; approve it from the diff.
+  // at gran=group covers all of them (a blank changed row is approvable while
+  // "show whitespace lines" is on, the default, see blankRows.mjs).
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('Space')
-  await expect.poll(() => descApproval(page)).toEqual([0, 2, 3])
+  await expect.poll(() => descApproval(page)).toEqual([0, 1, 2, 3])
 
   // The author rewrites the second line on GitHub: after a reload only that
   // line goes back to unapproved.
@@ -52,7 +53,7 @@ test('the PR description is the first index block, approvable per line, reset pe
   await mockMeta(page, 'First line.\nSecond line, edited.')
   await page.reload()
   await expect(page.getByTestId('block-row').first()).toContainText('PR-titel & omschrijving')
-  await expect.poll(() => descApproval(page)).toEqual([0, 2])
+  await expect.poll(() => descApproval(page)).toEqual([0, 1, 2])
 })
 
 test('the PR description renders markdown tokens and always wraps, even outside the fit stand', async ({ page }) => {
