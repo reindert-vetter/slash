@@ -1907,3 +1907,5 @@ general chat when Enter on its empty composer opened it.
 ## Dirty work directory is auto-resolved
 
 The dirtyTree choice is never raised any more: `prepareChatShellWorkDirAt` and `raiseCancelCleanupChoice` accept the dirty paths as "Meenemen in de commit" (`autoAcceptDirtyTree`, chat_checkout.go; tests flip it off to exercise the explicit choice machinery, which stays for API callers).
+
+**"Wis Claude-gesprek" prefers the next chat row.** `runClearClaudeChat` (`home.mjs`): when the cleared chat's index row disappears and the next unresolved row after it is itself a chat (`chatOnly`), it jumps straight into that chat with the composer focused (`jumpToClaudeConversation`) — ahead of `restoreChatPlace`. No next chat row: the previous behaviour (restore the saved place, then `afterCommentRowRemoved`).

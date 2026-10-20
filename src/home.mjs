@@ -8983,6 +8983,21 @@ async function runClearClaudeChat() {
   const beforeId = curBlock() && curBlock().id
   const deleted = currentClaudeChatComment()
   const removed = await clearClaudeChat()
+  // The next row in the index is itself a chat: go straight to it with its
+  // composer focused, ahead of walking back to the saved previous place.
+  if (removed && wasCommentIndexRow) {
+    const nextIdx = findNextUnresolvedCommentFrom(beforeIdx, beforeId)
+    const next = nextIdx != null ? state.blocks[nextIdx] : null
+    if (next && next.chatOnly && next.comment) {
+      if (deleted) {
+        const i = chatPlaceStack.findIndex((p) => p.forId === deleted.id)
+        if (i >= 0) chatPlaceStack.length = i
+      }
+      state.selected = nextIdx
+      await jumpToClaudeConversation(next.comment, true)
+      return
+    }
+  }
   if (removed && deleted && (await restoreChatPlace(deleted.id))) return
   if (removed && wasCommentIndexRow) await afterCommentRowRemoved(beforeIdx, beforeId)
 }
