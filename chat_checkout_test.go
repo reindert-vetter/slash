@@ -2355,3 +2355,24 @@ func TestProcessChatMergeDoesNotOpenOverlayForAConflictConsult(t *testing.T) {
 		t.Fatalf("expected no overlay decision for a conflict already handled in-chat, got: %+v", a.Pending)
 	}
 }
+func init() {
+	// The tests below exercise the explicit dirtyTree choice; the automatic
+	// "Meenemen in de commit" has its own test.
+	autoAcceptDirtyTree = false
+}
+
+func TestPrepareChatShellWorkDirAutoKeepsDirtyTree(t *testing.T) {
+	autoAcceptDirtyTree = true
+	defer func() { autoAcceptDirtyTree = false }()
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	writeCheckoutSettings(t, dataDir, checkout)
+	if err := os.WriteFile(filepath.Join(checkout, "foo.txt"), []byte("wip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, decision, ok := prepareChatShellWorkDirAt(context.Background(), nil, dataDir, "", 1099, "", "feature/x")
+	if !ok || dir != checkout || decision != nil {
+		t.Fatalf("expected a ready dir without a question, got dir=%q decision=%+v ok=%v", dir, decision, ok)
+	}
+}

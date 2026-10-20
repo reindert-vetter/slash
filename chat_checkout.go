@@ -891,6 +891,11 @@ func matchCheckoutReplyAlias(opt, lowerReply string) bool {
 // never resolve it byte-exactly, producing an unanswerable, ever-repeating
 // question — see matchCheckoutOption below for the belt-and-braces fix to the
 // matching itself, kept for the stages that remain.
+// autoAcceptDirtyTree: a dirty work directory is always resolved as "Meenemen
+// in de commit" without asking. A variable only so the tests of the explicit
+// choice machinery (which still exists for API callers) can turn it off.
+var autoAcceptDirtyTree = true
+
 func chatCheckoutDirtyDecision(c checkoutCandidate) *chatCheckoutDecision {
 	return &chatCheckoutDecision{
 		Stage: checkoutStageDirtyTree, Dir: c.Dir,
@@ -1761,9 +1766,16 @@ func prepareChatShellWorkDirAt(ctx context.Context, tm *TaskManager, dataDir, re
 					}
 					return "", nil, false
 				}
-				a.Pending = chatCheckoutDirtyDecision(cand)
-				publishCheckoutChanged(repo, pr)
-				return "", a.Pending, false
+				// Reviewer decision: always "Meenemen in de commit", never ask.
+				// Accept exactly what is dirty now and fall through, the same
+				// path an already-accepted dirty tree takes.
+				if autoAcceptDirtyTree {
+					a.acceptDirty(a.Dir, cand.DirtyPaths)
+				} else {
+					a.Pending = chatCheckoutDirtyDecision(cand)
+					publishCheckoutChanged(repo, pr)
+					return "", a.Pending, false
+				}
 			}
 			// !cand.FastForwardable on its own (a clean working tree, just real
 			// local commits origin doesn't have yet) is deliberately NOT a

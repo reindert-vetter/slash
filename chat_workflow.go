@@ -940,6 +940,11 @@ func raiseCancelCleanupChoice(ctx context.Context, dataDir string, arg chatTurnI
 	if dirtyAlreadyAccepted(ctx, a) {
 		return
 	}
+	// Reviewer decision: always "Meenemen in de commit", never ask.
+	if autoAcceptDirtyTree {
+		a.acceptDirty(dir, paths)
+		return
+	}
 	a.Pending = &chatCheckoutDecision{
 		Stage: checkoutStageDirtyTree, Dir: dir,
 		Body:    fmt.Sprintf("De afgebroken beurt liet niet-gecommitte wijzigingen achter in `%s`. Wat moet daarmee gebeuren voordat ik hier iets aanpas?", dir),

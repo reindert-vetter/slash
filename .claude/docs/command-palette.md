@@ -1902,3 +1902,8 @@ base.
 general-chat overlay (`z-40`) and the werkmap overlay/lightbox (`z-50`). With
 equal z-index the later-mounted overlay wins, which hid the menu behind the
 general chat when Enter on its empty composer opened it.
+
+
+## Dirty work directory is auto-resolved
+
+The dirtyTree choice is never raised any more: `prepareChatShellWorkDirAt` and `raiseCancelCleanupChoice` accept the dirty paths as "Meenemen in de commit" (`autoAcceptDirtyTree`, chat_checkout.go; tests flip it off to exercise the explicit choice machinery, which stays for API callers).
