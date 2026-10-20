@@ -2746,6 +2746,9 @@ watch(
     if (next === prev || (!next && !prev)) return
     state.allBlocks = withPrDescriptionBlock(state.allBlocks, next)
     recomputeLeftList()
+    // Rebuild the detail card from the outside: its key (see prDescKeyPart)
+    // changes with the text, and this bump re-runs the card closure.
+    state.codeVersion++
   },
 )
 
@@ -3644,6 +3647,17 @@ function remapPrDescApproval(b, anchors, rows, calls) {
 // description block APPENDED — never prepended: blockIdPrefix reads
 // allBlocks[0]'s id and must keep seeing a real block. Where the block sits in
 // the index is recomputeLeftList's rank, not this order.
+// prDescKeyPart: the PR-description block keeps the same id/file/label when its
+// text changes (own save or an edit on GitHub), so the detail card's key must
+// carry the text or the reused card keeps showing the old one. '' otherwise.
+function prDescKeyPart(b) {
+  if (!isPrDescriptionBlock(b)) return ''
+  const text = (b.code && b.code.new && b.code.new.text) || ''
+  let h = 0
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
+  return ':pd=' + text.length + '.' + h
+}
+
 function withPrDescriptionBlock(list, d = prDescriptionBlock(state.allBlocks.find(isPrDescriptionBlock))) {
   const real = list.filter((b) => !isPrDescriptionBlock(b))
   return d ? [...real, d] : real
@@ -18318,7 +18332,8 @@ function DetailPanel(state) {
               b.label +
               ':' +
               b.side +
-              langSibKeyPart,
+              langSibKeyPart +
+              prDescKeyPart(b),
           )
           out.push(card)
           // A changed lang (TRANSLATION) block's sibling locales (the other

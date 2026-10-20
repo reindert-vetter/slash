@@ -1,4 +1,4 @@
-import { test, expect } from './_fixtures.mjs'
+import { test, expect, leaveSearchBox } from './_fixtures.mjs'
 
 // The "PR-titel & omschrijving" index block (prDescriptionBlock, home.mjs):
 // the PR's own title + body as a block with inline code, first in the index,
@@ -36,6 +36,7 @@ async function descApproval(page) {
 test('the PR description is the first index block, approvable per line, reset per changed line', async ({ page }) => {
   await mockMeta(page, 'First line.\r\nSecond line.')
   await page.goto('/pr/12903?sel=PR-description:1')
+  await leaveSearchBox(page)
   const first = page.getByTestId('block-row').first()
   await expect(first).toContainText('PR-titel & omschrijving')
 
@@ -59,6 +60,7 @@ test('the PR description renders markdown tokens and always wraps, even outside 
     'This is a very long single line that should wrap instead of running off the right edge of the card when using the default split view mode, since it is well past eighty characters.'
   await mockMeta(page, '## Problem\n' + longLine)
   await page.goto('/pr/12903?sel=PR-description:1')
+  await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight')
 
   const codeDiff = page.getByTestId('code-diff').first()
@@ -84,11 +86,12 @@ test('editing the PR description inline posts the new title and body', async ({ 
   const longLine =
     'A long description line that is far wider than the editor pane, so the transparent textarea and the highlighted pre behind it must both wrap it the same way.'
   let meta = 'First line.\r\n' + longLine
+  let metaTitle = 'Rework checkout flow'
   await page.route('**/api/pr?*', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: true, pr: 12903, title: 'Rework checkout flow', url: '', body: meta, reviewers: [] }),
+      body: JSON.stringify({ ok: true, pr: 12903, title: metaTitle, url: '', body: meta, reviewers: [] }),
     }),
   )
   const posted = []
@@ -96,9 +99,11 @@ test('editing the PR description inline posts the new title and body', async ({ 
     const req = JSON.parse(route.request().postData() || '{}')
     posted.push(req)
     meta = req.body
+    metaTitle = req.title
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{"runId":"r1"}' })
   })
   await page.goto('/pr/12903?sel=PR-description:1')
+  await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('e')
   const ta = page.getByTestId('inline-edit-textarea')
@@ -125,6 +130,9 @@ test('editing the PR description inline posts the new title and body', async ({ 
     baseBody: 'First line.\r\n' + longLine,
   })
   await expect(ta).toHaveCount(0)
+  // The card shows the saved text, not the old one.
+  await expect(page.locator('[data-testid=detail-card] code').first()).toContainText('First line, edited.')
+  await expect(page.locator('[data-testid=detail-card] code').first()).toContainText('Rework checkout flow, v2')
 })
 
 test('a PR description edit refused by the backend keeps the draft and shows why', async ({ page }) => {
@@ -133,6 +141,7 @@ test('a PR description edit refused by the backend keeps the draft and shows why
     route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'intussen gewijzigd' }) }),
   )
   await page.goto('/pr/12903?sel=PR-description:1')
+  await leaveSearchBox(page)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('e')
   const ta = page.getByTestId('inline-edit-textarea')

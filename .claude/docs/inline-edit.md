@@ -472,6 +472,11 @@ save differs, because there is nothing to commit:
   `remapPrDescApproval` sends every changed line back to unapproved, exactly
   like an author's edit on GitHub.
 
+- **The card must repaint after the save.** The block keeps its id/file/label
+  when the text changes, so the DetailPanel card key carries `prDescKeyPart(b)`
+  (text length + hash) and the prMeta watch bumps `state.codeVersion`; without
+  it the reused keyed card kept showing the old text ("opslaan doet niks").
+
 Test: `tests/pr-description-block.spec.mjs` (the POST body, the 409 path, and
 that the textarea and the highlighted `<pre>` wrap a long line identically —
 both use `pre-wrap`/`break-words`, so the wrapped block needed no editor
