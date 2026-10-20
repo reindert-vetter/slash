@@ -572,6 +572,8 @@ were left), which is exactly the number a reviewer reads as "this PR is endless"
 per-row sum; the `state.underlyingIds` skip is not enough, it only covers the
 one case where the shared descendant is itself a top-level index row.
 
+**Hidden (ignored) comments count as done** in that total (`isIgnoredComment` in `prWideApproveTotal`, like the file filter), so "N left to review" never names units hidden behind "Toon N verborgen comments". The watch depends on `state.ignoredComments`.
+
 **A related trap, now deliberately accepted instead of avoided, for the
 left-list ordering:** the "most underlying blocks first" index ordering
 (`fileUnderlyingCount` in `recomputeLeftList`, see "Ordinary blocks sort by

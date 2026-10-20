@@ -7695,6 +7695,13 @@ function prWideApproveTotal() {
       ignored += c.total
       return
     }
+    // A comment the reviewer explicitly hid ("Toon N verborgen comments")
+    // counts as done too: it is out of the index, so "N left to review" must
+    // not name units the reviewer cannot see.
+    if (isIgnoredComment(state, x)) {
+      done += c.total
+      return
+    }
     done += c.done
   }
   const walk = (b) => {
@@ -12477,6 +12484,7 @@ watch(
       state.testCovers,
       state.codeVersion,
       state.blockTotals,
+      state.ignoredComments,
     ]
     for (const b of state.allBlocks) {
       deps.push(b.approvedRows)
