@@ -13,7 +13,7 @@ import { test, expect } from './_fixtures.mjs'
 const TARGET_ID = '113:app/Actions/TestCallHideAction.php:TestCallHideAction::execute'
 
 test.describe('PR Review Tree — a resolved call from a TEST caller keeps its target visible', () => {
-  test('the changed target stays a navigable row, under "Onderliggende code"', async ({ page }) => {
+  test('the changed target stays a navigable row, in the ordinary list', async ({ page }) => {
     // PR 113 has no worktree (see tests/_setup.mjs), so the real
     // /api/blockstats reads no source and reports 0 for every block — give it
     // a deterministic non-zero total so this test exercises the ordinary
@@ -27,17 +27,12 @@ test.describe('PR Review Tree — a resolved call from a TEST caller keeps its t
     const rows = page.getByTestId('block-row')
     await expect(rows).toHaveCount(2)
 
-    // The test sorts at its ordinary TEST rank; the action — now an
-    // "Onderliggende code" row, rank 3 — sorts after it, mirroring how a
-    // relation child sorts to the bottom (recomputeLeftList's `rank`).
-    await expect(rows.nth(0)).toContainText('TestCallHideActionTest')
-    await expect(rows.nth(1)).toContainText('TestCallHideAction::execute')
-
-    // The "Onderliggende code" heading sits directly above the action's row —
-    // it joined state.underlyingIds instead of being hidden outright.
-    const heading = page.getByTestId('underlying-heading')
-    await expect(heading).toBeVisible()
-    await expect(heading).toContainText('Onderliggende code')
+    // A target only underlying because of a TEST follows the ordinary
+    // file/category rank (before the TEST band), with no "Onderliggende code"
+    // heading.
+    await expect(rows.nth(0)).toContainText('TestCallHideAction::execute')
+    await expect(rows.nth(1)).toContainText('TestCallHideActionTest')
+    await expect(page.getByTestId('underlying-heading')).toHaveCount(0)
   })
 
   // A testCallTargetIds row with a CONFIRMED server-side total of 0 has no

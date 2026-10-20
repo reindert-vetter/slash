@@ -31,7 +31,7 @@ import { test, expect } from './_fixtures.mjs'
 // comment on testCallTargetIds).
 const PR = 110
 
-test('a test-called block does not flicker in/out of "Onderliggende code" across repeated recomputes', async ({
+test('a test-called block stays an ordinary row across repeated recomputes', async ({
   page,
 }) => {
   await page.route(`**/api/callresolve?pr=${PR}`, (route) =>
@@ -63,22 +63,14 @@ test('a test-called block does not flicker in/out of "Onderliggende code" across
   const storeHelperRow = page.getByTestId('block-row').filter({ hasText: 'StoreHelper::buildPayload' })
   const underlyingHeading = page.getByTestId('underlying-heading')
 
-  // Give it a moment to settle on the correct classification once
-  // /api/callresolve has landed: StoreHelper::buildPayload sits under
-  // "Onderliggende code", not as its own top-level row.
-  await expect(underlyingHeading).toBeVisible()
+  // StoreHelper::buildPayload is only underlying through a TEST, so it stays
+  // an ordinary row (no "Onderliggende code" heading) and must not flicker
+  // across the 5s comment-poll recomputes.
   await expect(storeHelperRow).toHaveCount(1)
-
-  // Sample the classification across two full 5s comment-poll cycles
-  // (RelatedPanel.mjs's refreshTimer), which is exactly the cadence the
-  // reported bug oscillated on. Every sample must agree: the heading stays
-  // visible and the row's position relative to it never flips.
-  for (let i = 0; i < 3; i++) {
+  await expect(underlyingHeading).toHaveCount(0)
+  for (let i = 0; i < 2; i++) {
     await page.waitForTimeout(5500)
-    await expect(underlyingHeading, `still under Onderliggende code at tick ${i}`).toBeVisible()
+    await expect(underlyingHeading, `no heading at tick ${i}`).toHaveCount(0)
     await expect(storeHelperRow, `row still present at tick ${i}`).toHaveCount(1)
-    const headingBox = await underlyingHeading.boundingBox()
-    const rowBox = await storeHelperRow.boundingBox()
-    expect(rowBox.y, `row stays BELOW the Onderliggende-code heading at tick ${i}`).toBeGreaterThan(headingBox.y)
   }
 })

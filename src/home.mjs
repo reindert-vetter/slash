@@ -3884,8 +3884,12 @@ function recomputeLeftList() {
   // A header whose every changed line shows inside a block that uses it
   // (import_inline.go) has nothing of its own left to review.
   for (const id of Object.keys(state.inlinedHeaders || {})) if (state.inlinedHeaders[id]) hidden.add(id)
+  // A resolved-call target whose only caller is a TEST (testCallTargetIds) is
+  // NOT pushed to "Onderliggende code": it follows the ordinary file/category
+  // rank; it still shows as a child under the test in the panel. Only
+  // relation children go to rank 3.
   const testTargetIds = testCallTargetIds()
-  const childIds = new Set([...state.relations.map((r) => r.childId), ...testTargetIds])
+  const childIds = new Set(state.relations.map((r) => r.childId))
   const selId = state.blocks[state.selected] && state.blocks[state.selected].id
   const q = (state.search || '').trim().toLowerCase()
   // A comment item that hangs on a real source line (b.lineAnchored, see
