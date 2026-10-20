@@ -286,6 +286,10 @@ from either `'comment'` or `'thread'`, and one `←` returns directly to
   **own code blocks** (`cs.previewPos`, see "`↓` walks the chat's own code
   blocks" below) — only once both are walked through (or when there is
   neither) does the "advance to the next block" behaviour below take over.
+  The tasks rung is only walked while `cs.previewPos === 0` (otherwise every ↓ on a
+  card stepped back up onto the first row: the extra "jump up" stop) and only over
+  rows actually rendered (`walkableClaudeTasks`), so the cursor never parks on an
+  invisible row. Test: `tests/claude-tasks-down-walk.spec.mjs`.
 - **`↓` past the last code block** (nothing further to walk at all):
   **explicit request, deliberately NOT** the "↓ loopt door" convention
   `advanceFromComment` uses at the bottom of a comment thread — falling into

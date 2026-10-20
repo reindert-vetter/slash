@@ -5140,6 +5140,16 @@ function otherClaudeChats() {
   return otherClaudeChatsAll().slice(0, MAX_CHAT_ROWS)
 }
 
+// walkableClaudeTasks — how many "andere chats" rows ↓/↑ may stop on: the
+// logical list, but never more than the rows actually rendered, so the cursor
+// can't park on an invisible row (reviewer report: a stop with no visible
+// selection after the composer).
+function walkableClaudeTasks() {
+  const n = otherClaudeChats().length
+  if (n === 0) return 0
+  return Math.min(n, document.querySelectorAll('[data-testid=claude-task-row]').length)
+}
+
 // claudeMoreChatsNote — the plain "+n meer" text for whatever MAX_CHAT_ROWS
 // cut off, '' when nothing was. Deliberately not a row: it is not navigable
 // and must not shift the ↓/↑ cursor's own indexing.
@@ -6286,9 +6296,9 @@ export function handleRelatedKey(key) {
         if (cs.previewPos > 0) {
           focusPreviewCard()
         } else {
-          const tasks = otherClaudeChats()
-          if (tasks.length > 0) {
-            cs.claudeTasksPos = tasks.length
+          const taskCount = walkableClaudeTasks()
+          if (taskCount > 0) {
+            cs.claudeTasksPos = taskCount
             focusClaudeTaskRow()
           } else {
             focusClaudeComposer()
@@ -6318,8 +6328,10 @@ export function handleRelatedKey(key) {
       // non-zero, see CodePreviewPanel/claudeTaskRow), so a stale non-zero
       // leftover would otherwise keep the last task row marked active at the
       // same time as a code-preview card.
-      const tasks = otherClaudeChats()
-      if (cs.claudeTasksPos < tasks.length) {
+      // Only while NOT yet in the cards: claudeTasksPos is 0 for the whole time
+      // previewPos > 0, so without this guard every ↓ on a card stepped back
+      // up onto the first task row (the extra "jump up" stop between cards).
+      if (cs.previewPos === 0 && cs.claudeTasksPos < walkableClaudeTasks()) {
         cs.claudeTasksPos += 1
         focusClaudeTaskRow()
         return true
