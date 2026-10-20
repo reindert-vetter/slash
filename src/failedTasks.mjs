@@ -42,6 +42,7 @@ import { fetchProblems, problemRunRow, problemPostRow, problemClientRow } from '
 // nothing about this module, so no cycle.)
 import { isAuthProblemOpen } from './authStatus.mjs'
 import { t } from './i18n.mjs'
+import { holdReloadWhile } from './selfUpdate.mjs'
 
 // SNOOZE_MS — "ik moet het voor 5 minuten kunnen negeren".
 const SNOOZE_MS = 5 * 60 * 1000
@@ -148,6 +149,9 @@ export async function showFailedTasksNow() {
 // takes the row out and calls it; the action re-adds its own row if it fails
 // again. Without it there is nothing to redo, so retry-all only clears the row.
 let clientFailureSeq = 0
+// A client failure exists only in this tab: hold the restart-reload
+// (selfUpdate.mjs) until the reviewer retried or ignored it.
+holdReloadWhile(() => fs.clientFailures.length > 0)
 export function showClientFailure({ title, error, retry }) {
   fs.snoozedUntil = 0
   writeSnooze(0)

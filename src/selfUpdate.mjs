@@ -71,8 +71,25 @@ function isTyping() {
   return false
 }
 
+// Reload holds: another module can veto an automatic reload while it holds
+// something that only lives in this tab's memory (failedTasks.mjs: a review
+// that never reached the server — reloading would silently drop it).
+const reloadHolds = []
+export function holdReloadWhile(fn) {
+  reloadHolds.push(fn)
+}
+function reloadHeld() {
+  return isTyping() || reloadHolds.some((fn) => {
+    try {
+      return !!fn()
+    } catch (_) {
+      return false
+    }
+  })
+}
+
 function tryReload() {
-  if (isTyping()) {
+  if (reloadHeld()) {
     su.reloadPending = true
     return
   }
@@ -86,9 +103,13 @@ async function loadStatus() {
     const body = await res.json()
     su.down = false
     su.status = body
-    if (body && body.running) {
-      if (su.bootRev === null) su.bootRev = body.running
-      else if (body.running !== su.bootRev) tryReload()
+    // `running` (the stamped commit) when there is one; otherwise the server
+    // process's own boot id — a `go run .` dev server stamps no commit, and
+    // without this fallback a tab never noticed a restart onto new code.
+    const rev = body && (body.running || body.boot)
+    if (rev) {
+      if (su.bootRev === null) su.bootRev = rev
+      else if (rev !== su.bootRev) tryReload()
     }
   } catch (err) {
     // The server is restarting (or briefly gone): poll fast until it's back.
@@ -133,7 +154,7 @@ export function initSelfUpdate() {
   // deferred reload once the reviewer stops typing.
   setInterval(() => {
     su.now = Date.now()
-    if (su.reloadPending && !isTyping()) location.reload()
+    if (su.reloadPending && !reloadHeld()) location.reload()
   }, 1000)
 }
 

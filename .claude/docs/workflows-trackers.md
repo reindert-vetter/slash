@@ -932,6 +932,14 @@ commit only. Backend `self_update.go`, frontend `src/selfUpdate.mjs`.
   survive a reload through `draftStorage.mjs`, but the plan-page chat and the
   general chat overlay do not, and an unfocused half-typed field there is still
   lost on reload (accepted, known risk).
+  **No stamped commit (`go run .`, `running: ""`):** the tab pins `boot`
+  instead — a per-process id (`processBoot`, `self_update.go`) — so a dev
+  restart still reloads every tab onto the new frontend code. Without it a tab
+  opened before a restart ran the old JS forever (seen: a failed-tasks row
+  whose "Alles opnieuw proberen" predated its own fix). **Also held** while
+  the failed-tasks dialog has a client failure (`holdReloadWhile`,
+  `failedTasks.mjs`): that row — e.g. a review that never reached the server —
+  exists only in the tab's memory, so a reload would silently drop it.
 - **UI:** the row sits at the top of both bells' dropdowns
   (`selfUpdateSection`); the bell's badge adds 1 only for something to act on
   — `notice` or a held-back reload (`selfUpdateNeedsAttention`), never for

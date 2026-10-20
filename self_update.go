@@ -530,6 +530,7 @@ type selfUpdateStatus struct {
 	Enabled   bool      `json:"enabled"`
 	Reason    string    `json:"reason,omitempty"`
 	Running   string    `json:"running"`
+	Boot      string    `json:"boot"` // this process's start; see processBoot
 	Phase     string    `json:"phase"` // idle|checking|building|notice|waiting|restarting|failed
 	Outcome   string    `json:"outcome,omitempty"`
 	Target    string    `json:"target,omitempty"`
@@ -697,10 +698,17 @@ func (m *TaskManager) latestSelfUpdateRun() string {
 	return c.runID
 }
 
+// processBoot identifies this server process. A tab falls back to it when
+// `running` is empty (a `go run .` dev server has no stamped vcs.revision), so
+// a restart there still reloads every open tab onto the new frontend code —
+// before this, a tab opened before the restart kept the old JS forever (a
+// failed-tasks dialog whose "Alles opnieuw proberen" predated the fix for it).
+var processBoot = fmt.Sprintf("boot-%d", time.Now().UnixNano())
+
 // SelfUpdateStatus serves GET /api/update/status. Read-only: no git call.
 func (m *TaskManager) SelfUpdateStatus() selfUpdateStatus {
 	u := m.selfUpdate()
-	st := selfUpdateStatus{OK: true, Enabled: u.env.Enabled, Reason: u.env.Reason, Running: u.env.RunningRev, Phase: "idle"}
+	st := selfUpdateStatus{OK: true, Enabled: u.env.Enabled, Reason: u.env.Reason, Running: u.env.RunningRev, Boot: processBoot, Phase: "idle"}
 	if !u.env.Enabled || m.engine == nil {
 		return st
 	}

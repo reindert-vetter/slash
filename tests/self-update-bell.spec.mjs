@@ -59,4 +59,31 @@ test.describe('Self-update row in the bell', () => {
     // restarting polls every 3s; the reload wipes the marker.
     await expect.poll(() => page.evaluate(() => window.__beforeReload === true), { timeout: 10_000 }).toBe(false)
   })
+
+  // A `go run .` dev server stamps no commit (`running: ''`): the tab falls
+  // back to the process's boot id, so a restart still reloads it onto the new
+  // frontend code — but not while a failure that lives only in this tab's
+  // memory (a review that never reached the server) is still open.
+  test('without a running commit a new boot id reloads the tab, held while a client failure is open', async ({ page }) => {
+    let boot = 'boot-1'
+    // 'restarting' keeps the poll at 3s (like the server-down poll after a real restart).
+    await stubStatus(page, () => ({ ok: true, enabled: true, running: '', boot, phase: 'restarting', busy: 0 }))
+    await page.goto('/pr/12903')
+    await expect(page.getByTestId('block-column')).toBeVisible()
+    await page.evaluate(async () => {
+      const m = await import('/src/failedTasks.mjs')
+      m.showClientFailure({ title: 'Review insturen is niet gelukt', error: 'geen antwoord van de server' })
+      window.__beforeReload = true
+    })
+    const dialog = page.getByTestId('failed-tasks-dialog')
+    await expect(dialog.getByTestId('problem-client')).toBeVisible()
+    boot = 'boot-2'
+    // Held: two poll rounds pass and the tab is still the same document.
+    await page.waitForTimeout(7_000)
+    expect(await page.evaluate(() => window.__beforeReload === true)).toBe(true)
+    // Ignoring the row releases the hold.
+    await dialog.getByTestId('failed-tasks-ignore-all').click()
+    await dialog.getByTestId('failed-tasks-ignore-all').click()
+    await expect.poll(() => page.evaluate(() => window.__beforeReload === true), { timeout: 10_000 }).toBe(false)
+  })
 })
