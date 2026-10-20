@@ -604,6 +604,9 @@ const state = reactive({
   // DetailPanel re-runs and its key (which encodes the code-loaded state — see the
   // key comment) flips, yielding a fresh diff binding that reads the loaded code.
   codeVersion: 0,
+  // cardRev: bumped by the missing-card guard (see ensureDetailCard) to force a
+  // fresh block-card key after arrow.js lost the card's DOM.
+  cardRev: 0,
   // langSiblings — per TRANSLATION block id → [{ locale, file, text }] of the
   // OTHER locale files of the same lang file (GET /api/langsiblings, read-only).
   // Fed into Block.mjs's translationSlot as extra, read-only columns on every
@@ -13756,6 +13759,35 @@ function warmUpAhead(token) {
     for (const kid of target.path) warm(kid)
   })
 }
+// Missing-card guard. arrow.js can (rarely) lose the selected block card's DOM
+// during a keyed move (LOCAL PATCH 7 aborts with 'chunk boundary cycle
+// detected' and the card stays gone until a refresh, although state is fine).
+// After each flush, if a diff-mode block is selected but no detail-card exists
+// in <main>, make sure its code is loaded and force a fresh card via the key.
+// One attempt per selected block id so it can never loop.
+let cardGuardId = null
+let cardGuardTimer = 0
+function ensureDetailCard() {
+  clearTimeout(cardGuardTimer)
+  cardGuardTimer = setTimeout(() => {
+    const b = curBlock()
+    if (!b || state.mode !== 'diff' || state.focusLevel !== 0 || state.showDescription) return
+    if (b.code == null) ensureCode(b)
+    if (document.querySelector('main [data-testid="detail-card"]')) {
+      cardGuardId = null
+      return
+    }
+    if (cardGuardId === b.id) return
+    cardGuardId = b.id
+    state.cardRev++
+  }, 150)
+}
+window.addEventListener('arrow-chunk-abort', ensureDetailCard)
+watch(
+  () => [state.selected, state.blocks.length, state.codeVersion, state.mode, state.focusLevel, state.showDescription],
+  ensureDetailCard,
+)
+
 watch(
   () => [state.selected, state.change, state.gran, state.mode, state.focusLevel, state.drill, state.drillCursor, state.classMethodSel, state.blocks.length],
   () => {
@@ -17924,6 +17956,7 @@ function DetailPanel(state) {
         // child of <main>) — see "Unfocused columns collapse into a single
         // shared rail" in .claude/docs/drilling.md. So this slot simply has
         // nothing of its own to render while unfocused.
+        void state.cardRev
         if (!focusedHere) return []
         // The look-ahead preview is the next VISIBLE row, not the raw next
         // index — the same scan ↓ uses (previewIndexAfter/stepVisibleFrom
@@ -18348,6 +18381,7 @@ function DetailPanel(state) {
               ':' +
               b.side +
               langSibKeyPart +
+              (i === sel ? ':r' + state.cardRev : '') +
               prDescKeyPart(b),
           )
           out.push(card)

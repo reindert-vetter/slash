@@ -276,6 +276,13 @@ restore instructions.
   instances observed so far, not the general "a stale ref can reach
   `L`/`_`" class, and not (yet) the array-content share of it.
 
+- **LOCAL PATCH 9** — PATCH 7's cycle-abort in `L` also dispatches
+  `window` event `arrow-chunk-abort` after its `console.error`. The abort alone
+  left the selected block card missing until a refresh; `ensureDetailCard`
+  (`home.mjs`, also run from a `watch`) re-creates it by bumping `state.cardRev`
+  (part of the card key), once per selected block id. Reapply on upgrade.
+  Test: `tests/detail-card-self-heal.spec.mjs`.
+
 ## Never give two entries of one keyed list the same `.key()`
 
 arrow's keyed reconciler keeps a `_k` → chunk map (`n[R]` in `re`'s array

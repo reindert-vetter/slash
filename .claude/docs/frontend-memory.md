@@ -1255,3 +1255,7 @@ huge virtualized block shows the plain spacer instead of real rows until the
 cursor itself moves there (↓/↑/Space/search). Not attempted this round: a
 scroll-driven window extension. The reported complaint was specifically about
 keystroke navigation cost, which this fully addresses.
+
+## Missing block card after a chunk-cycle abort
+
+Symptom: the active block card is gone (RelatedPanel still shows) until a refresh; debug log has `arrow: chunk boundary cycle detected, move aborted`. LOCAL PATCH 9 dispatches `arrow-chunk-abort`; `ensureDetailCard` in `home.mjs` (also on a post-flush `watch`) re-creates the card via `state.cardRev`, one attempt per block id. Root cause (array-content share of PATCH 8) is still open.
