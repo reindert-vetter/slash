@@ -5127,17 +5127,48 @@ const MAX_GROUP = 5
 function isPureDeletionRow(r) {
   return !!r.leftMark && r.rightMark !== 'ins'
 }
+// A selection break: a changed row starting a new construct (docblock/comment
+// block, attribute, function/method, class-like) opens a new group even inside
+// a run of changed rows. NOT `//` comments and NOT class constants/properties.
+const BREAK_DOC_RE = /^\/\*/
+const BREAK_ATTR_RE = /^#\[/
+const BREAK_FUNC_RE =
+  /^(?:(?:abstract|final|public|protected|private|static|async|export|default)\s+)*function\b/
+const BREAK_CLASS_RE =
+  /^(?:(?:abstract|final|readonly|export|default)\s+)*(?:class|interface|trait|enum)\s/
+export function isSelectionBreakRow(r) {
+  const t = String((r.right != null ? r.right : r.left) || '').trim()
+  return (
+    BREAK_DOC_RE.test(t) || BREAK_ATTR_RE.test(t) || BREAK_FUNC_RE.test(t) || BREAK_CLASS_RE.test(t)
+  )
+}
 export function changeGroups(rows) {
   const groups = []
   let run = null
+  // Inside a docblock, or right after a docblock/attribute, a function/class
+  // line stays with its own docblock instead of splitting from it.
+  let inDoc = false
+  let afterLead = false
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]
     const changed = rowChanged(r)
+    const txt = String((r.right != null ? r.right : r.left) || '').trim()
     if (!changed) {
       run = null
+      inDoc = afterLead = false
       continue
     }
-    if (!run || (run.end - run.start + 1 >= MAX_GROUP && hasLetter(r) && !isPureDeletionRow(r))) {
+    const brk = !inDoc && !afterLead && isSelectionBreakRow(r)
+    const wasInDoc = inDoc
+    if (BREAK_DOC_RE.test(txt) && !inDoc && !afterLead) inDoc = !txt.includes('*/')
+    else if (inDoc && txt.includes('*/')) inDoc = false
+    const isLead = BREAK_DOC_RE.test(txt) || BREAK_ATTR_RE.test(txt) || wasInDoc || inDoc
+    afterLead = isLead
+    if (
+      !run ||
+      brk ||
+      (run.end - run.start + 1 >= MAX_GROUP && hasLetter(r) && !isPureDeletionRow(r))
+    ) {
       run = { start: i, end: i }
       groups.push(run)
     } else {

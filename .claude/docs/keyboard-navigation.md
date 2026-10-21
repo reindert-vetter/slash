@@ -958,6 +958,15 @@ there, the code is gone). An unchanged row still breaks the run, so a deletion
 group never swallows the code around it. `blockRows(b)` produces exactly the
 same aligned rows as the render, so navigation and highlight never diverge.
 
+A group also **starts fresh at a selection-break row** (`isSelectionBreakRow`,
+`Block.mjs`): a `/**` or `/*` comment block, a `#[` attribute, a function
+declaration (modifiers `public/protected/private/static/abstract/final`,
+`async`/`export`, plus TS `function`) or a `class/interface/trait/enum` line —
+so the `use` lines above a docblock and the docblock itself are two selections.
+A function/class line directly after its own docblock/attribute stays with it,
+and `//` comments and class constants/properties deliberately do not break.
+Test: `tests/selection-break.spec.mjs`.
+
 The selected block gets the active group as a reactive `activeGroup` function
 (reads `state.mode`/`selected`/`change`), so the pane re-highlights without
 re-rendering the whole `DetailPanel`. Active rows get a stronger tint + an inset
