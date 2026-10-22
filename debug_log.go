@@ -255,6 +255,9 @@ func clearDebugLogFile(dir string) error {
 	}
 	debugLogMu.Lock()
 	defer debugLogMu.Unlock()
+	// The heap profiles mem_watch.go writes are diagnostics of the same kind,
+	// so the same "wipe it" button reclaims them (best-effort).
+	_ = removeHeapProfiles(dir)
 	return writeDebugLogLines(debugLogPath(dir), nil)
 }
 

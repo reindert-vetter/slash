@@ -82,6 +82,9 @@ func runServe(args []string) {
 	if err := os.MkdirAll(resolvedData, 0o755); err != nil {
 		log.Fatalf("mkdir %s: %v", resolvedData, err)
 	}
+	startMemWatch(resolvedData)
+	servePprofIfEnabled()
+	defer removeRunLock(resolvedData)
 
 	// Bind the listener as early as possible — before opening the DB and
 	// before newTasks (which itself runs a synchronous slice of startup:

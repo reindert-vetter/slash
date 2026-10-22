@@ -1087,6 +1087,9 @@ type inboxRefreshResult struct {
 // TaskManager registers the workflows + their activities on a tembed engine and
 // runs the per-execution GitHub poller.
 type TaskManager struct {
+	// codeCommentRunPR caches runID -> PR number (int, -1 if unparsable) of every
+	// task_code_comment run; see knownGithubIDs.
+	codeCommentRunPR sync.Map
 	engine *tembed.Engine
 	gh     github.Client
 	// ghByRepo holds one github.Client per NON-primary repo (see ghFor). Lazily
@@ -8152,20 +8155,43 @@ func (m *TaskManager) knownGithubIDs(pr int) map[int64]bool {
 		if r.Workflow != WorkflowTaskCodeComment {
 			continue
 		}
-		raw, err := m.engine.Input(r.ID)
-		if err != nil {
+		// A run's input never changes, so which PR it belongs to is cached
+		// once. Without this every PR's poll loaded the FULL event history of
+		// EVERY task_code_comment run of every PR (Engine.Input + History = two
+		// loads per run), which at startup was multiple GB of short-lived
+		// garbage and pushed the process into macOS jetsam range.
+		runPR, ok := m.codeCommentRunPR.Load(r.ID)
+		var hist []tembed.Event
+		if !ok {
+			h, err := m.engine.History(r.ID)
+			if err != nil {
+				continue
+			}
+			p := -1
+			if len(h) > 0 && h[0].Type == tembed.EventWorkflowStarted {
+				var in CodeCommentInput
+				if json.Unmarshal(h[0].Payload, &in) == nil {
+					p = in.PR
+				}
+			}
+			m.codeCommentRunPR.Store(r.ID, p)
+			runPR, hist = p, h
+		}
+		if runPR.(int) != pr {
 			continue
 		}
-		var in CodeCommentInput
-		if json.Unmarshal(raw, &in) != nil || in.PR != pr {
-			continue
+		if hist == nil {
+			h, err := m.engine.History(r.ID)
+			if err != nil {
+				continue
+			}
+			hist = h
 		}
-		if in.ImportedRootID != 0 {
-			known[in.ImportedRootID] = true
-		}
-		hist, err := m.engine.History(r.ID)
-		if err != nil {
-			continue
+		if len(hist) > 0 && hist[0].Type == tembed.EventWorkflowStarted {
+			var in CodeCommentInput
+			if json.Unmarshal(hist[0].Payload, &in) == nil && in.ImportedRootID != 0 {
+				known[in.ImportedRootID] = true
+			}
 		}
 		for _, ev := range hist {
 			if ev.Type != tembed.EventActivityCompleted {
