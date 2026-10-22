@@ -154,5 +154,8 @@ func TestChatPromptsNumberProposals(t *testing.T) {
 				t.Fatalf("%s: expected the numbered-proposal rule to mention %q", name, want)
 			}
 		}
+		if !strings.Contains(p, "direct door, zonder haar eerst als") {
+			t.Fatalf("%s: expected the 'single solution on a change request: just do it' rule", name)
+		}
 	}
 }

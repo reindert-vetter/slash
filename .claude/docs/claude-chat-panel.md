@@ -3811,6 +3811,12 @@ Opus→Sonnet escalation, the `"retry"` Signal) is in
   why it must NOT be first: `defaultSel` selects the list's first real item, and
   a reflexive Enter should never land on an action that is a silent no-op
   whenever nothing failed. See the order note on `claudeChatCommandsFor`.
+- **Single solution = just do it:** when the reviewer already said Claude may
+  change something (or asked for a concrete change) and Claude sees exactly one
+  reasonable solution, it applies it directly (`{"type":"need_write"}` in the
+  read-only turn) instead of proposing first. Only an explicit request for a
+  proposal/options, or several serious alternatives, keeps it at numbered
+  `Voorstel N:` text. Volunteered improvements stay proposals.
 - **The model pill** (`claudeModelPill`, `data-testid=claude-message-model`)
   names the model behind an assistant turn **only when it isn't the default**
   (`DEFAULT_MODEL`/`MODEL_LABEL` mirror `chatModelLabel` in
