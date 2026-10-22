@@ -233,57 +233,86 @@ type diffOp struct {
 // diffLines is the Go port of Block.mjs diffLines: a classic LCS line diff that
 // matches lines whitespace-insensitively (via wsKey, à la `git diff -w`).
 func diffLines(a, b []string) []diffOp {
-	n := len(a)
-	m := len(b)
-	ka := make([]string, n)
-	for i, s := range a {
-		ka[i] = wsKey(s)
+	n0, m0 := len(a), len(b)
+	key := func(l []string) []string {
+		k := make([]string, len(l))
+		for i, s := range l {
+			k[i] = wsKey(s)
+		}
+		return k
 	}
-	kb := make([]string, m)
-	for j, s := range b {
-		kb[j] = wsKey(s)
+	kaAll, kbAll := key(a), key(b)
+	// Common prefix/suffix trim, like the JS diffLines: a whole-file block of
+	// 100k lines with a few changed lines must only pay for the changed middle.
+	// Without it the dp table below was n*m cells (measured: ~96 GB for a
+	// 111k-line translations file, which got the server SIGKILLed).
+	pre := 0
+	for pre < n0 && pre < m0 && kaAll[pre] == kbAll[pre] {
+		pre++
 	}
-	// dp[i][j] = LCS length of ka[i:], kb[j:].
-	dp := make([][]int, n+1)
-	for i := range dp {
-		dp[i] = make([]int, m+1)
+	suf := 0
+	for suf < n0-pre && suf < m0-pre && kaAll[n0-1-suf] == kbAll[m0-1-suf] {
+		suf++
 	}
-	for i := n - 1; i >= 0; i-- {
-		for j := m - 1; j >= 0; j-- {
-			if ka[i] == kb[j] {
-				dp[i][j] = dp[i+1][j+1] + 1
-			} else if dp[i+1][j] >= dp[i][j+1] {
-				dp[i][j] = dp[i+1][j]
-			} else {
-				dp[i][j] = dp[i][j+1]
+	ops := make([]diffOp, 0, n0+m0-pre-suf)
+	for p := 0; p < pre; p++ {
+		ops = append(ops, diffOp{op: "eq", left: a[p], right: b[p]})
+	}
+	n, m := n0-pre-suf, m0-pre-suf
+	ka, kb := kaAll[pre:pre+n], kbAll[pre:pre+m]
+	if (n+1)*(m+1) > diffMaxCells {
+		// Too big for an LCS table: report the whole middle as replaced.
+		for i := 0; i < n; i++ {
+			ops = append(ops, diffOp{op: "del", left: a[pre+i]})
+		}
+		for j := 0; j < m; j++ {
+			ops = append(ops, diffOp{op: "ins", right: b[pre+j]})
+		}
+	} else {
+		// dp[i*(m+1)+j] = LCS length of ka[i:], kb[j:].
+		w := m + 1
+		dp := make([]int32, (n+1)*w)
+		for i := n - 1; i >= 0; i-- {
+			for j := m - 1; j >= 0; j-- {
+				if ka[i] == kb[j] {
+					dp[i*w+j] = dp[(i+1)*w+j+1] + 1
+				} else if dp[(i+1)*w+j] >= dp[i*w+j+1] {
+					dp[i*w+j] = dp[(i+1)*w+j]
+				} else {
+					dp[i*w+j] = dp[i*w+j+1]
+				}
 			}
 		}
-	}
-	var ops []diffOp
-	i, j := 0, 0
-	for i < n && j < m {
-		if ka[i] == kb[j] {
-			ops = append(ops, diffOp{op: "eq", left: a[i], right: b[j]})
-			i++
-			j++
-		} else if dp[i+1][j] >= dp[i][j+1] {
-			ops = append(ops, diffOp{op: "del", left: a[i]})
-			i++
-		} else {
-			ops = append(ops, diffOp{op: "ins", right: b[j]})
-			j++
+		i, j := 0, 0
+		for i < n && j < m {
+			if ka[i] == kb[j] {
+				ops = append(ops, diffOp{op: "eq", left: a[pre+i], right: b[pre+j]})
+				i++
+				j++
+			} else if dp[(i+1)*w+j] >= dp[i*w+j+1] {
+				ops = append(ops, diffOp{op: "del", left: a[pre+i]})
+				i++
+			} else {
+				ops = append(ops, diffOp{op: "ins", right: b[pre+j]})
+				j++
+			}
+		}
+		for ; i < n; i++ {
+			ops = append(ops, diffOp{op: "del", left: a[pre+i]})
+		}
+		for ; j < m; j++ {
+			ops = append(ops, diffOp{op: "ins", right: b[pre+j]})
 		}
 	}
-	for i < n {
-		ops = append(ops, diffOp{op: "del", left: a[i]})
-		i++
-	}
-	for j < m {
-		ops = append(ops, diffOp{op: "ins", right: b[j]})
-		j++
+	for p := suf; p > 0; p-- {
+		ops = append(ops, diffOp{op: "eq", left: a[n0-p], right: b[m0-p]})
 	}
 	return ops
 }
+
+// diffMaxCells caps the LCS table of diffLines's changed middle (4M cells =
+// 16 MB of int32). Beyond it the middle is reported as one del run + one ins run.
+const diffMaxCells = 4_000_000
 
 // wsKey mirrors JS s.replace(/\s+/g, ”): drop every whitespace character.
 func wsKey(s string) string {

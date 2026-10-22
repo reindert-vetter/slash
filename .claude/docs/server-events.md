@@ -277,3 +277,12 @@ serves `net/http/pprof` on loopback only when `SLASH_PPROF=127.0.0.1:<port>`.
 Root cause found: `knownGithubIDs` re-read every `task_code_comment` run's full
 history per PR poll; it now caches runID -> PR. Beware the same shape
 (`Engine.Input`/`History` in a loop over `Engine.Runs()`): each is a full load.
+
+**Second root cause (96 GB in one request):** the Go port `diffLines`
+(`blockstats.go`, behind `/api/approvalsummary`) lacked the JS version's
+common prefix/suffix trim and built an n*m table of 8-byte ints: a 111k-line
+whole-file block (`translations.babel`) = ~96 GB, within one sampler tick, then
+SIGKILL. Now: trim, a flat `int32` table, and a 4M-cell cap (above it the
+middle is one del run + one ins run). The sampler runs every 5 s and has an
+emergency brake: heap > 8 GB writes a profile, logs and `os.Exit(1)`. When
+porting a JS algorithm to Go, port its guards too.

@@ -13,6 +13,7 @@ import (
 	runtimedebug "runtime/debug"
 	"runtime/pprof"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -31,12 +32,16 @@ import (
 
 const (
 	memSoftLimitBytes   = 3 << 30
-	memWatchEvery       = 30 * time.Second
+	memWatchEvery       = 5 * time.Second
 	memProfileThreshold = 2 << 30
-	memProfileMinGap    = 10 * time.Minute
-	memProfileKeep      = 5
-	heapProfileDirName  = "heap-profiles"
-	runLockFileName     = "server.lock"
+	// memEmergencyBytes: above this the process writes a profile, logs and exits
+	// rather than letting a runaway allocation swap the whole Mac to death and end
+	// in a SIGKILL (measured: one request reached 96 GB within one 30 s tick).
+	memEmergencyBytes  = 8 << 30
+	memProfileMinGap   = 10 * time.Minute
+	memProfileKeep     = 5
+	heapProfileDirName = "heap-profiles"
+	runLockFileName    = "server.lock"
 )
 
 func heapProfileDir(dataDir string) string { return filepath.Join(dataDir, heapProfileDirName) }
@@ -67,6 +72,13 @@ func startMemWatch(dataDir string) {
 			var ms runtime.MemStats
 			runtime.ReadMemStats(&ms)
 			line := memLine(&ms)
+			if ms.HeapAlloc > memEmergencyBytes {
+				p, err := writeHeapProfile(dataDir, now)
+				log.Printf("mem_watch: EMERGENCY heap=%dMB > %dMB, exiting (profile %s, err %v): %s",
+					ms.HeapAlloc>>20, memEmergencyBytes>>20, p, err, line)
+				removeRunLock(dataDir)
+				os.Exit(1)
+			}
 			writeRunLock(dataDir, os.Getpid(), now, line)
 			if ms.HeapAlloc > memProfileThreshold {
 				log.Printf("mem_watch: HEAP LARGE %s", line)
@@ -90,9 +102,12 @@ func memLine(ms *runtime.MemStats) string {
 		ms.HeapAlloc>>20, ms.Sys>>20, runtime.NumGoroutine(), countOpenFDs(), ms.NumGC)
 }
 
+var fdCountErrOnce sync.Once
+
 func countOpenFDs() int {
 	entries, err := os.ReadDir("/dev/fd")
 	if err != nil {
+		fdCountErrOnce.Do(func() { log.Printf("mem_watch: fd count: %v", err) })
 		return -1
 	}
 	return len(entries)

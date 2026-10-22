@@ -62,7 +62,9 @@ Two measures for a whole-file fallback block of thousands of lines
 
 1. **`diffLines` trims the common prefix/suffix** (whitespace-insensitively, the
    same `key` as its DP) before building the LCS table, so the first-contact
-   spike collapses to the changed middle.
+   spike collapses to the changed middle. The Go port (`blockstats.go`) does the
+   same and additionally caps the LCS table at 4M cells (see "Memory watch" in
+   `server-events.md` for the 96 GB incident that made this necessary).
 2. Blocks over **`COLLAPSE_MIN_ROWS` (300 rows)** collapse runs of ≥
    **`COLLAPSE_MIN_RUN` (10)** unchanged rows into one **clickable** "⋯ N
    ongewijzigde regels" spacer (`data-testid=collapsed-run`). Smaller blocks
