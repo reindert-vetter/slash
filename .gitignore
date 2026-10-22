@@ -85,3 +85,7 @@ data/review-shots/
 # (timestamps change on every refresh). Never committed, otherwise the
 # self_update workflow keeps refusing on a dirty working tree.
 /plans/
+
+# mem_watch.go diagnostics
+data/heap-profiles/
+data/server.lock

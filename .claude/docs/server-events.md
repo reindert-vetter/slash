@@ -262,3 +262,18 @@ after the client goes away, the resync-after-drop frame). Frontend behaviour is
 covered where it is used — `tests/claude-chat-progress.spec.mjs` fulfils
 `/api/events` with hand-written frames, `tests/callresolve-live-update.spec.mjs`
 the same for `callresolve.changed`.
+
+## Memory watch (`mem_watch.go`) — why the server may vanish with `signal: killed`
+
+A bare `signal: killed` printed by `go run` means the slash process itself got
+SIGKILL (macOS jetsam kills the largest process under memory pressure; the
+JetsamEvent reports in `/Library/Logs/DiagnosticReports` named `slash`). The
+server therefore: sets a soft 3 GiB `debug.SetMemoryLimit`, logs
+heap/goroutines/fds every 30 s (only above 512 MB), writes a heap profile to
+`data/heap-profiles/` above 2 GB (max 5, removed by the settings "Log wissen"
+button through the `debug_log` clear Activity), keeps `data/server.lock` so the
+next start logs "previous run did not exit cleanly" with the last sample, and
+serves `net/http/pprof` on loopback only when `SLASH_PPROF=127.0.0.1:<port>`.
+Root cause found: `knownGithubIDs` re-read every `task_code_comment` run's full
+history per PR poll; it now caches runID -> PR. Beware the same shape
+(`Engine.Input`/`History` in a loop over `Engine.Runs()`): each is a full load.
