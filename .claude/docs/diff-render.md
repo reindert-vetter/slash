@@ -55,6 +55,19 @@ reactive-proxy notify on something nothing reads reactively. Its key is the
 **reference identity of `b.code`**: `ensureCode` always sets `b.code` wholesale,
 never mutating in place, so a changed reference is an exact invalidation check.
 
+## Single-pane right render folds long pure-deletion runs
+
+In the single-pane right/new render (`fit` stand, narrow drilled column) a pure
+deletion is an empty filler row, so a function that lost ~150 lines rendered
+~150 blank rows (FillStats::handle, PR 14324). `fillerPlan` (`Block.mjs`) folds
+a run of >= 4 such rows into one `⋯ N verwijderde regels` spacer (the
+`collapsedRunHTML` spacer, `removed` label; click expands). Rows inside the
+active cursor group, commented rows and expanded runs stay real rows, so the
+cursor walking in opens just its row(s); approve/arrows still work on the row
+index. Only for `codePane(..., foldFillers=true)` on the right side, and only
+when `collapsePlan` (huge block) didn't already plan. Test:
+`tests/diff-fit-fold-removed.spec.mjs`.
+
 ## Huge blocks: prefix/suffix trim + context collapsing
 
 Two measures for a whole-file fallback block of thousands of lines

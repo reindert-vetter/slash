@@ -2581,7 +2581,7 @@ function codeDiff(
         data-testid="code-diff"
         data-hints="${() => (hintsEnabled() ? 'on' : 'off')}"
       >
-        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang)}
+        ${codePane('new', c.new, rows, 'right', 'border-emerald-100 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', activeGroup, 'w-full', approvedFn, commentedFn, approvedCallsFn, wrap, lineSummaryFn, diffActive, isYaml, commentRangeFn, true, lang, undefined, undefined, true)}
         ${scrollHint('up')}
         ${scrollHint('down')}
       </div>
@@ -3030,6 +3030,10 @@ function codePane(
   // Every other call site keeps the default (no-op), matching Block()'s own
   // default.
   styleFn = () => '',
+  // foldFillers: true ONLY for the single-pane right/new render (fit stand,
+  // narrow drilled column) — long runs of pure-deletion filler rows fold into
+  // one spacer there, see fillerPlan.
+  foldFillers = false,
 ) {
   return html`
     <div
@@ -3043,7 +3047,7 @@ function codePane(
           @click="${(e) => onPaneClick(rows, e)}"
           .innerHTML="${() => {
             disarmRowPairHover()
-            return paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), emitMeta, lang, cursorGroupFn)
+            return paneHTML(rows, sideKey, activeGroup(), approvedFn(), commentedFn(), approvedCallsFn(), wrap, diffActive(), lineSummaryFn(), isYaml, commentRangeFn(), emitMeta, lang, cursorGroupFn, foldFillers)
           }}"
         ></code>
       </div>
@@ -4144,6 +4148,44 @@ function collapsePlan(rows, commented) {
   return collapsedAny ? segs : null
 }
 
+// fillerPlan — the single-pane right/new render (fit stand / narrow drilled
+// column) shows a pure deletion as an empty filler row. A function that lost
+// 150 lines then rendered 150 blank rows. Runs of >= FILLER_MIN_RUN such rows
+// fold into one "⋯ N verwijderde regels" spacer (same `skip` segment shape and
+// click-to-expand as collapsePlan). Rows inside the active cursor group, a
+// commented row, or an already-expanded run stay real rows, so the cursor
+// walking into a folded run opens just the row(s) it stands on; ↑/↓/approve
+// still operate on the row index, untouched. Reads collapseUi.v so an expand
+// click re-renders. Returns null when nothing folds.
+const FILLER_MIN_RUN = 4
+function fillerPlan(rows, group, commented) {
+  void collapseUi.v
+  const expanded = expandedRunsByRows.get(rows)
+  const keep = new Uint8Array(rows.length)
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    if (r.right != null || r.hidden || r.impLast || (group && i >= group.start && i <= group.end) || (commented && commented.has(i)))
+      keep[i] = 1
+  }
+  if (expanded)
+    for (const k of expanded) {
+      const d = k.indexOf('-')
+      const e = Math.min(rows.length - 1, +k.slice(d + 1) || 0)
+      for (let j = Math.max(0, +k.slice(0, d) || 0); j <= e; j++) keep[j] = 1
+    }
+  const segs = []
+  let any = false
+  for (let i = 0; i < rows.length; ) {
+    let j = i
+    while (j + 1 < rows.length && keep[j + 1] === keep[i]) j++
+    const skip = !keep[i] && j - i + 1 >= FILLER_MIN_RUN
+    if (skip) any = true
+    segs.push({ skip, start: i, end: j })
+    i = j + 1
+  }
+  return any ? segs : null
+}
+
 // collapsedRunHTML renders the spacer for one hidden run of unchanged rows.
 // The word + count carry the meaning (never colour alone — colorblind rule);
 // the ⋯ glyph and muted tint are decoration on top. Clicking expands the run
@@ -4152,12 +4194,12 @@ function collapsePlan(rows, commented) {
 // smaller line inside the same spacer: the key hierarchy the collapsed run
 // sits under, so the reviewer doesn't lose track of "which path/response/…
 // am I looking at" once the surrounding structure scrolls out of view.
-function collapsedRunHTML(start, end, breadcrumb) {
+function collapsedRunHTML(start, end, breadcrumb, removed = false) {
   const n = end - start + 1
   return (
     `<div class="block cursor-pointer select-none whitespace-pre border-y border-slate-100 dark:border-zinc-800/60 bg-slate-50 dark:bg-zinc-800/40 px-3 text-center text-[10px] leading-relaxed text-slate-400 dark:text-zinc-500 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-300"` +
     ` data-collapsed-run="${start}-${end}" data-testid="collapsed-run" title="${t('Klik om deze regels te tonen')}">` +
-    t('⋯ {n} ongewijzigde regels', { n }) +
+    (removed ? t('⋯ {n} verwijderde regels', { n }) : t('⋯ {n} ongewijzigde regels', { n })) +
     (breadcrumb
       ? `<div data-testid="collapsed-run-breadcrumb" class="mt-0.5 truncate text-slate-400 dark:text-zinc-500">${escapeHtml(breadcrumb)}</div>`
       : '') +
@@ -4270,6 +4312,8 @@ function paneHTML(
   // never invoked at all, so it establishes no new reactive dependency and
   // nothing here changes for the common case (byte-identical output).
   cursorGroupFn = null,
+  // foldFillers: see codePane. Only consulted when collapsePlan didn't plan.
+  foldFillers = false,
 ) {
   // Virtualization: decide the row window BEFORE building anything. `wrap`
   // (a prose/config file, in every stand) never virtualizes — its rows have
@@ -4278,7 +4322,9 @@ function paneHTML(
   // approximate.
   // The gate and the window are both counted in RENDERED units over the
   // collapse plan (see computeWindow), so the plan is built first.
-  const plan = collapsePlan(rows, commented)
+  const unchangedPlan = collapsePlan(rows, commented)
+  const fillPlan = !unchangedPlan && foldFillers && sideKey === 'right' ? fillerPlan(rows, group, commented) : null
+  const plan = unchangedPlan || fillPlan
   const baseSegs = plan || [{ skip: false, start: 0, end: rows.length - 1 }]
   let win = null
   if (typeof cursorGroupFn === 'function' && shouldVirtualize(rows, baseSegs, wrap)) {
@@ -4320,9 +4366,12 @@ function paneHTML(
   }
   const { segs, beforeCount, afterCount } = virtualizedSegs(baseSegs, win)
   if (beforeCount) parts.push(virtualSpacerHTML(beforeCount, 'before'))
-  const breadcrumbs = isYaml && plan ? yamlBreadcrumbsForSegs(rows, plan) : null
+  const breadcrumbs = isYaml && unchangedPlan ? yamlBreadcrumbsForSegs(rows, unchangedPlan) : null
   for (const seg of segs) {
-    if (seg.skip) parts.push(collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end)))
+    if (seg.skip)
+      parts.push(
+        collapsedRunHTML(seg.start, seg.end, breadcrumbs && breadcrumbs.get(seg.start + '-' + seg.end), !!fillPlan),
+      )
     else for (let i = seg.start; i <= seg.end; i++) pushRow(i)
   }
   if (afterCount) parts.push(virtualSpacerHTML(afterCount, 'after'))

@@ -248,6 +248,7 @@ export const EN = {
   '{done}/{total} regels goedgekeurd': '{done}/{total} lines approved',
   'Klik om deze regels te tonen': 'Click to show these lines',
   '⋯ {n} ongewijzigde regels': '⋯ {n} unchanged lines',
+  '⋯ {n} verwijderde regels': '⋯ {n} removed lines',
   oud: 'old',
   'geen preview': 'no preview',
   'code laden…': 'loading code…',
