@@ -223,6 +223,7 @@ export const EN = {
   '{count} open reactie (dit block + onderliggende code)': '{count} open reply (this block + underlying code)',
   '{count} open reacties (dit block + onderliggende code)': '{count} open replies (this block + underlying code)',
   'Goedgekeurde regels (dit block + onderliggende code)': 'Approved lines (this block + underlying code)',
+  '{own} eigen + {nested} onderliggend': '{own} own + {nested} underlying',
 
   // ── src/Block.mjs ────────────────────────────────────────────────────────
   'Verwijderd bestand': 'Deleted file',

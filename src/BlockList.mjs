@@ -1248,12 +1248,17 @@ function approvalPill(state, b) {
   const s = state.approvalSummaries && state.approvalSummaries[b.id]
   if (!s || s.total === 0) return ''
   const done = s.done === s.total
+  const nested = typeof s.own === 'number' ? s.total - s.own : 0
+  const tip =
+    nested > 0
+      ? t('{own} eigen + {nested} onderliggend', { own: s.own, nested })
+      : t('Goedgekeurde regels (dit block + onderliggende code)')
   return html`
     <span
       class="${'shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold tabular-nums ' +
       (done ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300' : 'bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-500')}"
       data-testid="block-approval"
-      title="${t('Goedgekeurde regels (dit block + onderliggende code)')}"
+      title="${tip}"
       >${done ? '✓ ' : ''}${s.done}/${s.total}</span
     >
   `

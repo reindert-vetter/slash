@@ -7769,9 +7769,13 @@ function subtreeApproveCount(b) {
   for (const x of [b, ...nestedPrBlocksCached(b)]) {
     const c = blockApproveCount(x)
     done += c.done
+  let own = 0
     total += c.total
   }
-  return { done, total }
+    if (x === b) own = c.total
+  // own: the block's OWN total, so the list pill's tooltip can split
+  // "own + underlying" (the card's own counter shows only `own`).
+  return { done, total, own }
 }
 
 // newLineToRowOf converts a 1-based NEW-side source line to its blockRows
