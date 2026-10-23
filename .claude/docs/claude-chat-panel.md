@@ -5770,3 +5770,10 @@ card highlighted at the same time as the focused input. Keyboard ↑ already
 resets them on its way back to the composer. In `home.mjs` the Enter branch
 that toggles the active card ignores Shift+Enter, so Shift+Enter in the input
 always inserts a newline. Test: `tests/claude-composer-clears-card-selection.spec.mjs`.
+
+### A text selection in a code-preview card's header does not toggle it
+
+`previewCard`'s `code-preview-toggle` header (`CodePreview.mjs`) ignores the
+`click` that a drag-select fires on mouseup when `window.getSelection()` is
+non-empty, so selecting context text never collapses the card (same idiom as
+`hasTextSelection` in `RelatedPanel.mjs`).

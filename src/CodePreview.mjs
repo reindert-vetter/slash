@@ -379,6 +379,9 @@ function previewCard(it, active, expanded, onToggle) {
           ${() =>
             it.classLabel
               ? html`<span
+          // A drag-select in the context text also fires `click` on mouseup;
+          // a real text selection wins over the toggle (don't collapse).
+          if (window.getSelection && window.getSelection().toString()) return
                   class="truncate text-[11px] font-medium text-slate-500 dark:text-zinc-500"
                   data-testid="code-preview-title"
                 >
