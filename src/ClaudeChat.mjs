@@ -1149,15 +1149,12 @@ function canSendNow(view, text) {
   return hasPendingAttachments(chatAttachmentBucket(view))
 }
 
-// attachButton is the composer's paperclip: the third way to attach an image,
-// next to paste and drag-and-drop. It exists because those two both need a
-// pointer with a file already in hand — this one opens the ordinary file
-// picker, which is also the only route for a reviewer working keyboard-first.
-//
-// The hidden <input type="file"> is a sibling rather than a wrapping <label>
-// so the button keeps its own explicit @click (the label-for-input trick would
-// put a second, implicit click path on the same element).
-function attachButton(view) {
+// attachInput is the composer's hidden file input: the third way to attach an
+// image, next to paste and drag-and-drop. It has no visible button of its own
+// anymore — the LAST item of the Claude menu ("Afbeelding toevoegen",
+// claudeChatCommandsFor in commentCommands.mjs) clicks it to open the ordinary
+// file picker, which is also the route for a reviewer working keyboard-first.
+function attachInput(view) {
   return html`<div class="contents">
     <input
       type="file"
@@ -1173,36 +1170,6 @@ function attachButton(view) {
         e.target.value = ''
       }}"
     />
-    <button
-      type="button"
-      class="flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg border border-slate-200 px-2 py-1.5 text-slate-500 hover:bg-slate-100 dark:border-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-800"
-      title="${t('Afbeelding toevoegen')}"
-      aria-label="${t('Afbeelding toevoegen')}"
-      data-testid="chat-attachment-add"
-      @click="${(e) => {
-        // stopPropagation FIRST, before anything that could unmount this
-        // button — the nested-@click ordering rule in
-        // .claude/rules/arrowjs-pitfalls.md.
-        if (e) e.stopPropagation()
-        const input = e && e.currentTarget.parentNode.querySelector('[data-testid=chat-attachment-input]')
-        if (input) input.click()
-      }}"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        class="h-4 w-4"
-      >
-        <path
-          d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
-        ></path>
-      </svg>
-    </button>
   </div>`
 }
 
@@ -1596,7 +1563,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
             }
           }}"
         ></textarea>
-        ${() => (chatAttachmentBucket(view) ? attachButton(view) : '')}
+        ${() => (chatAttachmentBucket(view) ? attachInput(view) : '')}
         <button
           class="flex min-h-[2.25rem] shrink-0 items-center justify-center rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
           data-testid="claude-chat-send"

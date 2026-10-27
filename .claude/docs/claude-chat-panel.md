@@ -5588,9 +5588,10 @@ opgeslagen of getoond.
    afbeelding bevat — een gewone tekst-paste valt ongemoeid door), een
    `@dragover`/`@drop` op de **hele kaart** (`claude-chat-card`, niet alleen
    het invoerveld: slepen vanuit Finder landt zelden precies op een
-   éénregelig veld), plus een paperclip-knop (`chat-attachment-add`) die een
-   verborgen `<input type=file>` opent — de enige route voor wie
-   toetsenbord-first werkt. Tijdens het slepen verschijnt
+   éénregelig veld), plus het **laatste item** van het Claude-menu ("Afbeelding
+   toevoegen", `add-claude-attachment`; de paperclip-knop is vervallen) dat een
+   verborgen `<input type=file>` (`chat-attachment-input`) opent — de enige route
+   voor wie toetsenbord-first werkt. Tijdens het slepen verschijnt
    `chat-attachment-drophint`: een **gestreepte rand plus het woord** "Laat
    los om de afbeelding toe te voegen" — nooit kleur alleen (de reviewer is
    kleurenblind), zelfde regel als `scrollHint`/`stepChevron`.

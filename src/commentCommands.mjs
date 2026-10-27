@@ -451,6 +451,18 @@ export function claudeChatCommandsFor(host) {
     hint: 'stop',
     run: () => cancelClaudeTurn(),
   })
+  // "Afbeelding toevoegen" — opens the composer's hidden file input (the
+  // paperclip button is gone). Deliberately LAST, after "Stop". A silent no-op
+  // when the chat has no attachment support (no input mounted).
+  items.push({
+    id: 'add-claude-attachment',
+    label: t('Afbeelding toevoegen'),
+    hint: 'bijlage',
+    run: () => {
+      const input = document.querySelector('[data-testid=chat-attachment-input]')
+      if (input) input.click()
+    },
+  })
   return withClose(items)
 }
 
