@@ -132,8 +132,8 @@ test('embedded Claude chat: enter via →, send a message, answer a question', a
   // even though the anchor comment (and its code) never changed — see "The
   // code card above the comment/Claude row must follow the anchor into
   // 'claude' too" in claude-chat-panel.md.
-  await expect(page.getByTestId('comment-target')).toBeVisible()
-  await expect(page.getByTestId('comment-target')).toContainText('Order::total')
+  // The code card above the row was removed (reviewer request).
+  await expect(page.getByTestId('comment-target')).toHaveCount(0)
   // ← goes straight back to the comment card (not to 'thread' in between).
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByTestId('reaction-compose')).toBeFocused()
@@ -1017,8 +1017,8 @@ test('a multi-line Shift selection shows a "regel N" hint above the first Claude
     await expect(page.getByTestId('claude-message-body').last()).toContainText('Ik heb naar de code gekeken')
     // The hint sits above the FIRST (own) message only — anchored on the
     // range's own gran ('group') + the first line of the merged range.
-    await expect(page.getByTestId('claude-message-anchor')).toHaveCount(1)
-    await expect(page.getByTestId('claude-message-anchor')).toContainText(/regel \d+/)
+    // The anchor line was removed (reviewer request).
+    await expect(page.getByTestId('claude-message-anchor')).toHaveCount(0)
   } finally {
     // Never leave this real comment behind on the shared PR 102 fixture.
     await page.request.post('/api/workflows/' + runId + '/signals/delete', {

@@ -27,8 +27,7 @@ test('placed comment shows code snippet + original body as first message', async
   await item.click()
 
   // Feature 1: the code snippet box shows in the thread.
-  await expect(page.getByTestId('comment-target')).toBeVisible()
-  await expect(page.getByTestId('comment-target')).toContainText('total')
+  await expect(page.getByTestId('comment-target')).toHaveCount(0)
 
   // Feature 2: the original comment body appears as the first chat bubble.
   await expect(page.getByTestId('reaction-bubble').first()).toContainText('dit is de eerste comment')

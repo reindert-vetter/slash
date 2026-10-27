@@ -274,8 +274,7 @@ test.describe('PR Review Tree — change navigation', () => {
     await expect(items.nth(1)).toHaveAttribute('data-expanded', 'false')
     const thread = items.nth(0).getByTestId('comment-thread')
     await expect(thread).toContainText('first review comment')
-    await expect(page.getByTestId('comment-target')).toBeVisible()
-    await expect(page.getByTestId('comment-target')).toContainText('billingAddress')
+    await expect(page.getByTestId('comment-target')).toHaveCount(0)
 
     // The second comment has no snippet, so the shared hint disappears.
     await items.nth(1).click()

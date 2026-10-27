@@ -2488,6 +2488,8 @@ Plain text, not colour.
 
 ### The shared `composeTargetHint` header, spanning comment + Claude
 
+> **REMOVED (reviewer request):** `home.mjs` no longer renders this header (the code card above `comment-claude-row`), in any state incl. the composer, and the Claude chat's "<gran> · regel N" anchor line (`anchorHint`, now `''`) is gone too. `composeTargetHint`/`activeComposeTargetHint` still exist in `RelatedPanel.mjs` but are unused; the history below is kept for context.
+
 `composeTargetHint` used to render inline in two places, both confined to
 `InlineComments`' own (half-width) column: inside `newCommentComposer` while
 composing, and inside `expandedConversation` for whichever comment is open.

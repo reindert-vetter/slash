@@ -4555,11 +4555,9 @@ function claudeChatView() {
     // explicitly said anchoring on the first line is an acceptable
     // simplification, and Comment carries no separate end-line field of its
     // own to show more than that anyway.
-    anchorHint: () => {
-      const c = cs.list.find((x) => x.id === cc.commentId)
-      if (!c || !c.line) return ''
-      return t('{label} · regel {n}', { label: t(GRAN_LABEL[c.gran] || 'deze context'), n: c.line })
-    },
+    // Deliberately empty: the "<gran> · regel N" line above the first turn was removed
+    // (reviewer request); ClaudeChat renders nothing for ''.
+    anchorHint: () => '',
     // The live turn: null when nothing is running. See ccProgress.
     progress: () => ccProgress(),
     // The reviewer's own not-yet-sent turns, oldest first — scoped to the

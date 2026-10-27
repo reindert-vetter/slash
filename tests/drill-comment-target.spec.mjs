@@ -59,22 +59,7 @@ test('composing a comment while a drilled column is focused targets that column,
   if ((await page.getByTestId('comment-compose').count()) === 0) {
     await openNewComment(page)
   }
-  const hint = page.getByTestId('comment-target')
-  await expect(hint).toBeVisible()
-  // The label must be the drilled child's class::method, not the top-level
-  // block's (CreatePaymentAction::execute).
-  await expect(hint).toContainText('Order::address')
-  await expect(hint).not.toContainText('CreatePaymentAction::execute')
-
-  // The "deze regel"/"een groep wijzigingen" comment-target hint (the
-  // composer's own header no longer carries a file:line, see
-  // "The shared composeTargetHint header" in .claude/docs/comments-panel.md)
-  // must reference the drilled child's file too.
-  await expect(hint).toContainText('Order.php')
-  await expect(hint).not.toContainText('CreatePaymentAction.php')
-
-  // The drilled column landed on a single-line group.
-  await expect(hint).toContainText('een groep wijzigingen')
+  // The comment-target code card was removed; the anchor is asserted on the placed comment below.
 
   // Placing it now must save+anchor on Order.php, not the top-level block's file.
   await page.getByTestId('comment-compose').fill('drilled column comment')

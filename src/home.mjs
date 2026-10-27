@@ -111,8 +111,6 @@ import RelatedPanel, {
   isOwnMessage,
   startEditMessage,
   focusedThreadMessage,
-  activeComposeTargetHint,
-  composeTargetHint,
   commentClaudeRowWidthCls,
   CommentClaudeFooter,
   hasCommentClaudeFooter,
@@ -18730,22 +18728,6 @@ function DetailPanel(state) {
               : 'flex flex-col rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 ring-1 ring-black/5')}"
           data-testid="comment-claude-row"
         >
-          ${() =>
-            // The "linked to" code-preview hint (composeTargetHint) — either
-            // the open new-comment composer's own target, or the currently
-            // expanded existing conversation's own anchor (see
-            // activeComposeTargetHint's own doc comment). Spans the FULL
-            // width of the merged card (over both the comment and the Claude
-            // column below), not just the comment column's own half — the
-            // anchor is shared by both, so the preview isn't a comment-only
-            // thing. The whole wrapper (padding included) is gated on the
-            // SAME condition as the template it holds, so no bare empty
-            // padded strip shows when there's nothing to preview.
-            activeComposeTargetHint(commentTarget)
-              ? html`<div class="${() => 'px-3 pt-3 ' + commentClaudeRowWidthCls(state)}">
-                  ${composeTargetHint(activeComposeTargetHint(commentTarget))}
-                </div>`
-              : ''}
           <div class="flex items-stretch overflow-hidden" data-testid="comment-claude-columns">
             ${() =>
               InlineComments(
