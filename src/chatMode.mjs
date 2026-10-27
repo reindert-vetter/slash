@@ -1,8 +1,9 @@
 // chatMode.mjs — the Claude chat composer's per-conversation "Aanpassen" /
 // "Alleen voorstellen" switch.
 //
-// Default is "Aanpassen" (Claude may edit code, and may still propose). A
-// conversation switched to "Alleen voorstellen" sends `proposeOnly: true` with
+// Default is "Alleen voorstellen". A conversation the reviewer switched to
+// "Aanpassen" (Claude may edit code, and may still propose) is remembered
+// explicitly; every other conversation is propose-only. A propose-only turn sends `proposeOnly: true` with
 // every message, and the backend then never escalates that turn to Edit/Bash
 // (runOneClaudeTurn, chat_workflow.go) — the mode travels with each Signal and
 // so lands in the workflow history; this module only remembers the switch
@@ -14,7 +15,8 @@
 // carries the setting over once the first message creates the conversation.
 import { reactive } from './vendor/arrow.js'
 
-const STORAGE_KEY = 'claudeChatProposeOnly'
+// Stores the keys explicitly set to "Aanpassen" (the default is propose-only).
+const STORAGE_KEY = 'claudeChatEditMode'
 
 // rev is the only reactive part: the set itself is plain, so a getter reads
 // rev first to subscribe, then the set.
@@ -29,7 +31,7 @@ function load() {
     const arr = raw ? JSON.parse(raw) : []
     if (Array.isArray(arr)) arr.forEach((k) => typeof k === 'string' && ids.add(k))
   } catch (_) {
-    // private window / blocked storage: every chat simply starts on "Aanpassen"
+    // private window / blocked storage: every chat simply starts on "Alleen voorstellen"
   }
   return ids
 }
@@ -44,14 +46,14 @@ function save() {
 
 export function isChatProposeOnly(key) {
   ui.rev
-  return !!key && load().has(String(key))
+  return !!key && !load().has(String(key))
 }
 
 export function setChatProposeOnly(key, on) {
   if (!key) return
   const k = String(key)
-  if (on) load().add(k)
-  else load().delete(k)
+  if (on) load().delete(k)
+  else load().add(k)
   save()
   ui.rev++
 }
@@ -62,5 +64,5 @@ export function moveChatProposeOnly(from, to) {
   if (!from || !to || String(from) === String(to)) return
   if (!load().has(String(from))) return
   load().delete(String(from))
-  setChatProposeOnly(to, true)
+  setChatProposeOnly(to, false)
 }

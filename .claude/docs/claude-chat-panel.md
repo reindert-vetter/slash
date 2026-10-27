@@ -3819,14 +3819,16 @@ Opus→Sonnet escalation, the `"retry"` Signal) is in
   `Voorstel N:` text. Volunteered improvements stay proposals.
 - **"Aanpassen" / "Alleen voorstellen" switch** (`proposeOnlySwitch`,
   `data-testid=claude-mode-toggle`, above the composer): per conversation,
-  default "Aanpassen" (the rule above). Off = every message carries
+  default **"Alleen voorstellen"** (the rule above applies once switched to
+  "Aanpassen"). Propose-only = every message carries
   `proposeOnly: true` → `ChatMessageSignal.ProposeOnly` →
   `chatTurnInput.ProposeOnly`, and `runOneClaudeTurn` appends
   `chatProposeOnlyTail` to the read-only prompt and never escalates to
   Edit/Bash (no write slot). A `need_write` reply anyway gets one read-only
   resume (`chatProposeOnlyNudge`) asking for a proposal. Only code changes are
   gated: `comment_action` (reply/resolve) still works. The switch position is a
-  per-viewer preference in `localStorage`, keyed by conversation id (or the
+  per-viewer preference in `localStorage` (`claudeChatEditMode`: only the keys
+  explicitly set to "Aanpassen"), keyed by conversation id (or the
   draft key until the first message creates the conversation) —
   `src/chatMode.mjs`; the durable record is the flag in each Signal. Not on the
   plan page. Test: `TestRunOneClaudeTurnProposeOnlyNeverEscalates`.
