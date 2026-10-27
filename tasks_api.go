@@ -1996,6 +1996,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				Context     string              `json:"context"`
 				Attachments []ChatAttachmentRef `json:"attachments"`
 				EditOf      string              `json:"editOf"`
+				ProposeOnly bool                `json:"proposeOnly"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid message", http.StatusBadRequest)
@@ -2069,7 +2070,7 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			}
 			sig := ChatMessageSignal{
 				ID: "msg-" + newUIReactionID(), Author: body.Author, Body: body.Body, Action: body.Action,
-				Context: body.Context, Attachments: attachments, EditOf: body.EditOf,
+				Context: body.Context, Attachments: attachments, EditOf: body.EditOf, ProposeOnly: body.ProposeOnly,
 			}
 			if err := s.tasks.engine.SignalWorkflow(runID, SignalMessage, sig); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})

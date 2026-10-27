@@ -478,3 +478,49 @@ func TestCheckoutDeadEndForcesEscalation(t *testing.T) {
 		t.Fatal("an ordinary no-shell answer must not count as a dead end")
 	}
 }
+
+// TestRunOneClaudeTurnProposeOnlyNeverEscalates proves the composer's "Alleen
+// voorstellen" switch: a ProposeOnly turn whose read-only attempt asks for
+// write access gets ONE extra read-only resume asking for a proposal — never
+// the Edit/Bash shell attempt — and the system prompt carries the
+// propose-only tail.
+func TestRunOneClaudeTurnProposeOnlyNeverEscalates(t *testing.T) {
+	stubUnreachableGh(t)
+	m, _, cm, fake := newChatManager(t)
+	ctx := context.Background()
+	const pr, commentID = 970740, "comment-propose-only"
+
+	dataDir := t.TempDir()
+	_, headDir := worktreeDirs(dataDir, "", pr)
+	if err := os.MkdirAll(headDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fake.SetChatTurns(`{"type":"need_write"}`, "Voorstel 1: hernoem foo naar bar.")
+	msg, action := runOneClaudeTurn(ctx, m, cm, fake, dataDir, chatTurnInput{
+		PR: pr, ConversationID: commentID, Body: "Pas foo aan", TurnID: "msg-propose", ProposeOnly: true,
+	})
+
+	if action != nil {
+		t.Fatalf("unexpected directive: %+v", action)
+	}
+	if !strings.Contains(msg.Body, "Voorstel 1") {
+		t.Fatalf("expected the proposal as the reply, got %q", msg.Body)
+	}
+	if len(fake.Calls) != 2 {
+		t.Fatalf("expected 2 read-only RunChat calls (attempt + proposal nudge), got %d", len(fake.Calls))
+	}
+	for i, c := range fake.Calls {
+		for _, tool := range c.Tools {
+			if tool == "Edit" || tool == "Bash" {
+				t.Fatalf("call %d got write tool %q in propose-only mode", i, tool)
+			}
+		}
+		if !strings.Contains(c.SystemPrompt, "VOORSTELMODUS") {
+			t.Fatalf("call %d: expected the propose-only tail in the system prompt", i)
+		}
+	}
+	if fake.Calls[1].Prompt != chatProposeOnlyNudge {
+		t.Fatalf("expected the second call to be the proposal nudge, got %q", fake.Calls[1].Prompt)
+	}
+}

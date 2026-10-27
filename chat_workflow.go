@@ -84,6 +84,13 @@ type ChatMessageSignal struct {
 	// it is dropped, and Body is sent in its place. Validated by the HTTP
 	// handler (same "msg-…" shape it generates itself).
 	EditOf string `json:"editOf,omitempty"`
+	// ProposeOnly is the composer's per-conversation "Alleen voorstellen"
+	// switch: this turn may answer, propose (numbered "Voorstel N:") and still
+	// use comment_action, but never edits code — runOneClaudeTurn never
+	// escalates to the Edit/Bash shell attempt for it. Absent (false) in every
+	// history recorded before the switch existed, which keeps their replay
+	// unchanged.
+	ProposeOnly bool `json:"proposeOnly,omitempty"`
 }
 
 // The three non-default ChatMessageSignal.Action values. Validated by the HTTP
@@ -414,7 +421,7 @@ func claudeChatWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		// lastFailedTurn, which itself only ever holds recorded values.
 		turn := chatTurnInput{
 			PR: in.PR, ConversationID: in.CommentID, Body: sig.Body, Action: sig.Action, TurnID: sig.ID,
-			Context: sig.Context, Attachments: sig.Attachments,
+			Context: sig.Context, Attachments: sig.Attachments, ProposeOnly: sig.ProposeOnly,
 		}
 		// "Bewerk dit bericht": rewind the transcript to just before the edited
 		// message (and reset the claude session), then fall through to the
@@ -626,7 +633,28 @@ type chatTurnInput struct {
 	// retry (chatActionRetry) re-runs the very same input, so a failed turn
 	// keeps its images.
 	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
+	// ProposeOnly mirrors ChatMessageSignal.ProposeOnly. A retry re-runs the
+	// same recorded input, so it keeps the mode the reviewer sent it with.
+	ProposeOnly bool `json:"proposeOnly,omitempty"`
 }
+
+// chatProposeOnlyTail is appended to the read-only attempt's system prompt
+// when the reviewer's "Alleen voorstellen" switch is on for this turn. It
+// overrides the prompt's own "just do it" rule and the need_write escalation:
+// every code change becomes a numbered proposal. comment_action (reply /
+// resolve on the thread) is deliberately still allowed — the switch is about
+// code changes only.
+const chatProposeOnlyTail = "\n\nVOORSTELMODUS STAAT AAN (de reviewer heeft in de chat \"Alleen voorstellen\" gekozen): " +
+	"pas in deze beurt GEEN code aan, ook niet als de reviewer erom vraagt of als er maar één oplossing is, " +
+	"en commit/push niets. Geef elke wijziging als genummerd voorstel (\"Voorstel N:\") met een ```-codeblok " +
+	"voor de nieuwe code. Gebruik NOOIT {\"type\":\"need_write\"}. Een comment_action (reageren op of " +
+	"resolven van de comment-thread) mag wel gewoon."
+
+// chatProposeOnlyNudge is the follow-up prompt for the one extra read-only
+// resume a ProposeOnly turn gets when Claude still answered with the
+// need_write directive instead of a proposal.
+const chatProposeOnlyNudge = "Voorstelmodus staat aan: je mag niets aanpassen. Geef de wijziging die je wilde doorvoeren " +
+	"als genummerd voorstel (\"Voorstel N:\") met een ```-codeblok, zonder need_write."
 
 // runChatTurnWithRetries drives one reviewer turn through the automatic
 // backoff ladder: run it, and while the Activity reports a still-retryable
@@ -1350,6 +1378,9 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 		req.Tools = []string{"Read"}
 	}
 	req.SystemPrompt += chatCommentIDNote(arg.ConversationID) + chatLangTail(langFor(ctx, tm, langpref.KindReply))
+	if arg.ProposeOnly {
+		req.SystemPrompt += chatProposeOnlyTail
+	}
 	// From here until RunChat returns, a reviewer message typed meanwhile can
 	// still reach THIS call (chat_steer.go). Deliberately opened per CLI call,
 	// not per turn: outside a live call there is nothing to hand it to, and the
@@ -1387,10 +1418,36 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// the SAME session, so it keeps whatever it already learned above, plus the
 	// reviewer's own original message (already in that session's history).
 	hadShell := false
+	// "Alleen voorstellen": never escalate to Edit/Bash. When Claude asked for
+	// write access anyway, resume the same session read-only once and ask for
+	// the change as a proposal instead; a reply that STILL is the directive
+	// becomes a plain notice below rather than raw JSON.
+	if arg.ProposeOnly && (isNeedWriteDirective(result.Text) || looksLikeEmbeddedNeedWrite(result.Text)) {
+		logTurnMilestone("propose-only turn asked for write access after %v, asking for a proposal instead", time.Since(t0))
+		nudge := req
+		nudge.SessionID = result.SessionID
+		nudge.Prompt = chatProposeOnlyNudge
+		nudge.Steer = nil
+		if r2, err2 := cl.RunChat(runCtx, nudge); err2 == nil {
+			result = r2
+			_ = cm.SetSession(ctx, arg.ConversationID, r2.SessionID)
+		} else if runCtx.Err() != nil {
+			return chatCancelledMessage(ctx, cm, arg, model), nil
+		}
+		if isNeedWriteDirective(result.Text) {
+			msg := chat.Message{
+				ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, PR: arg.PR,
+				Role: "assistant", Model: model,
+				Body: "Voorstelmodus staat aan, dus ik heb niets aangepast. Zet de schakelaar op \"Aanpassen\" als ik het mag doorvoeren.",
+			}
+			_ = cm.SaveMessage(ctx, msg)
+			return msg, nil
+		}
+	}
 	// Escalate on Claude's own strict directive OR on the prose it sometimes
 	// falls back to instead (looksLikeWriteRefusal) — the reviewer never has
 	// to ask twice for write access, and never gets a button for it either.
-	escalate := isNeedWriteDirective(result.Text)
+	escalate := !arg.ProposeOnly && isNeedWriteDirective(result.Text)
 	if escalate {
 		// The strict directive IS the whole answer: without this the phase
 		// stayed on the "writing" its own streamed text set, and the status
@@ -1403,12 +1460,12 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// pending request already asked for write access last turn, so waiting
 	// for Claude to say so again is a guess we don't have to make. See
 	// lastTurnWasCheckoutDeadEnd for the reviewer report behind it.
-	if !escalate && deadEndBefore {
+	if !escalate && !arg.ProposeOnly && deadEndBefore {
 		escalate = true
 		logTurnMilestone("previous turn dead ended on the work directory, escalating after %v", time.Since(t0))
 		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)
 	}
-	if !escalate && looksLikeWriteRefusal(result.Text) {
+	if !escalate && !arg.ProposeOnly && looksLikeWriteRefusal(result.Text) {
 		escalate = true
 		logTurnMilestone("read-only attempt refused to write in prose after %v, escalating anyway", time.Since(t0))
 		// The one visible trace of this: a momentary status line, no bubble
@@ -1421,7 +1478,7 @@ func runOneClaudeTurn(ctx context.Context, tm *TaskManager, cm *chat.Module, cl 
 	// dat gewoon een comment plaats op pr" answered with an explanation that
 	// named the directive mid-sentence. See shouldEscalateForEmbeddedNeedWrite
 	// for why a trailing question suppresses this.
-	if !escalate && shouldEscalateForEmbeddedNeedWrite(result.Text) {
+	if !escalate && !arg.ProposeOnly && shouldEscalateForEmbeddedNeedWrite(result.Text) {
 		escalate = true
 		logTurnMilestone("read-only attempt quoted need_write inline after %v, escalating anyway", time.Since(t0))
 		advanceChatProgress(arg.Repo, arg.PR, arg.ConversationID, chatPhaseEscalating)

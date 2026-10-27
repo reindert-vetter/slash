@@ -29,6 +29,7 @@ import { repoParam, repoField } from './prContext.mjs'
 // gates code_warning and the footer's explain_code — see autowarn.mjs.
 import { autoWarn } from './autowarn.mjs'
 import { claudeChatColumn, claudeStatusText } from './ClaudeChat.mjs'
+import { isChatProposeOnly, setChatProposeOnly, moveChatProposeOnly } from './chatMode.mjs'
 // The composer's pasted/dragged images. The module owns the upload + the
 // pending state; this file only decides WHICH bucket a send empties and which
 // Signal the resulting ids ride on — see "Afbeeldingen meesturen" in
@@ -2818,6 +2819,10 @@ async function sendClaudeMessage(text, action = '', context = '', target = null,
     if (at >= 0) cc.messages = cc.messages.slice(0, at)
   }
   const pendingId = ownBody ? addPendingOwnMessage(commentId, ownBody, attachments) : null
+  // "Alleen voorstellen" (chatMode.mjs): a brand-new chat set it on its draft
+  // key, which moves to the conversation id its first message just created.
+  if (bucket) moveChatProposeOnly(bucket, commentId)
+  const proposeOnly = !needsNoText && isChatProposeOnly(commentId)
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(runId) + '/signals/message', {
       method: 'POST',
@@ -2829,6 +2834,7 @@ async function sendClaudeMessage(text, action = '', context = '', target = null,
         context: context || undefined,
         attachments: attachments.length ? attachments : undefined,
         editOf: editOf || undefined,
+        proposeOnly: proposeOnly || undefined,
       }),
     })
     // A rejected Signal used to be swallowed whole: the response was never
@@ -4500,6 +4506,10 @@ function claudeChatView() {
     // "Afbeeldingen meesturen" in .claude/docs/claude-chat-panel.md.
     conversationId: () => cc.commentId || '',
     attachmentBucket: () => cc.commentId || claudeChatDraftKey(),
+    // The composer's "Aanpassen" / "Alleen voorstellen" switch, per
+    // conversation (or per draft key while the chat has none yet) — see
+    // chatMode.mjs.
+    proposeOnly: () => isChatProposeOnly(cc.commentId || claudeChatDraftKey()),
     status: () => cc.status,
     busy: () => ccBusy(),
     // Whether the "Ook andere opnieuw proberen" bulk retry is currently
@@ -4636,6 +4646,10 @@ function onClaudeComposeFocus() {
 function claudeChatCallbacks(state, commentTarget) {
   return {
     onSend: (text) => sendClaudeMessageFromNew(state, commentTarget, text),
+    onToggleProposeOnly: () => {
+      const key = cc.commentId || claudeChatDraftKey()
+      setChatProposeOnly(key, !isChatProposeOnly(key))
+    },
     onRetry: () => retryClaudeTurn(),
     // "Ook andere opnieuw proberen" — see retryAllFailedClaudeChats' own doc
     // comment for what "gefaald" means here and why it can't reuse
