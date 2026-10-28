@@ -1293,40 +1293,6 @@ function claudeMenuButton(onOpenMenu) {
 // (onEnterReadOnly, RelatedPanel.mjs's enterClaudeChat/enterClaudeChatFromNew
 // — the same → hand-off the keyboard already uses). Scrolling the thread
 // stays free and does NOT count as "entering" — only the click does.
-// proposeOnlySwitch is the composer's per-conversation "Aanpassen" /
-// "Alleen voorstellen" switch (state in chatMode.mjs, only offered when the
-// view supplies `proposeOnly` + `onToggleProposeOnly`). On = "Aanpassen":
-// Claude may edit code and still propose; off (the default) turns every code
-// change into a numbered proposal. The label is always "Aanpassen"; the
-// knob's position + aria-checked carry the state — never colour alone.
-function proposeOnlySwitch(view, callbacks) {
-  return html`<div class="flex items-center gap-2 text-[11px] text-slate-600 dark:text-zinc-400">
-    <button
-      type="button"
-      role="switch"
-      aria-checked="${() => (view.proposeOnly() ? 'false' : 'true')}"
-      title="${t('Aan: Claude mag code aanpassen (en voorstellen). Uit: alles wordt een voorstel.')}"
-      class="${() =>
-        'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ' +
-        (view.proposeOnly() ? 'bg-slate-300 dark:bg-zinc-700' : 'bg-indigo-500')}"
-      data-testid="claude-mode-toggle"
-      @click="${(e) => {
-        e.stopPropagation()
-        callbacks.onToggleProposeOnly()
-      }}"
-    >
-      <span
-        class="${() =>
-          'inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ' +
-          (view.proposeOnly() ? 'translate-x-0.5' : 'translate-x-3.5')}"
-      ></span>
-    </button>
-    <span class="font-medium" data-testid="claude-mode-label"
-      >${t('Aanpassen')}</span
-    >
-  </div>`
-}
-
 export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opts = {}) {
   return html`
     <div
@@ -1468,7 +1434,6 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
                     : ''}
               </div>
               ${() => pendingAttachmentsBar(chatAttachmentBucket(view), () => {})}
-              <div class="contents">${() => (view.proposeOnly && callbacks.onToggleProposeOnly ? proposeOnlySwitch(view, callbacks) : '')}</div>
               <div class="flex items-end gap-2 border-t border-slate-100 dark:border-zinc-800/60 pt-2">
         <textarea
           rows="1"
