@@ -11,7 +11,6 @@ export const EN = {
   // ── src/ClaudeChat.mjs: the composer's mode switch ─────────────────────
   'Aan: Claude mag code aanpassen (en voorstellen). Uit: alles wordt een voorstel.':
     'On: Claude may change code (and propose). Off: everything becomes a proposal.',
-  'Alleen voorstellen': 'Proposals only',
   Aanpassen: 'Make changes',
   // ── src/settings.mjs ───────────────────────────────────────────────────
   Instellingen: 'Settings',

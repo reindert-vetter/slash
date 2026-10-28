@@ -1295,10 +1295,10 @@ function claudeMenuButton(onOpenMenu) {
 // stays free and does NOT count as "entering" — only the click does.
 // proposeOnlySwitch is the composer's per-conversation "Aanpassen" /
 // "Alleen voorstellen" switch (state in chatMode.mjs, only offered when the
-// view supplies `proposeOnly` + `onToggleProposeOnly`). "Aanpassen" (the
-// default) lets Claude edit code and still propose; "Alleen voorstellen"
-// turns every code change into a numbered proposal. The word next to the
-// switch AND the knob's position carry the state — never colour alone.
+// view supplies `proposeOnly` + `onToggleProposeOnly`). On = "Aanpassen":
+// Claude may edit code and still propose; off (the default) turns every code
+// change into a numbered proposal. The label is always "Aanpassen"; the
+// knob's position + aria-checked carry the state — never colour alone.
 function proposeOnlySwitch(view, callbacks) {
   return html`<div class="flex items-center gap-2 text-[11px] text-slate-600 dark:text-zinc-400">
     <button
@@ -1322,7 +1322,7 @@ function proposeOnlySwitch(view, callbacks) {
       ></span>
     </button>
     <span class="font-medium" data-testid="claude-mode-label"
-      >${() => (view.proposeOnly() ? t('Alleen voorstellen') : t('Aanpassen'))}</span
+      >${t('Aanpassen')}</span
     >
   </div>`
 }
