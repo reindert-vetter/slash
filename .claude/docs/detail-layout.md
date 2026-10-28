@@ -402,6 +402,16 @@ keeps whichever left columns still fit, and drops the **left-most one first**.
   "already open": the next `main-scroll-left-button` click exits to
   `/pr-overview` instead of spending a click on revealing it.
 
+**A mouse click into a chat/comment column gets the same treatment.** The
+click that hands the keyboard to an anchored chat (`commentAnchorEntered`) or
+opens a PR-wide/unanchored one (`isPrWideComposing()`) used to collapse the
+pr-index unconditionally. `applyDiffColumnFit` now also runs for those two
+states, and `BlockList.mjs` lets `keepIndexInDiff` override both collapses. A
+`watch` in `home.mjs` (next to `scheduleDiffColumnFit`) runs the fit only when
+a `pointerdown` happened in the last 500ms (the keyboard resets the flag and
+keeps collapsing), pinning the PR-description column first. Test:
+`tests/chat-click-column-fit.spec.mjs`.
+
 Test: `tests/diff-click-column-fit.spec.mjs` (a wide viewport keeps the index, a
 narrow one still collapses it, the keyboard path is unchanged, shrinking the
 window drops the description before the index, and a click into a test class's

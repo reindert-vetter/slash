@@ -118,8 +118,7 @@ export default function BlockList(state, isPrWideComposing = () => false, onReve
         'flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-white dark:bg-zinc-900 transition-all duration-200 ease-out ' +
         ((state.mode === 'diff' && !state.keepIndexInDiff) ||
         (state.mode !== 'diff' && state.testColumnFocused) ||
-        isPrWideComposing() ||
-        state.commentAnchorEntered
+        ((isPrWideComposing() || state.commentAnchorEntered) && !state.keepIndexInDiff)
           ? // Collapses to width 0 (not just hidden via translate/opacity) so
             // it genuinely gives its space back to <main> instead of merely
             // sliding out of view while still claiming a flex slot — the fix

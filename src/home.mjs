@@ -11187,7 +11187,10 @@ function applyDiffColumnFit() {
   if (content == null) return
   const available = window.innerWidth - APP_COLUMNS_LEFT_PX
   let need = content
-  if (state.mode === 'diff') {
+  // The pr-index also collapses for a chat/comment column the reviewer clicked
+  // into (anchored: commentAnchorEntered, PR-wide/unanchored: isPrWideComposing),
+  // so those get the same "only hide what no longer fits" treatment as a diff.
+  if (state.mode === 'diff' || state.commentAnchorEntered || isPrWideComposing()) {
     state.keepIndexInDiff = need + APP_COLUMNS_GAP_PX + PR_INDEX_COL_PX <= available
     if (state.keepIndexInDiff) need += APP_COLUMNS_GAP_PX + PR_INDEX_COL_PX
   } else {
@@ -11199,6 +11202,30 @@ function applyDiffColumnFit() {
     state.descriptionPinned = need + APP_COLUMNS_GAP_PX + PR_INFO_COL_PX <= available
   }
 }
+
+// A MOUSE click into a chat/comment column (anchored, unanchored Claude chat,
+// "Andere chats") collapses the pr-index just like a key would; the reviewer
+// wants it to behave like a diff click instead: keep what fits, drop the
+// PR-description column first and the index only after that. The keyboard
+// never keeps anything, so it resets the flag. "Mouse" = a pointerdown in the
+// last half second (plain module var, not state).
+let lastPointerDownAt = 0
+document.addEventListener('pointerdown', () => { lastPointerDownAt = Date.now() }, true)
+watch(
+  () => [state.commentAnchorEntered, isPrWideComposing()],
+  ([anchored, wide]) => {
+    if (!anchored && !wide) return
+    if (Date.now() - lastPointerDownAt > 500) {
+      if (state.keepIndexInDiff) state.keepIndexInDiff = false
+      return
+    }
+    if (state.showDescription) {
+      state.showDescription = false
+      state.descriptionPinned = true
+    }
+    scheduleDiffColumnFit()
+  },
+)
 
 // scheduleDiffColumnFit runs the fit twice on purpose: once synchronously
 // against the layout as it stands (so a click that keeps the index doesn't
