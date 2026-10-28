@@ -1396,6 +1396,32 @@ alike, in every section.
 - Test: `TestMyLastActivity` (`inbox_test.go`), same style as
   `TestMergeReviewersDecisiveFold`.
 
+
+## "Checks gefaald" starts a chat that investigates the failure
+
+Reviewer request: clicking the failed checks pill should start a Claude chat
+that investigates what failed, with the first prompt sent automatically, and
+the reviewer can reply to it. A **failed** `checksChip(pr, status)` on a PR
+whose review tree exists (`treeSupported(pr) && pr.hasGraph`) is a `<button>`
+(`stopPropagation` first, so the row popover stays shut). It opens
+`treeUrl(pr)` plus `chat=checks` (`checksChatUrl`). The popover gets the same
+action as **"Onderzoek gefaalde checks"** (`checksChatAction`,
+`data-testid=checks-chat`, inside `ingestedActions`), which is the keyboard way
+in. Without a tree the pill stays a plain span. There is deliberately no
+generate-first flow. `statusPills`' stack key includes `pr.hasGraph`, so the
+span↔button flip builds a fresh node.
+
+On `/pr/<id>`, `maybeStartChecksChat` (`home.mjs`, after the first
+`loadBlocks()`) strips the one-shot param before anything else, so a refresh
+does not start a second chat. It then opens the chat overlay and calls
+`startPrChecksChat` (`RelatedPanel.mjs`). That creates a **new, separate** local
+PR-wide anchor on **every** click. The general chat is never reused. Its body
+is the real text "Gefaalde CI-checks onderzoeken", not the placeholder, so it
+stays out of `isGeneralChatAnchor` and gets a named PR-comment index row. The
+first turn asks Claude to find which checks fail and why (`gh pr checks`,
+`gh run view --log-failed`), summarize the cause, propose a fix, and change
+nothing yet. Test: `tests/checks-chat.spec.mjs`.
+
 ## A merge conflict is shown as a chip (`conflict-chip`)
 
 Reviewer request ("ik wil het zien als er een merge conflict is in een pr in pr

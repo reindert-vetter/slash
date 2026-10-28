@@ -99,6 +99,7 @@ import RelatedPanel, {
   cancelPrCommentReply,
   startPrCommentChat,
   startPrGeneralChat,
+  startPrChecksChat,
   isGeneralChatAnchor,
   resumeStuckClaudeAfterCheckout,
   deletePrCommentItem,
@@ -13976,6 +13977,29 @@ function openGeneralChat(text) {
   startPrGeneralChat(state, text)
 }
 
+// maybeStartChecksChat — the one-shot `?chat=checks` from /pr-overview's
+// "Checks gefaald" pill / "Onderzoek gefaalde checks" popover item: a NEW,
+// separate chat (startPrChecksChat, never the general one) whose first turn
+// asks Claude to investigate the failing CI checks, shown in the same overlay.
+// The param is stripped before anything else, so a refresh never starts a
+// second chat (bindUrlState re-reads location.search on every write, so it
+// keeps the removal).
+function maybeStartChecksChat() {
+  const params = new URLSearchParams(location.search)
+  if (params.get('chat') !== 'checks') return
+  params.delete('chat')
+  const qs = params.toString()
+  history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash)
+  openGeneralChatOverlay()
+  startPrChecksChat(
+    state,
+    t('Gefaalde CI-checks onderzoeken'),
+    t(
+      'De CI-checks van deze PR zijn gefaald. Zoek uit welke checks falen en waarom (bijv. met `gh pr checks` en `gh run view --log-failed`), vat de oorzaak samen en stel een oplossing voor. Pas nog niets aan.',
+    ),
+  )
+}
+
 const PR_COMMANDS = withClose([
   {
     id: 'pr-general-chat',
@@ -19128,7 +19152,7 @@ if (state.mode === 'list' && hadInitialSelParam && !testColumnPending)
   requestAnimationFrame(focusSearchBox)
 
 // Kick off the initial load.
-loadBlocks()
+loadBlocks().then(maybeStartChecksChat)
 loadPRMeta()
 loadPendingPush()
 loadCheckout()

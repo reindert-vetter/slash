@@ -6764,6 +6764,35 @@ export async function startPrGeneralChat(state, text) {
   return c
 }
 
+// startPrChecksChat — "Checks gefaald" on /pr-overview (?chat=checks, see
+// home.mjs's maybeStartChecksChat). Reviewer: start a NEW, separate chat on
+// every click, never the one general chat. So, unlike startPrGeneralChat, it
+// always creates a fresh local PR-wide anchor, and with a REAL body
+// (`anchorBody`) instead of CLAUDE_ANCHOR_PLACEHOLDER: that keeps it out of
+// isGeneralChatAnchor (the general chat stays unique) and gives it a named
+// PR-comment index row to come back to. `text` is sent as the first turn.
+export async function startPrChecksChat(state, anchorBody, text) {
+  if (!state || !anchorBody) return null
+  const ok = await createComment({
+    pr: state.pr,
+    repo: repoField(),
+    file: '',
+    line: 0,
+    body: anchorBody,
+    kind: 'issue',
+    local: true,
+  })
+  const c = ok && lastCreatedCommentId ? commentById(lastCreatedCommentId) : null
+  if (!c) return null
+  cs.focus = 'claude'
+  cs.claudePos = 0
+  await ensureAndLoadChat(state.pr, c.id)
+  ensureChatEvents(state.pr)
+  focusEl('[data-testid=claude-chat-compose]')
+  if (text) await sendClaudeChatText(state, () => null, text)
+  return c
+}
+
 // GeneralChatCard renders the SAME chat card the tree's own Claude column
 // renders (claudeChatColumn, ClaudeChat.mjs — identical view/callbacks, so
 // identical streaming, werkmap choice, menu and send path), just without

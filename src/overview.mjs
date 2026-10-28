@@ -355,10 +355,41 @@ function reviewChip(pr, status) {
 // did something fail, or did everything pass (or is it still running)? The
 // word ("Gefaald"/"Geslaagd"/"Bezig") carries the meaning per the colourblind
 // rule — the icon + tint are decoration on top, never the sole signal.
-function checksChip(status) {
+//
+// A FAILED chip on a PR whose review tree exists is a button: it opens that
+// tree with `?chat=checks`, which starts a NEW Claude chat there that
+// investigates the failure (checksChatUrl / home.mjs maybeStartChecksChat).
+// Same action as the popover's "Onderzoek gefaalde checks" (the keyboard way
+// in). Without a tree it stays a plain pill — no generate-first flow.
+function checksFailed(status) {
+  return !!status && !!status.checksTotal && (status.checksState === 'FAILURE' || status.checksState === 'ERROR')
+}
+
+function canChatAboutChecks(pr) {
+  return treeSupported(pr) && pr.hasGraph && checksFailed(statusFor(pr))
+}
+
+function checksChatUrl(pr) {
+  const url = treeUrl(pr)
+  return url + (url.includes('?') ? '&' : '?') + 'chat=checks'
+}
+
+function checksChip(pr, status) {
   if (!status.checksTotal) return null
   const s = status.checksState
-  if (s === 'FAILURE' || s === 'ERROR')
+  if (checksFailed(status) && treeSupported(pr) && pr.hasGraph)
+    return html`<button
+      type="button"
+      class="inline-flex cursor-pointer items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-700 ring-1 ring-inset ring-rose-500/30 hover:bg-rose-500/20 dark:text-rose-300"
+      data-testid="checks-chip"
+      title="${t('Onderzoek gefaalde checks')}"
+      @click="${(e) => {
+        // Stop FIRST, so the row's own togglePopover never sees this click.
+        e.stopPropagation()
+        location.href = checksChatUrl(pr)
+      }}"
+    >${icon('x', 'h-3 w-3')}<span>${t('Checks gefaald')}</span></button>`
+  if (checksFailed(status))
     return chip(t('Checks gefaald'), 'bg-rose-500/10 text-rose-700 dark:text-rose-300 ring-rose-500/30', 'checks-chip', 'x')
   if (s === 'PENDING' || s === 'EXPECTED')
     return chip(t('Checks bezig'), 'bg-red-500/10 text-red-700 dark:text-red-300 ring-red-500/30', 'checks-chip', 'clock')
@@ -617,7 +648,7 @@ function statusPills(pr, status) {
   // literal text (see .claude/rules/arrowjs-pitfalls.md). The key encodes the
   // whole composition (review variant, checks, merge state), so a status
   // change builds fresh nodes instead of patching statics.
-  const checks = checksChip(status)
+  const checks = checksChip(pr, status)
   const conflict = conflictChip(status)
   const stackKey =
     'review-checks:' +
@@ -626,6 +657,8 @@ function statusPills(pr, status) {
     (status.checksState || '') +
     ':' +
     status.checksTotal +
+    ':' +
+    (pr.hasGraph ? 'g' : '') +
     ':' +
     (status.mergeable || '')
   if (checks && conflict) {
@@ -1652,7 +1685,7 @@ function generateAction(pr) {
 // workflow in the background (redirect: false — the reviewer stays on the
 // overview, mirrors the old standalone regenerateButton behaviour).
 function ingestedActions(pr) {
-  return html`
+  return html`<div class="contents">
     <button
       type="button"
       data-testid="open-tree"
@@ -1660,6 +1693,18 @@ function ingestedActions(pr) {
       @click="${() => (location.href = treeUrl(pr))}"
     >
       ${icon('sparkles', 'h-3.5 w-3.5')} ${t('Open review-boom')}
+    </button>
+    ${() => (canChatAboutChecks(pr) ? checksChatAction(pr) : '')}
+  </div>`
+}
+
+// checksChatAction — "Onderzoek gefaalde checks": the keyboard counterpart of
+// clicking the failed checks chip (see checksChip). Only with a tree and
+// failed checks.
+function checksChatAction(pr) {
+  return html`
+    <button type="button" data-testid="checks-chat" class="${popoverRowCls()}" @click="${() => (location.href = checksChatUrl(pr))}">
+      ${icon('x', 'h-3.5 w-3.5')} ${t('Onderzoek gefaalde checks')}
     </button>
   `
 }

@@ -400,6 +400,10 @@ export const EN = {
   'Bezig met genereren…': 'Generating…',
   'Genereer review-boom': 'Generate review tree',
   'Open review-boom': 'Open review tree',
+  'Onderzoek gefaalde checks': 'Investigate failed checks',
+  'Gefaalde CI-checks onderzoeken': 'Investigate failed CI checks',
+  'De CI-checks van deze PR zijn gefaald. Zoek uit welke checks falen en waarom (bijv. met `gh pr checks` en `gh run view --log-failed`), vat de oorzaak samen en stel een oplossing voor. Pas nog niets aan.':
+    'The CI checks of this PR failed. Find out which checks fail and why (e.g. with `gh pr checks` and `gh run view --log-failed`), summarize the cause and propose a fix. Do not change anything yet.',
   'Opnieuw genereren': 'Regenerate',
   'Verwijderen mislukt': 'Removing failed',
   'Verwijder mij als reviewer': 'Remove myself as reviewer',

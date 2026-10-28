@@ -1491,6 +1491,11 @@ icon disappears after the mocked "seen" Signal round-trips.
 
 ## The general chat: one PR-wide, code-less conversation in an overlay
 
+(A second, *separate* PR-wide chat in this same overlay is started by
+/pr-overview's "Checks gefaald" via `?chat=checks` — `startPrChecksChat`, a new
+anchor per click, never the general one. See "Checks gefaald" in
+`pr-overview.md`.)
+
 Reviewer request, from the `/`-menu screenshot where a typed "fix tests in pr"
 collapsed to "Geen commando's.": *"hier wil ik een algemene chat kunnen
 starten, net zo werken als chat op regel. het moet dan ook los in de blokken
