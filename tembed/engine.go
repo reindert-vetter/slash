@@ -46,6 +46,12 @@ type Engine struct {
 	actPriorities map[string]Priority // recovery priority per activity
 	locks         map[string]*sync.Mutex
 	timers        map[string]*time.Timer
+	// active is the Workflow handle of the advance currently holding a run's
+	// lock, and busySignals the workflow types that opted into
+	// SetRecordSignalsWhileBusy — together they let SignalWorkflow record a
+	// signal into a busy run's history without waiting for its lock.
+	active      map[string]*Workflow
+	busySignals map[string]bool
 
 	wg sync.WaitGroup // tracks in-flight timer callbacks + background recovery (for Wait)
 }
@@ -89,6 +95,8 @@ func New(store Store, opts ...Option) *Engine {
 		actPriorities: map[string]Priority{},
 		locks:         map[string]*sync.Mutex{},
 		timers:        map[string]*time.Timer{},
+		active:        map[string]*Workflow{},
+		busySignals:   map[string]bool{},
 	}
 	for _, o := range opts {
 		o(e)
@@ -108,6 +116,28 @@ func (e *Engine) RegisterActivity(name string, fn ActivityFunc) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.activities[name] = fn
+}
+
+// SetRecordSignalsWhileBusy opts a workflow type into recording a signal
+// IMMEDIATELY while one of its runs is busy (an advance holds the run lock, e.g.
+// a minutes-long inline activity), instead of SignalWorkflow blocking on that
+// lock until the advance is done. The SignalReceived event is appended to the
+// in-flight advance's history right away — so a read model built from the
+// history sees it at once and the caller returns at once — and a follow-up
+// advance is queued in the background to consume it if the in-flight one does
+// not.
+//
+// Replay is unaffected: signals are matched per NAME in arrival order
+// (nthSignal), activities/timers/side effects per TYPE (nthOf/nthTimer), so a
+// SignalReceived landing between two activity events shifts no counter. What
+// the caller gives up is "the signal has been processed when SignalWorkflow
+// returns" — hence opt-in per type. A signal recorded this way on a run whose
+// in-flight advance then completes or fails is never consumed (the blocking
+// path would have returned an error instead).
+func (e *Engine) SetRecordSignalsWhileBusy(name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.busySignals[name] = true
 }
 
 // SetWorkflowPriority sets the recovery priority for a workflow type (default
@@ -282,7 +312,12 @@ func (e *Engine) SignalWorkflow(runID, signal string, payload any) error {
 		return fmt.Errorf("tembed: marshal signal payload: %w", err)
 	}
 	l := e.runLock(runID)
-	l.Lock()
+	if !l.TryLock() {
+		if ok, err := e.recordSignalWhileBusy(runID, signal, pl); ok || err != nil {
+			return err
+		}
+		l.Lock()
+	}
 	defer l.Unlock()
 
 	rec, hist, err := e.store.LoadRun(runID)
@@ -308,6 +343,45 @@ func (e *Engine) SignalWorkflow(runID, signal string, payload any) error {
 	// between, so rec + hist + ev IS what LoadRun would return.
 	e.advanceLoaded(runID, rec, append(hist, ev), false)
 	return nil
+}
+
+// recordSignalWhileBusy is SignalWorkflow's fast path (see
+// SetRecordSignalsWhileBusy): when an advance of an opted-in workflow holds
+// runID's lock, append the signal to that advance's own history (under its
+// histMu, so the seq cannot collide with an event the advance records itself)
+// and queue a follow-up advance that consumes it once the lock frees.
+// ok == false means "not applicable" — no active advance, a type that did not
+// opt in, or an advance that is already finishing — and the caller falls back
+// to waiting for the lock.
+func (e *Engine) recordSignalWhileBusy(runID, signal string, pl []byte) (ok bool, err error) {
+	e.mu.Lock()
+	w := e.active[runID]
+	if w == nil || !e.busySignals[w.workflow] {
+		e.mu.Unlock()
+		return false, nil
+	}
+	e.mu.Unlock()
+	w.histMu.Lock()
+	if w.closed {
+		w.histMu.Unlock()
+		return false, nil
+	}
+	ev := Event{Seq: len(w.history), Type: EventSignalReceived, Name: signal, Payload: pl, Time: e.now().Round(0)}
+	if err := e.store.AppendEvent(runID, ev); err != nil {
+		w.histMu.Unlock()
+		return false, err
+	}
+	w.history = append(w.history, ev)
+	w.histMu.Unlock()
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		l := e.runLock(runID)
+		l.Lock()
+		defer l.Unlock()
+		e.advance(runID)
+	}()
+	return true, nil
 }
 
 // blocked is the sentinel panic used to yield a workflow that cannot proceed.
@@ -363,7 +437,23 @@ func (e *Engine) advanceLoaded(runID string, rec RunRecord, hist []Event, deferL
 		return
 	}
 
-	w := &Workflow{engine: e, runID: runID, history: hist, sigIdx: map[string]int{}, deferLowActivities: deferLow}
+	w := &Workflow{engine: e, runID: runID, workflow: rec.Workflow, history: hist, sigIdx: map[string]int{}, deferLowActivities: deferLow}
+	// Expose this advance to SignalWorkflow's busy fast path until it ends;
+	// closed (under histMu) makes a late signal fall back to the lock instead
+	// of landing in a history nobody will read any more.
+	e.mu.Lock()
+	e.active[runID] = w
+	e.mu.Unlock()
+	defer func() {
+		w.histMu.Lock()
+		w.closed = true
+		w.histMu.Unlock()
+		e.mu.Lock()
+		if e.active[runID] == w {
+			delete(e.active, runID)
+		}
+		e.mu.Unlock()
+	}()
 
 	var (
 		result   []byte

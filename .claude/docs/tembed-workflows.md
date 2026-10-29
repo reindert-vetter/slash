@@ -26,6 +26,19 @@ about PRs, blocks, or gh; keep it that way.
   `.claude/rules/workflow-determinism.md`.
 - **Signals** are buffered (one arriving before its `WaitSignal` waits);
   **timers** (`Sleep`) are durable and rescheduled on `Recover`.
+- **`SetRecordSignalsWhileBusy(workflowName)`** (opt-in per type; only `plan`
+  uses it): normally `SignalWorkflow` takes the run lock before appending, so a
+  signal to a run busy with a minutes-long inline activity blocks — and is not
+  in the history — until that activity is done. With the opt-in the signal is
+  appended **immediately** to the in-flight advance's own history (`Workflow.histMu`
+  guards every history read/append, so the seq never collides) and a follow-up
+  advance is queued to consume it. Replay-safe because signals are matched per
+  **name** in arrival order (`nthSignal`) and activities/timers/side effects per
+  **type** (`nthOf`/`nthTimer`): a `SignalReceived` landing between two activity
+  events shifts no counter. Given up: "processed when `SignalWorkflow` returns",
+  and a signal recorded this way on a run whose in-flight advance then
+  completes/fails is never consumed (the blocking path would have errored).
+  Tests: `tembed/busy_signal_test.go` (run with `-race`).
 - **`StartWorkflowID(id, name, input)`** takes the Run ID from the caller and is
   **idempotent**: an existing run with that `id` is a no-op reuse (existing
   input untouched), checked under the run lock. This lets glue derive a

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -16,9 +17,16 @@ import (
 // already consumed; they are matched positionally against the history, which is
 // deterministic because activities and timers resolve in program order.
 type Workflow struct {
-	engine  *Engine
-	runID   string
+	engine   *Engine
+	runID    string
+	workflow string
+	// histMu guards history (and closed): besides this advance itself, the
+	// engine's busy-signal fast path (Engine.SetRecordSignalsWhileBusy) may
+	// append a SignalReceived event from another goroutine while an activity
+	// of this advance is running.
+	histMu  sync.Mutex
 	history []Event
+	closed  bool
 
 	actIdx      int            // activity results consumed
 	timerIdx    int            // timers consumed
@@ -205,12 +213,15 @@ func (w *Workflow) SideEffect(out any, fn func() any) {
 // persist failure (disk full, corrupt DB, ...) still panics loudly — this
 // tolerance is scoped narrowly to the one benign, expected race.
 func (w *Workflow) record(e Event) {
+	w.histMu.Lock()
 	e.Seq = len(w.history)
 	if e.Time.IsZero() {
 		e.Time = w.engine.now()
 	}
 	w.history = append(w.history, e)
-	if err := w.engine.store.AppendEvent(w.runID, e); err != nil {
+	err := w.engine.store.AppendEvent(w.runID, e)
+	w.histMu.Unlock()
+	if err != nil {
 		if errors.Is(err, ErrDuplicateEvent) {
 			panic(blocked{kind: "concurrent"})
 		}
@@ -281,6 +292,8 @@ func (w *Workflow) WaitChildWorkflow(childRunID string, result any) error {
 
 // nthOf returns the k-th history event whose type is one of types.
 func (w *Workflow) nthOf(k int, types ...EventType) (Event, bool) {
+	w.histMu.Lock()
+	defer w.histMu.Unlock()
 	count := 0
 	for _, ev := range w.history {
 		match := false
@@ -306,6 +319,8 @@ func (w *Workflow) nthOf(k int, types ...EventType) (Event, bool) {
 // workflows) where matching by position doesn't work because completions
 // don't necessarily arrive in call-site order.
 func (w *Workflow) firstNamed(name string, types ...EventType) (Event, bool) {
+	w.histMu.Lock()
+	defer w.histMu.Unlock()
 	for _, ev := range w.history {
 		if ev.Name != name {
 			continue
@@ -321,6 +336,8 @@ func (w *Workflow) firstNamed(name string, types ...EventType) (Event, bool) {
 
 // nthSignal returns the k-th SignalReceived event named name.
 func (w *Workflow) nthSignal(name string, k int) (Event, bool) {
+	w.histMu.Lock()
+	defer w.histMu.Unlock()
 	count := 0
 	for _, ev := range w.history {
 		if ev.Type != EventSignalReceived || ev.Name != name {
@@ -337,6 +354,8 @@ func (w *Workflow) nthSignal(name string, k int) (Event, bool) {
 // nthTimer returns the k-th TimerStarted event (or nil) and whether its
 // matching (k-th) TimerFired event exists.
 func (w *Workflow) nthTimer(k int) (started *Event, fired bool) {
+	w.histMu.Lock()
+	defer w.histMu.Unlock()
 	starts, fires := 0, 0
 	for i := range w.history {
 		switch w.history[i].Type {
