@@ -65,7 +65,7 @@ func (f *busyFixture) register(optIn bool) {
 		return json.Marshal(got)
 	})
 	if optIn {
-		f.e.SetRecordSignalsWhileBusy("tracker")
+		f.e.SetRecordSignalsWhileBusy("tracker", func(signal string, _ []byte) bool { return signal != "never-fast" })
 	}
 }
 
@@ -191,4 +191,24 @@ func TestSignalWaitsForBusyRunWithoutOptIn(t *testing.T) {
 	if last := hist[len(hist)-1]; last.Type != EventSignalReceived || last.Name != "gate" {
 		t.Fatalf("last event = %s/%s, want the gate signal after slow", last.Type, last.Name)
 	}
+}
+
+// accept narrows the opt-in: a rejected signal keeps the blocking contract.
+func TestSignalRejectedByAcceptWaitsForBusyRun(t *testing.T) {
+	f := newBusyFixture(t, NewMemoryStore(), true)
+	id, done := f.startBusy(t)
+
+	ret := make(chan error, 1)
+	go func() { ret <- f.e.SignalWorkflow(id, "never-fast", nil) }()
+	select {
+	case <-ret:
+		t.Fatal("a signal accept rejects returned while the run was busy, want it to wait for the lock")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(f.release)
+	<-done
+	if err := <-ret; err != nil {
+		t.Fatal(err)
+	}
+	f.e.Wait()
 }

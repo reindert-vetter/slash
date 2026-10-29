@@ -51,7 +51,7 @@ type Engine struct {
 	// SetRecordSignalsWhileBusy — together they let SignalWorkflow record a
 	// signal into a busy run's history without waiting for its lock.
 	active      map[string]*Workflow
-	busySignals map[string]bool
+	busySignals map[string]func(signal string, payload []byte) bool
 
 	wg sync.WaitGroup // tracks in-flight timer callbacks + background recovery (for Wait)
 }
@@ -96,7 +96,7 @@ func New(store Store, opts ...Option) *Engine {
 		locks:         map[string]*sync.Mutex{},
 		timers:        map[string]*time.Timer{},
 		active:        map[string]*Workflow{},
-		busySignals:   map[string]bool{},
+		busySignals:   map[string]func(signal string, payload []byte) bool{},
 	}
 	for _, o := range opts {
 		o(e)
@@ -131,13 +131,15 @@ func (e *Engine) RegisterActivity(name string, fn ActivityFunc) {
 // (nthSignal), activities/timers/side effects per TYPE (nthOf/nthTimer), so a
 // SignalReceived landing between two activity events shifts no counter. What
 // the caller gives up is "the signal has been processed when SignalWorkflow
-// returns" — hence opt-in per type. A signal recorded this way on a run whose
-// in-flight advance then completes or fails is never consumed (the blocking
-// path would have returned an error instead).
-func (e *Engine) SetRecordSignalsWhileBusy(name string) {
+// returns" — hence opt-in per type, and narrowed further by accept: only a
+// signal for which accept(signal, payload) is true takes the fast path (nil
+// accepts every signal); the rest keep waiting for the lock. A signal recorded
+// this way on a run whose in-flight advance then completes or fails is never
+// consumed (the blocking path would have returned an error instead).
+func (e *Engine) SetRecordSignalsWhileBusy(name string, accept func(signal string, payload []byte) bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.busySignals[name] = true
+	e.busySignals[name] = accept
 }
 
 // SetWorkflowPriority sets the recovery priority for a workflow type (default
@@ -351,16 +353,21 @@ func (e *Engine) SignalWorkflow(runID, signal string, payload any) error {
 // histMu, so the seq cannot collide with an event the advance records itself)
 // and queue a follow-up advance that consumes it once the lock frees.
 // ok == false means "not applicable" — no active advance, a type that did not
-// opt in, or an advance that is already finishing — and the caller falls back
+// opt in (or whose accept rejects this signal), or an advance that is already
+// finishing — and the caller falls back
 // to waiting for the lock.
 func (e *Engine) recordSignalWhileBusy(runID, signal string, pl []byte) (ok bool, err error) {
 	e.mu.Lock()
 	w := e.active[runID]
-	if w == nil || !e.busySignals[w.workflow] {
-		e.mu.Unlock()
-		return false, nil
+	var accept func(string, []byte) bool
+	optedIn := false
+	if w != nil {
+		accept, optedIn = e.busySignals[w.workflow]
 	}
 	e.mu.Unlock()
+	if !optedIn || (accept != nil && !accept(signal, pl)) {
+		return false, nil
+	}
 	w.histMu.Lock()
 	if w.closed {
 		w.histMu.Unlock()

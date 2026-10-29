@@ -26,8 +26,8 @@ about PRs, blocks, or gh; keep it that way.
   `.claude/rules/workflow-determinism.md`.
 - **Signals** are buffered (one arriving before its `WaitSignal` waits);
   **timers** (`Sleep`) are durable and rescheduled on `Recover`.
-- **`SetRecordSignalsWhileBusy(workflowName)`** (opt-in per type; only `plan`
-  uses it): normally `SignalWorkflow` takes the run lock before appending, so a
+- **`SetRecordSignalsWhileBusy(workflowName, accept)`** (opt-in per type,
+  narrowed per signal by `accept`; only `plan` uses it, for chat/topic edits): normally `SignalWorkflow` takes the run lock before appending, so a
   signal to a run busy with a minutes-long inline activity blocks — and is not
   in the history — until that activity is done. With the opt-in the signal is
   appended **immediately** to the in-flight advance's own history (`Workflow.histMu`

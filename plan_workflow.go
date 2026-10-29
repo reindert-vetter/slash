@@ -279,6 +279,10 @@ type PlanAnswerSignal struct {
 	// body). See planTopic.
 	TopicID  string `json:"topicId,omitempty"`
 	TopicOff bool   `json:"topicOff,omitempty"`
+	// ClientID: a chat message's own id, minted by the page (see
+	// planChatClientID / pendingPlanChat) so the read model can show a
+	// message that tembed recorded but the tracker has not handled yet.
+	ClientID string `json:"clientId,omitempty"`
 }
 
 // planTopic is one topic of what Jira tells about this ticket, shown above
@@ -421,6 +425,10 @@ type PlanHotfixSignal struct {
 	// stands is saved right away instead of after the gate.
 	TopicID  string `json:"topicId,omitempty"`
 	TopicOff bool   `json:"topicOff,omitempty"`
+	// ClientID: a chat message's own id, minted by the page (see
+	// planChatClientID / pendingPlanChat) so the read model can show a
+	// message that tembed recorded but the tracker has not handled yet.
+	ClientID string `json:"clientId,omitempty"`
 }
 
 // PlanScopeSignal answers the scope question. Choice is always "parent" today
@@ -434,6 +442,10 @@ type PlanScopeSignal struct {
 	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
 	TopicID     string              `json:"topicId,omitempty"`
 	TopicOff    bool                `json:"topicOff,omitempty"`
+	// ClientID: a chat message's own id, minted by the page (see
+	// planChatClientID / pendingPlanChat) so the read model can show a
+	// message that tembed recorded but the tracker has not handled yet.
+	ClientID string `json:"clientId,omitempty"`
 }
 
 // planAnswer is one stored reviewer answer (the Signal, kept on the document).
@@ -460,6 +472,8 @@ type planChatMessage struct {
 	// is on. See chat_attachment.go.
 	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
 	CreatedAt   string              `json:"createdAt,omitempty"`
+	// ClientID is the page-minted id of a user turn (see planChatClientID).
+	ClientID string `json:"clientId,omitempty"`
 }
 
 // planDoc is the whole document the page renders — see modules/plan.
@@ -586,6 +600,12 @@ type planDoc struct {
 	// replay-safety shape as SplitGenerate: an Execution recorded before it
 	// existed lacks the flag and keeps its original Activity order.
 	SavesGateAnswer bool `json:"savesGateAnswer,omitempty"`
+	// ChatSeen counts, per signal name, the chat signals WITH a client id
+	// this tracker has consumed — never reset (not by a regenerate, not by
+	// trimPlanChat). Signals of one name are consumed strictly in arrival
+	// order, so every chat signal of that name past this count is recorded
+	// in tembed but not handled yet: pendingPlanChat shows exactly those.
+	ChatSeen map[string]int `json:"chatSeen,omitempty"`
 	Questions     []planQuestion `json:"questions"`
 	Tasks         []planTask     `json:"tasks"`
 	// TaskStates is the reviewer's checkbox/note per task (see planTaskState).
@@ -674,7 +694,14 @@ func planRunID(key string) string { return "plan-" + key }
 // runs ONE Claude call for the reply and saves again — both their own
 // Activity, so a hiccup in the (much slower) Claude call never loses the
 // reviewer's own message.
-func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string, attachments []ChatAttachmentRef) error {
+func handlePlanChat(w *tembed.Workflow, doc *planDoc, signal, clientID string, text string, attachments []ChatAttachmentRef) error {
+	clientID = planChatClientID(clientID)
+	if clientID != "" {
+		if doc.ChatSeen == nil {
+			doc.ChatSeen = map[string]int{}
+		}
+		doc.ChatSeen[signal]++
+	}
 	text = strings.TrimSpace(text)
 	if text == "" && len(attachments) == 0 {
 		return nil
@@ -685,7 +712,7 @@ func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string, attachments [
 		// chatAttachmentOnlyBody.
 		text = chatAttachmentOnlyBody(len(attachments))
 	}
-	doc.Chat = append(doc.Chat, planChatMessage{Role: "user", Body: text, Attachments: attachments, CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+	doc.Chat = append(doc.Chat, planChatMessage{Role: "user", Body: text, Attachments: attachments, CreatedAt: time.Now().UTC().Format(time.RFC3339), ClientID: clientID})
 	doc.Chat = trimPlanChat(doc.Chat)
 	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
 		return fmt.Errorf("plan: save chat message: %w", err)
@@ -707,10 +734,10 @@ func handlePlanChat(w *tembed.Workflow, doc *planDoc, text string, attachments [
 // the reported "als ik input aanpas, dan is dat niet aangepast (na een
 // refresh)". handled=false means the Kind is not a side signal and the
 // caller treats it as its own answer.
-func handlePlanSideSignal(w *tembed.Workflow, doc *planDoc, kind, text string, attachments []ChatAttachmentRef, topicID string, topicOff bool) (bool, error) {
+func handlePlanSideSignal(w *tembed.Workflow, doc *planDoc, signal, clientID, kind, text string, attachments []ChatAttachmentRef, topicID string, topicOff bool) (bool, error) {
 	switch kind {
 	case planAnswerChat:
-		return true, handlePlanChat(w, doc, text, attachments)
+		return true, handlePlanChat(w, doc, signal, clientID, text, attachments)
 	case planAnswerTopics:
 		return true, handlePlanTopics(w, doc, strings.TrimSpace(text) == planTopicsRegenerate)
 	case planAnswerTopic:
@@ -909,7 +936,7 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		for {
 			var scope PlanScopeSignal
 			w.WaitSignal(SignalPlanScope, &scope)
-			if handled, err := handlePlanSideSignal(w, &doc, scope.Kind, scope.Text, scope.Attachments, scope.TopicID, scope.TopicOff); handled {
+			if handled, err := handlePlanSideSignal(w, &doc, SignalPlanScope, scope.ClientID, scope.Kind, scope.Text, scope.Attachments, scope.TopicID, scope.TopicOff); handled {
 				if err != nil {
 					return nil, err
 				}
@@ -946,7 +973,7 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		var hf PlanHotfixSignal
 		for {
 			w.WaitSignal(SignalPlanHotfix, &hf)
-			if handled, err := handlePlanSideSignal(w, &doc, hf.Kind, hf.Text, hf.Attachments, hf.TopicID, hf.TopicOff); handled {
+			if handled, err := handlePlanSideSignal(w, &doc, SignalPlanHotfix, hf.ClientID, hf.Kind, hf.Text, hf.Attachments, hf.TopicID, hf.TopicOff); handled {
 				if err != nil {
 					return nil, err
 				}
@@ -1116,7 +1143,7 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 		// The general chat about this ticket (reused from the review tree, see
 		// planChatMessage/.claude/docs/plan-page.md) — see handlePlanChat.
-		if handled, err := handlePlanSideSignal(w, &doc, sig.Kind, sig.Text, sig.Attachments, sig.TopicID, sig.TopicOff); handled {
+		if handled, err := handlePlanSideSignal(w, &doc, SignalPlanAnswer, sig.ClientID, sig.Kind, sig.Text, sig.Attachments, sig.TopicID, sig.TopicOff); handled {
 			if err != nil {
 				return nil, err
 			}
@@ -1522,6 +1549,15 @@ func (m *TaskManager) RunsForPlan(key string) []WorkflowRunView {
 // registerPlanActivities wires the three Activities. Called from
 // registerWorkflows in workflows.go.
 func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
+	// A chat message (or a topic edit) sent while the tracker runs a
+	// minutes-long generation is recorded at once instead of waiting for that
+	// generation — see Engine.SetRecordSignalsWhileBusy and pendingPlanChat.
+	// Only the chat, a topic edit and a GATE answer: the page shows each of
+	// them from the history (pendingPlanChat/applyRecordedGateAnswer) or its
+	// own resend. Every other plan signal keeps the blocking contract its
+	// caller relies on — sendFollowup/sendRegenerate clear their "bezig" state
+	// when the Signal returns, i.e. once the work is done.
+	engine.SetRecordSignalsWhileBusy(WorkflowPlan, planSignalRecordsWhileBusy)
 	// Activity: read the ticket itself (external call, hence an Activity). A
 	// failure yields a document carrying the reason rather than sinking the
 	// tracker — the page then shows the ticket key and the note, and a later
@@ -2055,4 +2091,26 @@ func lastPlanChatAttachments(doc planDoc) []ChatAttachmentRef {
 		}
 	}
 	return nil
+}
+
+// planSignalRecordsWhileBusy is the plan tracker's accept for
+// Engine.SetRecordSignalsWhileBusy: a chat message or a topic edit on any of
+// the three plan signals, and the scope/branch answer itself (no Kind) on its
+// own gate signal — on STAT-1155 that answer was clicked while the automatic
+// topics run held the lock, so it was not recorded yet when the page was
+// refreshed and the question came back.
+func planSignalRecordsWhileBusy(signal string, payload []byte) bool {
+	if signal != SignalPlanAnswer && signal != SignalPlanHotfix && signal != SignalPlanScope {
+		return false
+	}
+	var sig struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(payload, &sig) != nil {
+		return false
+	}
+	if sig.Kind == planAnswerChat || sig.Kind == planAnswerTopic {
+		return true
+	}
+	return sig.Kind == "" && (signal == SignalPlanHotfix || signal == SignalPlanScope)
 }

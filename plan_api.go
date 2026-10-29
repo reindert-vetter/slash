@@ -21,7 +21,10 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
+
+	"github.com/reindert-vetter/tembed"
 )
 
 // handlePlan serves GET /api/plan?key=KEY — read-only. A ticket whose tracker
@@ -54,8 +57,15 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	// the reviewer, not working — saying "plan wordt opgesteld…" there would be
 	// a lie the page cannot recover from (it never resolves on its own).
 	// Same for the hotfix question a bug ticket is parked on.
+	// The tracker's own history, read once: a gate answer or chat message it
+	// has recorded but not handled yet (it is busy) is shown from here.
+	hist := mgr.planHistory(key)
+	gateAnswered := ok && applyRecordedGateAnswer(hist, &doc)
 	if doc.NeedsScope || doc.NeedsHotfix {
 		generating = false
+	}
+	if gateAnswered {
+		generating = true
 	}
 	// The other way round: once a gate answer is stored (SavesGateAnswer),
 	// the first generation runs INLINE in that answer's Signal, and the tembed
@@ -84,6 +94,9 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	payload := map[string]any{
 		"ok": true, "key": key, "doc": doc, "runs": runs, "generating": generating,
+		// Chat messages tembed already recorded but the tracker has not handled
+		// yet (it is busy with a generation) — see pendingPlanChat.
+		"pendingChat": pendingPlanChat(hist, doc),
 	}
 	// The index's LAST action (plan_execute, see plan_execute.go): the newest
 	// attempt for this ticket, absent when it was never run. Read from the
@@ -201,4 +214,116 @@ func (s *server) handlePlanRestartBranch(w http.ResponseWriter, r *http.Request)
 func planAwaitsFirstGeneration(doc planDoc) bool {
 	return doc.SavesGateAnswer && !doc.NeedsScope && !doc.NeedsHotfix &&
 		len(doc.Questions) == 0 && len(doc.Tasks) == 0 && doc.Error == ""
+}
+
+// planChatClientIDPattern is the shape of a page-minted chat message id
+// (crypto.randomUUID, or anything as tame). Anything else is dropped — the id
+// is only ever compared, never handed to a subprocess.
+var planChatClientIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
+// planChatClientID returns id when it is a valid client id, "" otherwise.
+func planChatClientID(id string) string {
+	if planChatClientIDPattern.MatchString(id) {
+		return id
+	}
+	return ""
+}
+
+// planPendingChatMessage is one chat message recorded in tembed but not yet
+// handled by the plan tracker.
+type planPendingChatMessage struct {
+	ClientID    string              `json:"clientId"`
+	Body        string              `json:"body"`
+	Attachments []ChatAttachmentRef `json:"attachments,omitempty"`
+}
+
+// planHistory is the plan tracker's own tembed history (read-only), nil when
+// there is none. The tracker records a signal immediately even while it runs a
+// minutes-long generation (Engine.SetRecordSignalsWhileBusy) but only folds it
+// into the document once that generation is done — without reading the
+// history, a refresh in between showed nothing of what was just chosen/sent.
+func (m *TaskManager) planHistory(key string) []tembed.Event {
+	if m == nil || m.engine == nil {
+		return nil
+	}
+	hist, err := m.engine.History(planRunID(key))
+	if err != nil {
+		return nil
+	}
+	return hist
+}
+
+// applyRecordedGateAnswer folds a scope/branch answer the tracker has recorded
+// but not saved yet into doc, reporting whether it did. Exact because the gate
+// loop treats the FIRST signal of its name without a side Kind as the answer
+// (handlePlanSideSignal), and an Execution's history only ever belongs to that
+// Execution (RestartPlanBranch deletes the run).
+func applyRecordedGateAnswer(hist []tembed.Event, doc *planDoc) bool {
+	name := ""
+	switch {
+	case doc.NeedsScope:
+		name = SignalPlanScope
+	case doc.NeedsHotfix:
+		name = SignalPlanHotfix
+	default:
+		return false
+	}
+	for _, ev := range hist {
+		if ev.Type != tembed.EventSignalReceived || ev.Name != name {
+			continue
+		}
+		var sig PlanHotfixSignal
+		if json.Unmarshal(ev.Payload, &sig) != nil || sig.Kind != "" {
+			continue
+		}
+		if name == SignalPlanScope {
+			doc.NeedsScope = false
+		} else {
+			doc.NeedsHotfix = false
+			doc.Hotfix, doc.BaseBranch = resolvePlanBase(*doc, sig)
+		}
+		return true
+	}
+	return false
+}
+
+// pendingPlanChat is the pure core of PendingPlanChat. Per signal name, the
+// tracker consumes signals strictly in arrival order and counts every chat
+// signal WITH a client id it handled (doc.ChatSeen), so the chat signals of
+// that name past that count are exactly the unhandled ones. Signals without a
+// (valid) client id — every one recorded before this existed — are ignored on
+// both sides, and so is an empty message (the tracker drops it too).
+func pendingPlanChat(hist []tembed.Event, doc planDoc) []planPendingChatMessage {
+	out := []planPendingChatMessage{}
+	seen := map[string]int{}
+	for _, ev := range hist {
+		if ev.Type != tembed.EventSignalReceived {
+			continue
+		}
+		if ev.Name != SignalPlanAnswer && ev.Name != SignalPlanHotfix && ev.Name != SignalPlanScope {
+			continue
+		}
+		var sig struct {
+			Kind        string              `json:"kind"`
+			Text        string              `json:"text"`
+			Attachments []ChatAttachmentRef `json:"attachments"`
+			ClientID    string              `json:"clientId"`
+		}
+		if json.Unmarshal(ev.Payload, &sig) != nil || sig.Kind != planAnswerChat || planChatClientID(sig.ClientID) == "" {
+			continue
+		}
+		seen[ev.Name]++
+		if seen[ev.Name] <= doc.ChatSeen[ev.Name] {
+			continue
+		}
+		body := strings.TrimSpace(sig.Text)
+		if body == "" && len(sig.Attachments) == 0 {
+			continue
+		}
+		if body == "" {
+			body = chatAttachmentOnlyBody(len(sig.Attachments))
+		}
+		out = append(out, planPendingChatMessage{ClientID: sig.ClientID, Body: body, Attachments: sig.Attachments})
+	}
+	return out
 }

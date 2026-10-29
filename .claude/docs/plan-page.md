@@ -1382,6 +1382,49 @@ while that answer's Signal runs the generation inline, `GET /api/plan` reports
 (`planAwaitsFirstGeneration`: flag set, no gate, no questions/tasks, no error,
 no failed `plan` run). Test: `TestPlanGateAnswerIsStoredBeforeTheGeneration`.
 
+### A chat message sent while the tracker is busy is recorded at once
+
+Second half of the same report: a chat message sent during that first
+generation was not in the tembed history at all yet — `SignalWorkflow` waited
+for the run lock the generation held — so a refresh showed nothing until the
+generation landed. The plan tracker now opts into
+`Engine.SetRecordSignalsWhileBusy` (see `.claude/docs/tembed-workflows.md`),
+narrowed by `planSignalRecordsWhileBusy` to a chat message or a topic edit on
+any of the three plan signals, plus the scope/branch answer itself on its own
+gate signal. Every other plan signal keeps the blocking contract, because
+`sendFollowup`/`sendRegenerate` clear their "bezig" state when the Signal
+returns.
+
+**The gate answer, clicked while the tracker is busy.** On STAT-1155 the
+branch answer was clicked while the automatic topics run (`planTopics`, ~15s)
+held the lock, so it was not in the history yet either — `SavesGateAnswer`
+alone does not cover that. Now it is recorded at once, and `GET /api/plan`
+folds a recorded-but-unhandled gate answer into the document it returns
+(`applyRecordedGateAnswer`: the first signal of the gate's name without a side
+Kind IS the answer, exactly as the gate loop reads it) and reports
+`generating: true`.
+
+**The page must know the Run ID without the start POST.** `ensureTracker`'s
+`POST /api/workflows/plan` goes through `StartWorkflowID`, which takes the run
+lock — so after a refresh during a generation it blocked for minutes and the
+page could not send anything at all. `loadPlan` now takes `state.runId` from
+`GET /api/plan`'s `runs` (the `plan` run) when it has none yet.
+
+The read side: the page mints a `clientId` per message (`newChatClientId`),
+the tracker counts every handled chat signal that carries one per signal name
+(`doc.ChatSeen`, never reset — not by a regenerate, not by `trimPlanChat`), and
+`GET /api/plan` returns `pendingChat` — the chat signals of each name past that
+count, read from the tracker's own history (`pendingPlanChat`). Signals of one
+name are consumed strictly in arrival order, so that count is exact; a signal
+without a (valid) client id, i.e. every one from before this, is ignored on
+both sides. The page shows them (plus its own still-in-flight sends,
+`chatSending`) as the review tree's "in de wachtrij" bubbles
+(`claudeQueuedBubbles` via `chatView().queued`) instead of the old optimistic
+echo into `state.doc.chat`. **Accepted gap:** a message sent on a gate signal
+the tracker has already left (another tab answered the gate a moment earlier)
+stays "in de wachtrij" forever — `SavesGateAnswer` makes that window
+milliseconds. Tests: `plan_pending_chat_test.go`, `tembed/busy_signal_test.go`.
+
 ### The branch question also starts the work (Jira → In Progress)
 
 Reviewer request: *"als je in todo een branch hebt aangemaakt (eerste vraag),

@@ -251,6 +251,12 @@ const state = reactive({
   chatBusy: false,
   chatError: '',
   chatTick: 0,
+  // Chat messages the tracker has not handled yet — GET /api/plan's
+  // `pendingChat` (recorded in tembed's history while the tracker is busy
+  // with a generation, see pendingPlanChat in plan_api.go) plus this tab's own
+  // sends whose Signal has not returned yet (chatSending). Shown as "in de
+  // wachtrij" bubbles via chatView().queued.
+  pendingChat: [],
   // The Jira-comments panel above the questions index (task 23b, see
   // .claude/docs/plan-page.md). comments mirrors GET /api/jira/comments's own
   // shape plus a loading/error flag; loaded is false until the first read
@@ -453,11 +459,19 @@ async function loadPlan() {
       return
     }
     lastPayload = payload
-    const freshDoc = body.doc || EMPTY_DOC
-    const freshChat = freshDoc.chat || []
-    const localChat = state.doc.chat || []
-    state.doc = freshChat.length < localChat.length ? { ...freshDoc, chat: localChat } : freshDoc
+    state.doc = body.doc || EMPTY_DOC
+    serverPendingChat = Array.isArray(body.pendingChat) ? body.pendingChat : []
+    syncPendingChat()
     state.runs = Array.isArray(body.runs) ? body.runs : []
+    // The tracker's Run ID straight from the read model: ensureTracker's start
+    // POST takes the run lock (StartWorkflowID), so while the tracker runs a
+    // minutes-long generation it blocks — and without a runId this tab could
+    // not even send a chat message after a refresh (see "A chat message sent
+    // while the tracker is busy" in .claude/docs/plan-page.md).
+    if (!state.runId) {
+      const tracker = state.runs.find((r) => r.workflow === 'plan' && r.runId)
+      if (tracker) state.runId = tracker.runId
+    }
     state.generating = !!body.generating
     state.exec = body.exec || null
     state.artifacts = body.artifacts || null
@@ -1506,21 +1520,46 @@ function chatSignalName() {
   return 'plan_answer'
 }
 
-// sendChatMessage sends one reviewer message. The message is echoed onto
-// state.doc locally FIRST (optimistic — the same "local pick wins until the
-// document catches up" shape answerFor uses) so it appears immediately. The
-// Signal round trip still blocks until the whole reply is generated
-// (handlePlanChat runs it inline), but the reviewer no longer just waits on a
-// blank overlay for that: the LIVE turn — status/streamed text — arrives
-// meanwhile over the same SSE channel the review tree's own chat uses, see
-// ensurePlanChatEvents/chatView. This await is only the belt-and-braces
-// refetch for the reviewer's OWN send, exactly like RelatedPanel.mjs's
-// sendClaudeMessage.
+// serverPendingChat is GET /api/plan's last `pendingChat`; chatSending is this
+// tab's own sends whose Signal is still in flight, keyed by their client id.
+// Plain (non-reactive) — syncPendingChat folds both into state.pendingChat.
+let serverPendingChat = []
+const chatSending = new Map()
+
+// syncPendingChat recomputes state.pendingChat: everything the server reports
+// as recorded-but-unhandled, plus a local send the server does not know about
+// yet (its Signal has not reached tembed) — never one already in doc.chat.
+function syncPendingChat() {
+  const handled = new Set((state.doc.chat || []).map((m) => m.clientId).filter(Boolean))
+  const out = serverPendingChat.filter((p) => !handled.has(p.clientId))
+  const known = new Set(out.map((p) => p.clientId))
+  for (const [clientId, body] of chatSending) {
+    if (!known.has(clientId) && !handled.has(clientId)) out.push({ clientId, body })
+  }
+  state.pendingChat = out
+}
+
+// newChatClientId mints the id a chat message travels with, so the server can
+// tell which recorded messages the tracker has not handled yet
+// (planChatClientID/pendingPlanChat in plan_api.go).
+function newChatClientId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID()
+  return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+}
+
+// sendChatMessage sends one reviewer message. It shows up at once as an "in de
+// wachtrij" bubble (state.pendingChat) and turns into an ordinary bubble once
+// the tracker has handled it. The Signal is recorded in tembed straight away —
+// also while the tracker is busy with a minutes-long generation
+// (Engine.SetRecordSignalsWhileBusy) — so a refresh shows it again from
+// GET /api/plan's `pendingChat`. When the tracker is idle the round trip
+// still blocks until the reply is generated (handlePlanChat runs it inline);
+// the LIVE turn arrives meanwhile over SSE, see ensurePlanChatEvents/chatView.
 async function sendChatMessage(text) {
   const trimmed = (text || '').trim()
   if (state.chatBusy) return
   // The images pasted/dragged into the composer, taken out of it before the
-  // optimistic echo below. Images alone are a complete message (the backend
+  // pending bubble below. Images alone are a complete message (the backend
   // fills in a short placeholder body, see chatAttachmentOnlyBody in
   // chat_attachment.go).
   const attachments = await takePendingAttachments(chatConvId(), chatConvId())
@@ -1530,7 +1569,9 @@ async function sendChatMessage(text) {
   if (!state.runId) return
   state.chatBusy = true
   state.chatError = ''
-  state.doc = { ...state.doc, chat: [...(state.doc.chat || []), { role: 'user', body, attachments }] }
+  const clientId = newChatClientId()
+  chatSending.set(clientId, body)
+  syncPendingChat()
   scrollPlanChatThreadToBottom()
   try {
     const res = await fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
@@ -1540,6 +1581,7 @@ async function sendChatMessage(text) {
         kind: 'chat',
         text: trimmed,
         attachments: attachments.length ? attachments : undefined,
+        clientId,
       }),
     })
     if (!res.ok) {
@@ -1555,6 +1597,8 @@ async function sendChatMessage(text) {
     state.chatError = t('Kon niet verstuurd worden.')
     restorePendingAttachments(chatConvId(), chatConvId(), attachments)
   }
+  chatSending.delete(clientId)
+  syncPendingChat()
   state.chatBusy = false
 }
 
@@ -1583,7 +1627,7 @@ function chatView() {
     claudeOptionSel: () => 0,
     anchorHint: () => '',
     progress: () => turnProgress(chatConvId()),
-    queued: () => [],
+    queued: () => state.pendingChat.map((p) => ({ id: p.clientId, body: p.body })),
     elapsed: () => {
       const p = turnProgress(chatConvId())
       if (!p || !p.startedAt) return 0
