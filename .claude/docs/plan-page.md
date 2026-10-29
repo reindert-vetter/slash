@@ -252,7 +252,7 @@ row ever shows the focus ring and ↓/↑ from the ticket card does not enter th
 list. Out of scope for this change (not requested, and this page's own
 keyboard model — `state.col`/`state.cur` — has no equivalent "sub-cursor within
 column 0" concept yet); a future request to add it would extend `state.col0Focus`
-the same way the Jira-opmerkingen column already does.
+the same way a dedicated side column once did (since removed).
 
 ## The context a plan is built on: comments and already-merged work
 
@@ -392,7 +392,7 @@ ticket."*
 **The questions column now reads, top to bottom:** the scope/branch gate card
 (while it stands) → **"Wat Jira hierover zegt"** (the topics, `topicsCard`,
 `data-testid=plan-topics`) → **the planning chat** (`planInlineChat`,
-`data-testid=plan-inline-chat`) → Jira-opmerkingen → the generated questions,
+`data-testid=plan-inline-chat`) → the generated questions,
 follow-up/regenerate rows and the task list, which stay as they were. The
 sectioned intent editor (`intentField`/`parseIntentSections`/
 `intentToSpecsHint`, the `planAnswerIntent` UI) and the fullscreen chat
@@ -494,53 +494,6 @@ Verified live (a separate instance on a scratch data dir) against BUG-5195:
 topics generated, a toggle + an edit survived an immediate reload and reached
 `intent.md`, and the chat answered a request-log question by running duckdb
 itself while the branch question still stood.
-
-### A dedicated Jira-opmerkingen column next to the ticket
-
-Reviewer request, verbatim: *"als je dat selecteerd, alleen dan opmerkingen
-rechts daarvan zien (ook als je pr description selecteerd hebt)"* — a NEW
-column (`intentCommentsColumn`, `data-testid=plan-intent-comments-column`,
-inserted in `App()` between `plan-info-column` and `plan-questions-column`)
-that shows ONLY the Jira-opmerkingen (it reuses `commentsPanel()` verbatim, the
-same component the questions column's own first row renders) once the
-reviewer clicks into either the ticket description
-(`data-testid=plan-description`) or the intent field's own section body
-(`intentSectionBody`, only while `place === 'ticket'` — the `'questions'`
-placement already sits directly above `commentsPanel()` in that same column,
-so it needs no extra column of its own).
-
-`state.col0Focus` (`'description' | 'intent' | null`, ephemeral/local, not
-URL-persisted — same category as `state.descExpanded`) records which of the
-two was clicked last; `intentCommentsColumnVisible()` gates the column on
-`state.col === 0 && (state.col0Focus === 'description' || state.col0Focus ===
-'intent')`, so moving the keyboard away from column 0 (a click on the
-questions column, a block column, `→`/`←`) hides it again immediately rather
-than leaving it stale. The ticket card's own outer `@click` resets
-`col0Focus` to `null` (selecting the card in general, without either specific
-sub-block); the description block and each section body's own `@click`
-`stopPropagation()` first — the same nested-click ordering rule as
-`overview.mjs`'s popover close button
-(`.claude/rules/arrowjs-pitfalls.md`) — so their own, more specific
-`col0Focus` write is never immediately overwritten by the card's own bubbling
-handler. Both of those handlers also set `state.col = 0` — the section body's
-own click did not at first, so clicking the intent field from a block column
-set `col0Focus` but never satisfied `intentCommentsColumnVisible()`'s own
-`state.col === 0`, and the column silently stayed away.
-
-**ONE panel at a time.** The questions column renders `commentsPanel()` behind
-its own `${() => intentCommentsColumnVisible() ? [] : [commentsPanel()]}`
-binding (a stable `contents` root, like the two `intentField`/
-`intentToSpecsHint` slots above it), so it stands down while the dedicated
-column is up. Rendering both put the same panel twice on screen side by side,
-and — worse — gave the single-composer machinery two
-`plan-comment-reply-input` fields, of which
-`openCommentReply`/`sendCommentReply`'s `document.querySelector` only ever
-sees the FIRST (the dedicated column comes earlier in the DOM), so a reply
-typed into the questions column's copy was never read back.
-
-Test: `tests/plan-intent-sections.spec.mjs` ("selecting the ticket description
-or the intent field shows a dedicated Jira-opmerkingen column, hidden
-otherwise" — which also asserts the panel count stays 1).
 
 ### Both plan Claude calls run on Opus, with their own 5-minute timeout
 
@@ -1151,12 +1104,8 @@ them. Both sides land on the document (`parentKey`/`parentTitle`/
   `assignee`/`assigneeAvatarUrl` — which `Issue()` now reads for every issue,
   so it needs no extra call. Deliberately NOT on the `plan-parent-link` chip:
   the reviewer explicitly left that one out of scope.
-- **`scopeCard` renders only the SCOPE rows of `navRows()`.** That list also
-  carries the Jira-comments row (`COMMENTS_ROW_ID`, present whenever the
-  ticket has comments), which has no `subtask` of its own — before this filter
-  `scopeRow` threw on it on every single render, and invisibly, because LOCAL
-  PATCH 5 catches a throwing reactive effect and only `console.error`s it (see
-  `.claude/rules/arrowjs-pitfalls.md`). Found while verifying task 24 against
+- **`scopeCard` renders only the SCOPE rows of `navRows()`.** (It once also
+  had to skip the since-removed Jira-comments row.) Found while verifying task 24 against
   a real ticket, fixed in the same change.
 - **Picking a subtask sends no Signal at all**: it is plain navigation to
   `/plan/<SUBKEY>`, which has its own tracker. Only "the main task" is
@@ -1312,17 +1261,7 @@ one).
   holds, `data-testid=plan-hotfix-option`, `data-hotfix-target=yes|no|other`):
   "Ja, hotfix — master", "Nee, gewoon — develop", and "Vanaf een andere
   branch…". Glyph plus a word, never a colour on its own.
-- **`hotfixCard` renders only the HOTFIX rows of `navRows()`** — the same
-  filter `scopeCard` already needed (see its own bullet above), for the exact
-  same reason: `navRows()` always puts the Jira-comments row
-  (`COMMENTS_ROW_ID`) first, even while this gate stands. Before this filter,
-  that row rendered a SECOND time through `hotfixRow` too — with no `target`
-  of its own it fell into `hotfixRow`'s fallback branch and rendered as a
-  phantom "Vanaf een andere branch…" row — and because its id was literally
-  `COMMENTS_ROW_ID` (the actual default cursor), that phantom row lit up with
-  the exact same selection ring as the real Jira-opmerkingen block. Reviewer
-  report: "er zijn nu 2 dingen geselecteerd, vreemd". Regression test:
-  `tests/plan-hotfix-gate.spec.mjs`.
+- **`hotfixCard` renders only the HOTFIX rows of `navRows()`** (same filter as `scopeCard`).
 - **The third choice is a dropdown with a search field**
   (`branchPicker`, `data-testid=plan-branch-picker`/`plan-branch-search`/
   `plan-branch-option`): it unfolds inside the row rather than answering, and
@@ -1469,14 +1408,10 @@ Jira right there.
 `←`/`→` move between columns (`state.col`: 0 = ticket, 1 = questions, 2 + n =
 the n-th block column); `←` on the ticket column leaves to `/pr-overview`.
 `↑`/`↓` move the cursor within the focused column — in column 2 over **one flat
-list** whose FIRST row is the Jira-opmerkingen block (only while the family has
-any comment — see "The comments block is a stop of its own in the → chain"
-below), then every option of every question, then every task, so `↓` walks from
-the comments block, through the last option, straight into the task list
-exactly as the column reads.
+list**: every option of every question, then every task, so `↓` walks from
+the last option straight into the task list exactly as the column reads.
 `Enter`/`Space` on an option chooses it (with whatever is typed in its field);
-on the comments block it hands `↑`/`↓` to the individual comments (`←` leaves
-that mode again, without changing `state.col`); on a gate row (scope or
+on a gate row (scope or
 hotfix) it answers that question — the hotfix question's third row only
 unfolds its branch dropdown, whose own search field owns the keyboard while it
 is focused;
@@ -2696,313 +2631,4 @@ reactions, no resolve/ignore, no AI-generated titles — unlike the review
 tree's PR-comment panel, which has all of those; a smaller, read-mostly
 feature was the explicit ask here.
 
-**The frontend (task 23b of `todo/plan-page-workflow.md`).** `commentsPanel()`
-in `src/plan.mjs` sits at the very TOP of the questions column
-(`questionsColumn()`, kolom 2), above the question cards — per the reviewer's
-own instruction. It does NOT reuse the review tree's `BlockList.mjs` component
-(that component carries the whole review-tree's block/approval model); the
-panel is its own small set of functions (`commentGroupCard`, `commentRow`,
-`commentReplyComposer`, `commentMentionPicker`) built the same way every other
-card on this page is,
-consistent with this page's own header comment ("nothing is imported from
-home.mjs/Block.mjs/RelatedPanel.mjs").
-
-- **Reading:** `loadComments(refresh)` calls `GET /api/jira/comments` once at
-  page load (`state.comments`, no polling — the day-long server cache means a
-  poll would just re-ask for the same answer) and again with `refresh:true`
-  right after a reply is posted, or from the panel's own "Ververs" button
-  (`data-testid=plan-comments-refresh`). Each group (`planCommentGroup`)
-  renders as its own card: the ticket key (linking out to Jira), a relation
-  WORD next to it (`COMMENT_RELATION_WORD`: "dit ticket"/"hoofdtaak"/"subtaak"
-  — never a colour alone, the colourblind rule), the title, a comment count,
-  and every comment (`avatarHTML` + author + `relativeTime` + `renderMarkdown`
-  body, reusing the exact shared helpers the rest of the app uses for this).
-  A comment's own body is always shown in FULL — never clamped, whatever its
-  length (see "Collapsed by default: a HEIGHT fold, over the whole list, never
-  per comment" below for why not, and what folds instead).
-- **Replying:** one composer open at a time (`state.commentReplyKey`, the
-  same single-cursor discipline the rest of the page follows), a plain
-  UNCONTROLLED `<textarea>` (`data-testid=plan-comment-reply-input`, same
-  shape as `ClaudeChat.mjs`'s composer — a reactive `value=` binding would
-  fight the caret while typing) posted via `sendCommentReply` →
-  `POST /api/workflows/jira_comment`. The "Beantwoorden" toggle
-  (`data-testid=plan-comment-reply-toggle`) only renders when
-  `state.comments.canPost` is true; without a token the panel says so in
-  words instead ("Antwoorden vereist een Jira API-token…").
-- **@-mentions:** `onCommentReplyInput` watches the text typed so far for a
-  trailing, unresolved `@word` (anchored to the END of the string, not the
-  real caret — this composer, like every other one on this page, is typed
-  top-to-bottom) and, after a 200ms debounce, looks it up via
-  `GET /api/jira/users?q=…` (`commentMentionTimer`). A match shown in
-  `commentMentionPicker()` (avatar + display name) is only ever ADDED by the
-  reviewer clicking it (`pickCommentMention`) — never inferred — which
-  replaces the trailing `@word` in the DOM textarea with the full
-  `@Display Name` and appends `{accountId, text}` to `state.commentMentions`,
-  exactly the `jira.Mention` shape `BuildCommentADF` expects. A mention whose
-  text the reviewer later edits away simply contributes nothing when posted
-  (see `BuildCommentADF`'s own doc comment) — no cleanup needed here.
-- **Feeding back into the plan:** right after a successful post,
-  `sendCommentReply` sends the plan tracker's OWN third `plan_answer` Signal
-  Kind, `"comment"` (`planAnswerComment`), exactly as `.claude/docs` above
-  already documents — this is the piece that actually makes a new comment
-  regenerate the task list.
-- **Jira avatars needed a second allowed host on the avatar proxy.**
-  `avatar.mjs`'s `avatarHTML` always routes an `avatarUrl` through
-  `GET /api/avatar` (`avatar_proxy.go`), which used to allow only
-  `avatars.githubusercontent.com`. A Jira comment/user's `AvatarURL` is served
-  from Atlassian's own CDN
-  (`avatar-management--avatars.us-west-2.prod.public.atl-paas.net`), so
-  without this the proxy 400'd on every Jira avatar and the fallback-on-error
-  wiring silently degraded every one of them to an initials circle. Fixed by
-  turning the single `avatarAllowedHost` constant into a small
-  `avatarAllowedHosts` allowlist map (exact host match, same as before — no
-  wildcarding, so this can't become an open proxy/SSRF vector). Verified
-  against the real `PAYM-813` ticket: the proxy request for a real Jira
-  avatar now returns 200 and the `<img>` actually loads (`naturalWidth` > 0),
-  where it previously 400'd. Tests:
-  `TestHandleAvatarAllowsJiraAvatarHost` (the new host is reachable),
-  the extended `TestHandleAvatarRejectsDisallowedHost` (a look-alike host
-  that merely contains the Atlassian host as a substring is still rejected —
-  the allowlist is an exact map-key match, not a suffix/contains check).
-- **Not covered by an automated test:** the reply composer and mention
-  picker's full round trip (they need a configured Jira API token, which the
-  Playwright harness's `SLASH_JIRA=off` fixture doesn't guarantee is absent —
-  see `tests/plan-comments.spec.mjs`'s own header comment). Verified by hand
-  instead against the real `PAYM-813` ticket: opening the composer, typing an
-  `@` mention, picking a suggestion, sending, and seeing the new comment
-  reappear in the panel after the automatic refresh — all with zero console
-  errors.
-
-### Threaded comments: a reply sits indented under its parent, and Enter replies to one comment
-
-Reviewer request: *"chat message zijn soms onderliggende van andere message,
-dat moet je dan laten indenten"*, extended to *replying* to one specific
-comment as well.
-
-**Where the parent relation comes from.** Jira Cloud's own reply feature
-stores a `parentId` on a reply. It is **not** in Atlassian's published OpenAPI
-spec (the `Comment` schema lists no such field, and community answers from
-late 2025 still say there is no REST support), but it is live:
-`GET /rest/api/3/issue/{key}/comment` returns it as a number on every reply.
-Two other read paths drop it — `acli jira workitem view --fields comment`
-(what `jira.Module.Issue()` reads through) and the issue endpoint's own
-`?fields=comment` — so `Issue()` never sees it. `jira.Module.CommentParents`
-is therefore one extra REST call per issue, made only by the panel
-(`plan_comments.go`'s `withCommentParents`, at most `1+maxCommentIssues`
-calls, inside the existing day-long cache, and only with the API token
-configured). Best-effort: without a token or on any error the list is simply
-flat, as before. `jira.Comment.ParentID` (`omitempty`) carries it to the page;
-the prompt context (`Issue()` callers) is deliberately unchanged.
-
-**Posting a reply** reuses the same `jira_comment` workflow: its input gained
-`parentId` (validated as a plain decimal id in `validJiraCommentInput`, both in
-the handler and in the workflow body), which `AddComment` sends as a NUMERIC
-`parentId` next to `body`. Verified live on `PAYM-813` (test comments 108070
-→ 108071, 108073 left there on purpose): a reply to a top-level comment is
-stored and read back with its `parentId`; a reply to a REPLY is rejected with
-400 *"Cannot create new child comments"* — **Jira threads exactly one level
-deep**. A run recorded before the field existed replays unchanged (empty =
-top-level).
-
-**Frontend (`src/plan.mjs`).**
-
-- `threadComments(comments)` orders one group as threads: each top-level
-  comment directly followed by its replies, chronological within each. This
-  REORDERS, not just indents — in Jira's flat list a reply is not always
-  adjacent to its parent (BUG-5195: 101568 answers 100993 with 101481 in
-  between). A reply whose parent fell outside the list (`maxIssueComments`
-  cut-off) shows as top-level. `commentFlatList` uses the same order, so ↓
-  walks exactly what is on screen; `commentId` keeps the ORIGINAL index as its
-  fallback.
-- `commentRow` indents a reply via `COMMENT_DEPTH_CLS`: a left margin plus a
-  vertical rule (shape, not colour — the colourblind rule), and carries
-  `data-comment-depth`. The row's `.key()` includes the depth so a changed
-  parent relation re-mounts the row instead of reusing stale static classes.
-- **Enter on the active comment** (inside `commentsActive()`) and the small
-  "↳ Beantwoorden" button that shows **only on the active row**
-  (`data-testid=plan-comment-row-reply`) both run `replyToComment(entry)`.
-  It opens the single composer with `state.commentReplyParent` = the thread's
-  ROOT id (because of Jira's one-level rule) and `state.commentReplyTo` = the
-  chosen comment's author, shown as "↳ Reactie op <naam>"
-  (`data-testid=plan-comment-reply-to`). Replying to a reply also pre-fills
-  that author as a real picked mention (`@Name `), so the person actually
-  answered is still addressed even though Jira hangs the comment under the
-  root. Space inside the comments still does nothing.
-- The composer for a thread reply renders right after that thread's LAST row,
-  indented like a reply (`threadedRowsWithComposer`,
-  `data-testid=plan-comment-thread-composer`); the card's bottom
-  "Beantwoorden" stays the plain new-comment-on-the-ticket composer.
-
-Tests: `TestAddCommentPayload`, `TestParseCommentParents`
-(`modules/jira/comments_test.go`), `TestJiraCommentWorkflowPostsReply` +
-the `ParentID` cases in `TestValidJiraCommentInput` (`jira_comment_test.go`),
-and "threaded Jira comments" in `tests/plan-comments.spec.mjs`.
-
-### The comments block is a stop of its own in the → chain
-
-Reviewer request, verbatim: *"als ik naar rechts ga, wil ik eerst jira
-opmerkingen blok volledig selecteren, als ik enter druk, wil ik tussen de
-opmerkingen heen kunnen navigeren"* — this reverses an earlier, deliberate
-choice (see the "23b" section above's original wording, now corrected): the
-panel was built as `state.col`/`navRows()`-agnostic ("replying is a
-mouse/typing action, not something to walk with ↑/↓"). It is now a genuine
-stop, reusing the review tree's own "a block is a stop, Enter hands ↑/↓ to a
-nested list" shape (the methodes-kolom/`tcol`, see
-`.claude/docs/test-class-grouping.md`) rather than inventing a new mechanism.
-
-- **`COMMENTS_ROW_ID` (`'comments'`) is the FIRST entry `navRows()` returns**,
-  whenever the family has any comment at all (`commentFlatList().length`,
-  guarded the same way the follow-up row only appears "once there is
-  something") — pushed before the scope/hotfix gate branches even `return`,
-  since `commentsPanel()` itself already renders unconditionally, independent
-  of that gate. A plain `→` (or `←` back from a block column) therefore lands
-  on it before anything else, exactly like a plain `→` already lands on the
-  first option/scope/hotfix row when there is no comment at all — no special
-  case needed, `navRows()`'s existing "cursor walks the flat list" machinery
-  does this for free.
-- **`commentFlatList()`** flattens every group's comments into ONE ordered
-  list, the same shape `navRows()` itself flattens options into — so ↓ walks
-  from one ticket's last comment straight into the next ticket's first one.
-  Each entry's id (`commentId(groupKey, c, i)`) is the SAME
-  group-key + comment-id/created/index shape `commentRow`'s own `.key()`
-  already used — never a raw index (`.claude/rules/conventions.md`).
-- **`state.commentsFocused`/`state.commentCursor`** mirror `testColumnFocused`/
-  `classMethodSel`: `commentsActive()` (`isCommentsRowSelected() &&
-  state.col === 1 && state.commentsFocused`) is the single source of truth
-  both the keyboard and the rendering read, exactly like the tree's
-  `isTestColumnActive()` — so a stale `commentsFocused` left over after the
-  cursor moved to an unrelated row (any of the many inline `@click`
-  assignments across option/task/scope/hotfix/followup/exec rows, none of
-  which explicitly clear it) can never hijack `↑`/`↓`: the moment `state.cur`
-  no longer equals `COMMENTS_ROW_ID`, `commentsActive()` is false regardless.
-  `clampCursor()` additionally resets `commentsFocused`/`commentCursor`
-  outright once the comments row (or the specific comment) genuinely stops
-  existing.
-- **Enter on the block (`row.kind === 'comments'`) calls `enterCommentsFocus()`**,
-  which focuses the first not-yet-invalid comment (or the previously active
-  one, if it still exists) and hands `↑`/`↓` to `moveCommentCursor`, clamped
-  at the family's first/last comment — no wraparound, no cross-block
-  fall-through, mirroring `moveRow`'s own clamp. `←` (not `Escape` — this
-  block has no submenu-style overlay) calls `exitCommentsFocus()`, which
-  drops back to the block-level selection WITHOUT changing `state.col` —
-  exactly like the methodes-kolom's own `←` stays on stop 2b. `→` is a no-op
-  while focused: there is no nested column to reach from inside a comment.
-- **Two selection levels, told apart in words, never ring colour alone**
-  (the colourblind rule): the panel's own header carries a badge
-  (`data-testid=plan-comments-state`) reading **"◆ blok geselecteerd"**
-  while the whole card carries the ring, or **"◆ opmerking actief"** once
-  `commentsActive()` — mirroring `columnHeader`'s own "◆ actief" word. The
-  two rings are mutually exclusive by construction
-  (`isCommentsRowSelected() && !commentsActive()` for the card,
-  `commentsActive() && state.commentCursor === id` for a row), so only one
-  shows at a time (the "never two selections visible at once" rule, commit
-  `27ce93c`). **The per-row "● actief" word badge next to a comment's author
-  line is gone** (reviewer request, task 48: "'actief' kan weg omdat het al
-  duidelijk is door die border") — the ring/border was always the SHAPE cue
-  next to that word (belt and suspenders), and stays as the row's only "here"
-  indicator now that the word is removed; nothing lost for the colourblind
-  rule, since a border/ring is a shape, not a colour.
-
-### Collapsed by default: a HEIGHT fold, over the whole list, never per comment
-
-Reviewer request, task 48b — a correction of an earlier, wrong reading of
-"opmerkingen inklappen" (task 48 above had built a PER-COMMENT text clamp/
-toggle, since reverted): *"ik bedoel niet verticaal inklappen, nee comments
-moeten horizontaal inklappen tot 2,5 laatste comments"*, then, asked which of
-two concrete readings was meant (a horizontal card carousel, or a vertical
-list whose visible HEIGHT folds): *"paneel smal, laatste ~2,5: de lijst
-blijft verticaal, maar het opmerkingen-paneel staat standaard smal ingeklapt
-en toont alleen de laatste ~2,5 comments (volledige tekst); Enter/klik klapt
-het volledig open"* — with the explicit addition **"maar breedte blijft
-altijd hetzelfde"** (the column's width never changes) and **over the WHOLE
-flattened list**, not per ticket/group.
-
-- **`commentsListExpanded()` reuses `commentsFocused` itself** — no new state
-  field. The exact same action that already hands `↑`/`↓` to the individual
-  comments (`enterCommentsFocus`: Enter on the block, or a click on one
-  comment) is what reveals the full history, and leaving that mode
-  (`exitCommentsFocus`, `←`) is exactly when it should fold back down.
-- **`COMMENTS_COLLAPSED_CLS`** (`'max-h-[260px] justify-end
-  plan-comments-fade-top'`, applied to the `data-testid=plan-comments-list`
-  wrapper around every `commentGroupCard`) caps the list's height at roughly
-  2.5 short comments — necessarily an APPROXIMATION, an individual comment's
-  real height varies with its text, exactly as imprecise as the reviewer's
-  own "~2,5" — and bottom-anchors the content (`flex flex-col justify-end`)
-  so the NEWEST comments (rendered last, at the bottom of the flattened list)
-  stay visible and the OLDER ones scroll out of view at the top. A `max-h`
-  rather than a fixed height, so a short list that already fits inside that
-  budget is never padded with blank space above it.
-- **`.plan-comments-fade-top`** (`plan.html`) softens the cut edge — the
-  mirror of the existing `.code-fence-fade-bottom` mask (same "there's more,
-  hidden this way" cue), just fading the OPPOSITE edge (top, since content is
-  bottom-anchored here). A plain alpha mask, not colour, so no dark-mode
-  variant needed, same as the original.
-- **`plan-comments-expand-hint`** — a small button under the (possibly)
-  clipped list naming the same unfold action in WORDS ("Toon alle
-  opmerkingen (Enter)"), never relying on the fade alone (the colourblind
-  rule) — clicking it calls `enterCommentsFocus()` directly, same as
-  clicking any individual comment does. Hidden once expanded, and also
-  hidden below `COMMENTS_COLLAPSE_HINT_MIN` (3) comments in the whole
-  flattened list — "never offer an affordance for a fold that can't
-  plausibly be hiding anything", the same reasoning `planCommands`'
-  conditional "Opnieuw plannen" item already follows.
-- **A comment's own body is never text-clamped any more, at any width** —
-  `commentRow` always renders the full `renderMarkdown` output; the earlier
-  `COMMENT_BODY_TRUNCATE_AT`/`commentBodyCollapsible`/`line-clamp-3`
-  machinery (task 48's own per-comment expand toggle, and the original
-  pre-task-47 clamp it was itself layered on) is gone outright. The visible
-  content NOW gets exactly as tall as its text needs; only the outer list's
-  overall HEIGHT folds.
-- **Visual trade-off, accepted rather than engineered around**: because the
-  fold is a plain CSS height clip over the WHOLE list rather than a
-  per-comment data slice, a collapsed view can cut a `commentGroupCard`
-  (one ticket's own bordered card, header + comments) off mid-height when
-  its comments straddle the visible/hidden boundary — an earlier group's
-  header can end up invisible while its last comment(s) still show. Given
-  "over de hele lijst heen" (across the whole list, not per group) was the
-  explicit scope, and the fade + expand-hint already communicate "there's
-  more", this was accepted as the simplest correct implementation rather than
-  reflowing per-group boundaries around the fold.
-
-Test: `tests/plan-comments.spec.mjs` ("the comments panel folds to the last
-~2.5 comments" — collapsed-by-default, Enter/click-to-expand, the expand-hint
-button, and a short list showing no hint at all).
-- **Mouse**: a click on the panel's own background runs `selectCommentsRow()`
-  — the same block-level selection a plain `→` already lands on
-  (mouse-navigation.md rule 1). A click directly on one comment
-  (`commentRow`'s own `@click`, `e.stopPropagation()` first so it doesn't also
-  re-run the panel's own click) calls `enterCommentsFocus(id)` and jumps
-  straight to it, focused — a mouse-only shortcut (rule 2), still reachable
-  via `→` then `Enter` then `↓` in several keyboard steps. Every other
-  interactive element inside the panel (the "Ververs" button, "Beantwoorden",
-  the composer, a mention suggestion) is left exactly as it was; nothing there
-  needed a `stopPropagation()` add, since bubbling into `selectCommentsRow()`
-  only sets selection state and never fights with any of them.
-- **The initial default-cursor race.** `clampCursor()` only defaults
-  `state.cur` when the current value doesn't match any row at all, and it is
-  called from `loadPlan()` (not from a `watch`, see that function's own doc
-  comment on why). On a genuinely cold cache `GET /api/jira/comments` can cost
-  several `acli` calls (`plan_comments.go`), so the very FIRST `loadPlan()`
-  resolution can beat it and default the cursor onto the first question
-  before the comments block even exists in `navRows()`. The page's own
-  bootstrap therefore does `Promise.all([ensureTracker().then(loadPlan),
-  loadComments()]).then(clampCursor)` — one extra, explicit `clampCursor()`
-  call once BOTH initial reads have settled, deterministic regardless of
-  which finished first. Harmless once the reviewer has genuinely navigated
-  elsewhere: `clampCursor()` never moves a `state.cur` that is still found
-  among the (now longer) row list.
-- **Not reused for the reply composer/mention picker** — those stay exactly
-  the mouse/typing surfaces they always were; only the READING/walking half
-  of the panel gained a keyboard cursor.
-
-Test: `tests/plan-comments.spec.mjs` ("→ selects the whole block first;
-Enter walks the individual comments; ← leaves it" — mocks
-`GET /api/jira/comments` directly at the HTTP layer with a real two-comment
-fixture, since the Playwright harness's `Fake` Jira client always answers a
-comment-less issue and this is a purely frontend nav-chain change). Verified
-by hand against the real `PAYM-813` ticket too — screenshots
-`task27-jira-comments-block-selected.png` (block-level ring, "blok
-geselecteerd") and `task27-jira-comments-navigating.png` (the per-comment
-ring, "opmerking actief", the block-level ring gone) in `data/review-shots/`.
-The same file's "the comments panel folds to the last ~2.5 comments" describe
-block covers the HEIGHT fold (task 48b) — see "Collapsed by default" above.
+**The frontend panel was removed.** The Jira-opmerkingen panel (`commentsPanel()`, the dedicated side column next to the ticket, its nav row `COMMENTS_ROW_ID`, the reply composer/@-mention picker, the threaded view, the collapsed fold and `tests/plan-comments.spec.mjs`) is gone from `src/plan.mjs` on the reviewer's request ("jira comments section mag weg"); only the UI went. `GET /api/jira/comments`, `GET /api/jira/users`, the `jira_comment` workflow and the comments feeding the plan prompt/intent are unchanged, so a UI can be rebuilt on them. The "Gerelateerde tickets" block is a separate thing and stays.
