@@ -67,6 +67,18 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if gateAnswered {
 		generating = true
 	}
+	// An answer/comment/topic edit the busy tracker recorded but has not folded
+	// in yet: show the answer and say "bezig" — a generation follows it.
+	if ok && applyRecordedAnswers(hist, &doc) {
+		generating = true
+	}
+	// tembed reads the tracker as `waiting` while a signal's generation runs
+	// inline in it, so the run status alone cannot say "a generation is going
+	// on". The live Claude snapshot of planGenerate can: it exists exactly while
+	// the Activity runs (planGenerate starts/finishes it).
+	if _, running := chatProgressFor(planGenerateConversationID(key)); running {
+		generating = true
+	}
 	// The other way round: once a gate answer is stored (SavesGateAnswer),
 	// the first generation runs INLINE in that answer's Signal, and the tembed
 	// run keeps reading as `waiting` meanwhile — so a refresh in that window
@@ -285,6 +297,35 @@ func applyRecordedGateAnswer(hist []tembed.Event, doc *planDoc) bool {
 		return true
 	}
 	return false
+}
+
+// applyRecordedAnswers folds the answers the tracker has recorded but not
+// consumed yet (it is busy with a generation, see planPendingChangeSignals) into
+// doc.Answers — a display copy, like applyRecordedGateAnswer — and reports
+// whether any plan-changing signal is waiting.
+func applyRecordedAnswers(hist []tembed.Event, doc *planDoc) bool {
+	if !doc.TracksAnswers {
+		return false
+	}
+	waiting, idx := false, 0
+	for _, ev := range hist {
+		if ev.Type != tembed.EventSignalReceived || ev.Name != SignalPlanAnswer {
+			continue
+		}
+		idx++
+		if idx <= doc.AnswersSeen {
+			continue
+		}
+		var sig PlanAnswerSignal
+		if json.Unmarshal(ev.Payload, &sig) != nil || !planChangeKind(sig.Kind) {
+			continue
+		}
+		waiting = true
+		if sig.Kind == "" {
+			doc.Answers = upsertPlanAnswer(doc.Answers, sig)
+		}
+	}
+	return waiting
 }
 
 // pendingPlanChat is the pure core of PendingPlanChat. Per signal name, the

@@ -33,6 +33,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/reindert-vetter/tembed"
@@ -145,6 +146,8 @@ func planGenerateLabel(mode string) string {
 		return "vervolgvragen bedenken"
 	case "tasks":
 		return "taken bedenken"
+	case "adjust":
+		return "plan aanpassen"
 	default:
 		return "vragen en taken bedenken"
 	}
@@ -607,6 +610,28 @@ type planDoc struct {
 	// order, so every chat signal of that name past this count is recorded
 	// in tembed but not handled yet: pendingPlanChat shows exactly those.
 	ChatSeen map[string]int `json:"chatSeen,omitempty"`
+	// AnswersSeen counts the SignalPlanAnswer signals (every Kind) the workflow
+	// body has consumed, so planPendingChangeSignals and the read model know
+	// which recorded ones are still waiting. The body increments it itself, so
+	// it is a pure function of the history and replays identically.
+	AnswersSeen int `json:"answersSeen,omitempty"`
+	// TracksAnswers marks a stored document whose AnswersSeen is trustworthy
+	// (set by the loop on entry, saved with the next planSave): an older stored
+	// document has no counter, and reading its whole history as "waiting"
+	// would be wrong.
+	TracksAnswers bool `json:"tracksAnswers,omitempty"`
+	// PlannedAnswers is the answer set the task list was last generated or
+	// adjusted from: what an adjust call reports as new is Answers minus this.
+	// No omitempty, like Error: an Activity result is decoded INTO the
+	// populated document, and an absent key would keep a stale value.
+	PlannedAnswers []planAnswer `json:"plannedAnswers"`
+	// GenOutcome is the planGenerate Activity's own verdict (planGenAborted /
+	// planGenRevise, "" otherwise) — the recorded result the workflow branches
+	// on, never a live decision. Read and cleared by planRegenerateTasks.
+	GenOutcome string `json:"genOutcome"`
+	// GenStale: a generation was aborted for a waiting change that does not
+	// regenerate by itself (a topic edit), so the next loop turn does.
+	GenStale bool `json:"genStale"`
 	Questions     []planQuestion `json:"questions"`
 	Tasks         []planTask     `json:"tasks"`
 	// TaskStates is the reviewer's checkbox/note per task (see planTaskState).
@@ -834,13 +859,42 @@ func handlePlanComments(w *tembed.Workflow, doc *planDoc) error {
 	if len(doc.Tasks) == 0 {
 		return nil
 	}
-	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: *doc, Mode: "tasks"}, doc); err != nil {
+	if _, err := planRegenerateTasks(w, doc); err != nil {
 		return fmt.Errorf("plan: regenerate tasks after comment: %w", err)
 	}
 	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
 		return fmt.Errorf("plan: save after comment: %w", err)
 	}
 	return nil
+}
+
+// planRegenerateTasks brings the task list up to date after a change: an
+// existing plan is ADJUSTED (Mode "adjust" — only the changes, see
+// plan_adjust.go), a missing one is generated ("tasks"). It issues exactly the
+// planGenerate call the old code did, so an older history replays unchanged;
+// only a recorded planGenRevise result (the model asked for a full revision)
+// adds one more "tasks" call. Reports whether the generation was aborted for a
+// change that is waiting — the caller then goes straight to WaitSignal.
+func planRegenerateTasks(w *tembed.Workflow, doc *planDoc) (aborted bool, err error) {
+	mode := "tasks"
+	if len(doc.Tasks) > 0 {
+		mode = "adjust"
+	}
+	doc.GenOutcome = ""
+	if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: *doc, Mode: mode}, doc); err != nil {
+		return false, err
+	}
+	outcome := doc.GenOutcome
+	doc.GenOutcome = ""
+	if outcome == planGenRevise {
+		if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: *doc, Mode: "tasks"}, doc); err != nil {
+			return false, err
+		}
+		outcome = doc.GenOutcome
+		doc.GenOutcome = ""
+	}
+	doc.GenStale = outcome == planGenAborted
+	return doc.GenStale, nil
 }
 
 // planGenerateFresh builds a brand-new plan from scratch as TWO separate,
@@ -901,6 +955,8 @@ func planGenerateFresh(w *tembed.Workflow, doc *planDoc) error {
 func resetPlanForRegenerate(doc *planDoc) {
 	doc.Questions = nil
 	doc.Answers = nil
+	doc.PlannedAnswers = nil
+	doc.GenStale = false
 	doc.Tasks = nil
 	doc.TaskStates = nil
 	doc.Error = ""
@@ -1035,9 +1091,29 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			return nil, fmt.Errorf("plan: save: %w", err)
 		}
 	}
+	// justAborted: the previous generation was aborted for a change that is
+	// waiting in the history, so the next WaitSignal consumes it — the stale
+	// regeneration below must not run first (it would abort again, forever).
+	justAborted := false
+	doc.TracksAnswers = true
 	for {
+		// A generation aborted for a change that does not regenerate by itself
+		// (a topic edit) is redone here, once that change has been handled.
+		if doc.GenStale && !justAborted {
+			ab, err := planRegenerateTasks(w, &doc)
+			if err != nil {
+				return nil, fmt.Errorf("plan: regenerate tasks: %w", err)
+			}
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save: %w", err)
+			}
+			justAborted = ab
+			continue
+		}
 		var sig PlanAnswerSignal
 		w.WaitSignal(SignalPlanAnswer, &sig)
+		doc.AnswersSeen++
+		justAborted = false
 		// "Meer vragen om het plan te perfectioneren": generate follow-up
 		// questions, APPEND them to the ones already there (the reviewer's
 		// stored answers hang off the existing ids, so those may never move),
@@ -1159,9 +1235,11 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 			return nil, fmt.Errorf("plan: save answer: %w", err)
 		}
-		if err := w.ExecuteActivity("planGenerate", planGenerateArg{Doc: doc, Mode: "tasks"}, &doc); err != nil {
+		ab, err := planRegenerateTasks(w, &doc)
+		if err != nil {
 			return nil, fmt.Errorf("plan: regenerate tasks: %w", err)
 		}
+		justAborted = ab
 		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
 			return nil, fmt.Errorf("plan: save: %w", err)
 		}
@@ -1791,7 +1869,47 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			}
 			return json.Marshal(doc)
 		}
+		// A generation that updates an EXISTING plan gives way to a waiting
+		// change (an answer, a Jira comment, a topic edit — plan_adjust.go): it
+		// skips itself when one is already recorded, and is cancelled when one
+		// arrives while the Claude call runs. The verdict is this Activity's
+		// recorded result (GenOutcome); the document goes back unchanged and the
+		// workflow consumes the waiting change next, so the following generation
+		// covers everything at once. A fresh plan (no tasks yet) never aborts.
+		abortable := (arg.Mode == "adjust" || arg.Mode == "tasks") && len(doc.Tasks) > 0
+		var changeBase int64
+		var aborted atomic.Bool
+		if abortable {
+			changeBase = planChangeCounter(doc.Key).Load()
+			if planPendingChangeSignals(m.planHistory(doc.Key), doc.AnswersSeen) > 0 {
+				doc.GenOutcome = planGenAborted
+				return json.Marshal(doc)
+			}
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			go func() {
+				t := time.NewTicker(300 * time.Millisecond)
+				defer t.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-t.C:
+						if planChangeCounter(doc.Key).Load() != changeBase {
+							aborted.Store(true)
+							cancel()
+							return
+						}
+					}
+				}
+			}()
+		}
 		prompt := planPrompt(doc, arg.Mode) + explainLangTail(m.LangFor(ctx, langpref.KindExplain))
+		if arg.Mode == "adjust" {
+			prompt = planAdjustPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain))
+		}
+		basePrompt := prompt
 		// Live progress, same machinery as planChatReply below and
 		// plan_execute.go: this call has NO Tools, so it never reports a tool
 		// step — what makes it worth watching is the answer itself arriving
@@ -1805,10 +1923,18 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		setChatProgressLabel("", 0, genConv, "plan opstellen — "+planGenerateLabel(arg.Mode))
 		var qs []planQuestion
 		var tasks []planTask
+		var ops planOpsAnswer
 		var perr error
 		var checkoutDir string
+		var lastText string
 		for attempt := 1; attempt <= 2; attempt++ {
 			if attempt > 1 {
+				// A cut-off answer retried with the SAME prompt is cut off again
+				// (STAT-1155: three "unexpected end of JSON input" in a row, minutes
+				// each), so the retry asks for a much smaller one.
+				if arg.Mode != "adjust" {
+					prompt = basePrompt + planCompactTail
+				}
 				// Attempt 1's unparseable answer is already in the snapshot;
 				// without this it stays glued in front of the retry's own
 				// text (the very reason resetChatProgressPartial exists, see
@@ -1822,6 +1948,10 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 				Timeout: planClaudeTimeout,
 				OnEvent: chatProgressSinkLogging("", 0, genConv, &checkoutDir, true),
 			})
+			if aborted.Load() {
+				doc.GenOutcome = planGenAborted
+				return json.Marshal(doc)
+			}
 			if err != nil {
 				m.logf("plan: generate %s (%s): %v", doc.Key, arg.Mode, err)
 				doc.Error = err.Error()
@@ -1829,18 +1959,47 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			}
 			// TrimSpace because Run (which this call replaced) trimmed its own
 			// output and parsePlanAnswer has been fed trimmed text ever since.
-			qs, tasks, perr = parsePlanAnswer(strings.TrimSpace(result.Text))
+			lastText = strings.TrimSpace(result.Text)
+			if arg.Mode == "adjust" {
+				ops, perr = parsePlanOps(lastText)
+			} else {
+				qs, tasks, perr = parsePlanAnswer(lastText)
+			}
 			if perr == nil {
 				break
 			}
-			m.logf("plan: parse %s (%s) attempt %d/2: %v", doc.Key, arg.Mode, attempt, perr)
+			m.logf("plan: parse %s (%s) attempt %d/2: %v (answer %d bytes, %d output tokens)", doc.Key, arg.Mode, attempt, perr, len(lastText), result.Usage.OutputTokens)
+		}
+		// Both attempts cut off: keep the tasks that DID arrive complete rather
+		// than throwing minutes of work away (a note tells the reviewer).
+		salvaged := false
+		if perr != nil && arg.Mode == "tasks" {
+			if body := planSalvageTruncated(lastText); body != "" {
+				if sq, st, serr := parsePlanAnswer(body); serr == nil && len(st) > 0 {
+					qs, tasks, perr, salvaged = sq, st, nil, true
+				}
+			}
 		}
 		if perr != nil {
 			doc.Error = perr.Error()
 			return json.Marshal(doc)
 		}
 		doc.Error = ""
+		if salvaged {
+			doc.Error = fmt.Sprintf("het antwoord van Claude was afgekapt: %d taken zijn gered, de rest ontbreekt — gebruik Plan opnieuw opstellen voor een volledige lijst", len(tasks))
+		}
 		switch arg.Mode {
+		case "adjust":
+			// Only the changes came back: a full revision is the workflow's call
+			// (a recorded outcome), otherwise the ops are folded into the plan the
+			// reviewer already has — ticked tasks, notes and order stay.
+			if ops.FullRevision {
+				doc.GenOutcome = planGenRevise
+				return json.Marshal(doc)
+			}
+			doc.Tasks, doc.TaskStates, _ = applyPlanOps(doc.Tasks, doc.TaskStates, ops.Ops)
+			doc.PlannedAnswers = append([]planAnswer(nil), doc.Answers...)
+			return json.Marshal(doc)
 		case "all":
 			// Replay-only mode (see SplitGenerate's own doc comment): the
 			// original combined call, both questions AND tasks in one answer.
@@ -1865,6 +2024,7 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		// The reviewer's unchecked tasks never come back (and their rows stay
 		// visible so they can be ticked again) — see mergePlanTasks.
 		doc.Tasks = mergePlanTasks(tasks, doc.Tasks, doc.TaskStates)
+		doc.PlannedAnswers = append([]planAnswer(nil), doc.Answers...)
 		return json.Marshal(doc)
 	})
 	// Activity: ONE Claude call answering the reviewer's latest chat message
@@ -2137,6 +2297,12 @@ func planSignalRecordsWhileBusy(signal string, payload []byte) bool {
 		return false
 	}
 	if sig.Kind == planAnswerChat || sig.Kind == planAnswerTopic {
+		return true
+	}
+	// An answer and a new Jira comment are recorded at once too, so a running
+	// generation can notice them and give way (plan_adjust.go). Only on the
+	// main loop's signal: the gates' own signals carry no such Kind.
+	if signal == SignalPlanAnswer && (sig.Kind == "" || sig.Kind == planAnswerComment) {
 		return true
 	}
 	return sig.Kind == "" && (signal == SignalPlanHotfix || signal == SignalPlanScope)

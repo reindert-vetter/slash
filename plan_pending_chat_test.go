@@ -88,7 +88,12 @@ func TestPlanChatCountsHandledClientIDs(t *testing.T) {
 		{SignalPlanScope, `{"choice":"parent"}`, true},
 		{SignalPlanHotfix, `{"kind":"topics"}`, false},
 		{SignalPlanAnswer, `{"kind":"followup"}`, false},
-		{SignalPlanAnswer, `{"questionId":"q1","optionId":"q1o1"}`, false},
+		// An answer and a Jira comment are recorded at once so a running
+		// generation can give way to them (plan_adjust.go); a ticked task is not.
+		{SignalPlanAnswer, `{"questionId":"q1","optionId":"q1o1"}`, true},
+		{SignalPlanAnswer, `{"kind":"comment"}`, true},
+		{SignalPlanAnswer, `{"kind":"task","taskTitle":"x"}`, false},
+		{SignalPlanHotfix, `{"questionId":"q1","optionId":"q1o1"}`, true},
 	} {
 		if got := planSignalRecordsWhileBusy(c.signal, []byte(c.payload)); got != c.want {
 			t.Fatalf("planSignalRecordsWhileBusy(%s, %s) = %v, want %v", c.signal, c.payload, got, c.want)

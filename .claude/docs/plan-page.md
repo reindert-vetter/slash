@@ -1344,8 +1344,9 @@ generation landed. The plan tracker now opts into
 `Engine.SetRecordSignalsWhileBusy` (see `.claude/docs/tembed-workflows.md`),
 narrowed by `planSignalRecordsWhileBusy` to a chat message or a topic edit on
 any of the three plan signals, plus the scope/branch answer itself on its own
-gate signal. Every other plan signal keeps the blocking contract, because
-`sendFollowup`/`sendRegenerate` clear their "bezig" state when the Signal
+gate signal, and (see "Adjust, abort and merge" below) an answer and a Jira
+comment on the main signal. Every other plan signal keeps the blocking contract,
+because `sendFollowup`/`sendRegenerate` clear their "bezig" state when the Signal
 returns.
 
 **The gate answer, clicked while the tracker is busy.** On STAT-1155 the
@@ -1377,6 +1378,77 @@ echo into `state.doc.chat`. **Accepted gap:** a message sent on a gate signal
 the tracker has already left (another tab answered the gate a moment earlier)
 stays "in de wachtrij" forever — `SavesGateAnswer` makes that window
 milliseconds. Tests: `plan_pending_chat_test.go`, `tembed/busy_signal_test.go`.
+
+### Adjust, abort and merge: a new answer no longer restarts a 3.5 minute rebuild
+
+Reported on STAT-1155: every answer to a multiple-choice question stored the
+answer and then rebuilt the WHOLE task list (`planGenerate` Mode `tasks`, ~3.5
+minutes), so five answers in a row were five rebuilds, four of them thrown away.
+Three changes, all in `plan_adjust.go` + `planRegenerateTasks`
+(`plan_workflow.go`):
+
+- **Adjust, not rebuild (the default once a plan exists).** `planRegenerateTasks`
+  picks Mode `adjust` when `doc.Tasks` is non-empty (`tasks` otherwise). The
+  prompt (`planAdjustPrompt`) shows the CURRENT plan compactly (no example code)
+  plus the answers that are new since the last generation
+  (`doc.PlannedAnswers`, set by every successful generate/adjust) and asks for
+  ops only: `{"ops":[add|update|remove],"fullRevision":bool}`. `applyPlanOps`
+  applies them as a pure function: a task the reviewer unchecked is never
+  updated/removed/re-added, notes and checkboxes follow a renamed task (they hang
+  off the title), existing order stays (an add lands after its `after` anchor or
+  at the end), unknown titles/duplicates are skipped, the cap
+  (`maxPlanTasks`) holds, ids are renumbered. Used for an answer, a Jira
+  comment (`handlePlanComments`) and the stale redo below. **`fullRevision: true`**
+  makes the Activity return `GenOutcome = "revise"`; the workflow then runs the
+  ordinary full `tasks` call (one extra recorded Activity, only when the
+  recorded result says so). The explicit **"Plan opnieuw opstellen"**
+  (`planAnswerRegenerate`) is unchanged: it wipes the draft and builds fresh, and
+  never aborts (no tasks yet).
+- **Abort for something new.** Only what changes the plan aborts: an answer
+  (empty Kind), a Jira comment, a topic edit. A chat question or a ticked task
+  does not. `planSignalRecordsWhileBusy` now also records an answer and a comment
+  at once (while the tracker is busy), the HTTP handler calls
+  `notePlanChangeSignal` AFTER the signal is recorded, and the `planGenerate`
+  Activity (only when it updates an existing plan) cancels its own Claude context
+  when that per-key counter moves (a 300ms ticker). It always aborts, even when
+  almost done. A fresh plan never aborts.
+- **Merge.** The workflow body counts every `SignalPlanAnswer` it consumes
+  (`doc.AnswersSeen`). An Activity that starts while
+  `planPendingChangeSignals(history, AnswersSeen) > 0` skips itself without a
+  Claude call. Either way it returns `GenOutcome = "aborted"` with the document
+  unchanged; the workflow goes straight to `WaitSignal` (`justAborted`), folds the
+  waiting signal, and the last one's generation covers all of them. A topic edit
+  does not regenerate by itself, so an aborted generation sets `doc.GenStale` and
+  the loop redoes it at the top of the next turn (after the topic was handled).
+
+**Replay.** Nothing here adds or reorders an Activity for an older history: the
+answer path is still `planSave, planGenerate, planSave` (Mode is an argument, not
+compared), the abort/revise decisions are the RECORDED `GenOutcome` of the
+Activity (a field an old result lacks, so `""`), and `AnswersSeen` is incremented
+by the body itself, so replay recomputes it. That is why no SplitGenerate-style
+document flag was needed. `GenOutcome`/`GenStale`/`PlannedAnswers` have no
+`omitempty` (an Activity result is decoded INTO the populated document, see
+`Error`); the workflow clears `GenOutcome` before each call. `TracksAnswers` only
+guards the READ model: a stored document from before this has no counter and must
+not read its whole history as "waiting". Tests: `plan_adjust_test.go`
+(merge, abort, fullRevision fallback, old-history replay, ops, salvage).
+
+**The read model.** `GET /api/plan` folds the answers recorded but not consumed
+yet into `doc.answers` (`applyRecordedAnswers`) and reports `generating`.
+`generating` is also true while the live `planGenerate` snapshot
+(`chatProgressFor(planGenerateConversationID)`) exists: a signal's generation runs
+inline in the tracker, whose tembed status then reads `waiting`, so the run status
+alone showed `generating:false` while a real `claude -p` was running.
+
+**Truncated answers.** The recurring `plan: parse answer: unexpected end of JSON
+input` on the `tasks` call is the answer hitting the output limit (a 12-task plan
+with nested example code). The retry used to send the SAME prompt (cut off again,
+minutes each), so now: the prompt asks for ~15 lines per block, the retry gets
+`planCompactTail` (max 8 tasks, one block of ~8 lines, nesting 1), and if both are
+cut off `planSalvageTruncated` keeps the tasks that arrived complete (a note in
+`doc.error` tells the reviewer; "Plan opnieuw opstellen" for the rest). The parse
+log line now carries the answer size and output tokens. Adjust answers are small
+and rarely hit the limit.
 
 ### The branch question also starts the work (Jira → In Progress)
 

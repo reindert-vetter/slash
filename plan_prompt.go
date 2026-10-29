@@ -305,11 +305,16 @@ func planPrompt(doc planDoc, mode string) string {
 	}
 	b.WriteString("- NEST je blokken: elk blok dat iets aanroept of aanpast krijgt \"children\" met de onderliggende stukken (de helper die het aanroept, de test die het dekt, de call-site die mee moet). Nest zo diep als het plan duidelijker maakt — twee of drie niveaus is normaal, één plat blok is te weinig.\n")
 	b.WriteString("- ELK blok heeft een \"note\": één of twee zinnen uitleg over wat dat blok doet en waarom het nodig is. Dat geldt net zo hard voor ELK onderliggend blok, op ELK nestniveau — bij een kind-blok legt de note uit waarom het onder zijn ouder hangt (welke aanroep, welke dekking, welke call-site). Laat geen enkel blok zonder note.\n")
-	b.WriteString("- \"code\" is echte, compileerbare voorbeeldcode, hooguit ~25 regels per blok. \"lang\" is php, typescript, javascript, sql, json, bash of yaml.\n")
+	b.WriteString("- \"code\" is echte, compileerbare voorbeeldcode, hooguit ~15 regels per blok. \"lang\" is php, typescript, javascript, sql, json, bash of yaml.\n")
 	b.WriteString("- Prozateksten in het Nederlands, code en identifiers in het Engels.\n")
 	b.WriteString("- Geldige JSON: elke sleutel gevolgd door een dubbele punt, elk dubbel aanhalingsteken en elke newline BINNEN een tekst-/code-waarde correct ge-escaped (\\\" en \\n), en geen komma vlak voor een sluitende } of ].\n")
 	return b.String()
 }
+
+// planCompactTail is appended to the retry after a cut-off or unparseable
+// answer: the model's output limit is what cuts a big plan off, so the second
+// attempt must be small, not the same size again.
+const planCompactTail = "\n\nBELANGRIJK: je vorige antwoord was te lang en werd afgekapt. Maak dit antwoord VEEL korter: hooguit 8 taken, per taak één voorbeeldblok van hooguit 8 regels code, geen geneste \"children\" dieper dan één niveau, korte notes en uitleg. Een korte maar complete, geldige JSON is belangrijker dan volledigheid.\n"
 
 // planTrim trims s and caps it at max bytes, marking that it was cut.
 func planTrim(s string, max int) string {
@@ -349,20 +354,7 @@ type planRaw struct {
 			Blocks []planBlock `json:"blocks"`
 		} `json:"options"`
 	} `json:"questions"`
-	Tasks []struct {
-		Title       string      `json:"title"`
-		Explanation string      `json:"explanation"`
-		Blocks      []planBlock `json:"blocks"`
-		Location    string      `json:"location"`
-		Conditions  []string    `json:"conditions"`
-		Config      []string    `json:"config"`
-		Migration   string      `json:"migration"`
-		Endpoints   []string    `json:"endpoints"`
-		Errors      string      `json:"errors"`
-		Rollout     string      `json:"rollout"`
-		EdgeCases   []string    `json:"edgeCases"`
-		OutOfScope  []string    `json:"outOfScope"`
-	} `json:"tasks"`
+	Tasks []planRawTask `json:"tasks"`
 }
 
 // parsePlanAnswer extracts the JSON object out of the model's raw text (a
@@ -409,21 +401,7 @@ func parsePlanAnswer(raw string) ([]planQuestion, []planTask, error) {
 		if strings.TrimSpace(tk.Title) == "" || len(tasks) >= maxPlanTasks {
 			continue
 		}
-		tasks = append(tasks, planTask{
-			ID:          fmt.Sprintf("t%d", len(tasks)+1),
-			Title:       strings.TrimSpace(tk.Title),
-			Explanation: strings.TrimSpace(tk.Explanation),
-			Blocks:      normalizePlanBlocks(tk.Blocks),
-			Location:    planTrim(tk.Location, maxPlanDetailLen),
-			Conditions:  normalizePlanDetails(tk.Conditions),
-			Config:      normalizePlanDetails(tk.Config),
-			Migration:   planTrim(tk.Migration, maxPlanDetailLen),
-			Endpoints:   normalizePlanDetails(tk.Endpoints),
-			Errors:      planTrim(tk.Errors, maxPlanDetailLen),
-			Rollout:     planTrim(tk.Rollout, maxPlanDetailLen),
-			EdgeCases:   normalizePlanDetails(tk.EdgeCases),
-			OutOfScope:  normalizePlanDetails(tk.OutOfScope),
-		})
+		tasks = append(tasks, tk.toTask(fmt.Sprintf("t%d", len(tasks)+1)))
 	}
 	if len(questions) == 0 && len(tasks) == 0 {
 		return nil, nil, fmt.Errorf("plan: the answer held no questions and no tasks")

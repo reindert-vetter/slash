@@ -1599,6 +1599,9 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
+			// Recorded: wake a running generation that should give way to it
+			// (plan_adjust.go). Operational only, the history is the truth.
+			notePlanChangeSignal(strings.TrimPrefix(runID, "plan-"), body.Kind)
 			writeJSON(w, http.StatusOK, map[string]string{"status": "answered"})
 			return
 		}
