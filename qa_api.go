@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -84,15 +85,30 @@ func (s *server) handleQARunStart(w http.ResponseWriter, r *http.Request) {
 	if len(in.Instructions) > 4000 {
 		in.Instructions = in.Instructions[:4000]
 	}
-	if qaRunRunning(in.Repo, in.PR) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "qa run already running"})
+	in, err := s.tasks.manager.nextQARunInput(in)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	rounds := s.tasks.manager.qaRoundsFor(in.Repo, in.PR)
+	runID, err := s.tasks.manager.StartQARun(in)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runId": runID, "round": in.Round})
+}
+
+// nextQARunInput fills in the round number and the previous round's run id for
+// a new QA run of in.PR, or refuses (an error) while one is already running.
+// Shared by the page's own start button and the plan page's queued review chain.
+func (m *TaskManager) nextQARunInput(in QARunInput) (QARunInput, error) {
+	if qaRunRunning(in.Repo, in.PR) {
+		return in, fmt.Errorf("qa run already running")
+	}
+	rounds := m.qaRoundsFor(in.Repo, in.PR)
 	for _, rd := range rounds {
 		if rd.Status == tembed.StatusRunning {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "qa run already running"})
-			return
+			return in, fmt.Errorf("qa run already running")
 		}
 	}
 	in.Round = len(rounds) + 1
@@ -103,12 +119,7 @@ func (s *server) handleQARunStart(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	runID, err := s.tasks.manager.StartQARun(in)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"runId": runID, "round": in.Round})
+	return in, nil
 }
 
 // handleQA serves GET /api/qa?pr=N → {ok, rounds, progress?}. Read-only.

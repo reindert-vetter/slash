@@ -604,6 +604,18 @@ type planDoc struct {
 	// replay-safety shape as SplitGenerate: an Execution recorded before it
 	// existed lacks the flag and keeps its original Activity order.
 	SavesGateAnswer bool `json:"savesGateAnswer,omitempty"`
+	// DefaultsBase says this Execution does NOT park on the base-branch question:
+	// the branch is simply the default (develop) and stays changeable afterwards
+	// (planAnswerBase), so the question can never stay open and block the plan or
+	// a queued action. Set by planLoadIssue; an Execution recorded without it
+	// keeps its blocking gate (and its Activity order) on replay.
+	DefaultsBase bool `json:"defaultsBase,omitempty"`
+	// Queue is the "after the planning" actions the reviewer queued and the steps
+	// of the review chain, see plan_queue.go. QueueSeen counts, per signal name,
+	// the queue Signals the tracker consumed (like ChatSeen), so the read model
+	// can overlay the recorded-but-unconsumed ones.
+	Queue     []planQueueItem `json:"queue,omitempty"`
+	QueueSeen map[string]int  `json:"queueSeen,omitempty"`
 	// ChatSeen counts, per signal name, the chat signals WITH a client id
 	// this tracker has consumed — never reset (not by a regenerate, not by
 	// trimPlanChat). Signals of one name are consumed strictly in arrival
@@ -708,6 +720,11 @@ const planClaudeTimeout = 5 * time.Minute
 
 func planRunID(key string) string { return "plan-" + key }
 
+// planBaseGateDefaults is whether a freshly loaded plan skips the blocking
+// base-branch question (see planDoc.DefaultsBase). A var only so the tests of
+// the old blocking gate can switch it off.
+var planBaseGateDefaults = true
+
 // handlePlanChat is the ONE body behind every "chat" Kind this workflow can
 // receive — the two upfront gates (SignalPlanScope/SignalPlanHotfix) AND the
 // main SignalPlanAnswer loop each ride the general chat on their own already-
@@ -764,6 +781,8 @@ func handlePlanSideSignal(w *tembed.Workflow, doc *planDoc, signal, clientID, ki
 	switch kind {
 	case planAnswerChat:
 		return true, handlePlanChat(w, doc, signal, clientID, text, attachments)
+	case planAnswerQueue:
+		return true, handlePlanQueue(w, doc, signal, text, topicOff)
 	case planAnswerTopics:
 		return true, handlePlanTopics(w, doc, strings.TrimSpace(text) == planTopicsRegenerate)
 	case planAnswerTopic:
@@ -1020,7 +1039,14 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	// past it untouched — see planNeedsBaseQuestion for why the trigger is read
 	// off the RECORDED planLoadIssue result and why planIsBug stays in it
 	// (.claude/rules/workflow-determinism.md).
-	if planNeedsBaseQuestion(doc) {
+	if planNeedsBaseQuestion(doc) && doc.DefaultsBase {
+		// No question to wait for: the branch defaults to develop, shown on the
+		// page with a way to change it (planAnswerBase). Nothing is recorded
+		// here, and the ticket is NOT moved to In Progress by itself any more —
+		// that is its own queueable action (planQueueJira).
+		doc.Hotfix, doc.BaseBranch = false, planDefaultBaseBranch()
+		doc.DefaultBranch, doc.HotfixBranch = planDefaultBaseBranch(), planHotfixBranch
+	} else if planNeedsBaseQuestion(doc) {
 		doc.NeedsHotfix = true
 		doc.DefaultBranch, doc.HotfixBranch = planDefaultBaseBranch(), planHotfixBranch
 		if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
@@ -1110,10 +1136,38 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			justAborted = ab
 			continue
 		}
+		// Whatever was queued for "when the planning is ready" starts now that
+		// the generation above is done (a no-op with an empty queue).
+		if err := planQueueDrain(w, &doc); err != nil {
+			return nil, err
+		}
 		var sig PlanAnswerSignal
 		w.WaitSignal(SignalPlanAnswer, &sig)
 		doc.AnswersSeen++
 		justAborted = false
+		// A plan_execute run finished: continue the queued chain.
+		if sig.Kind == planAnswerExecDone {
+			if err := handlePlanExecDone(w, &doc); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		// The reviewer changed the branch the plan goes out from.
+		if sig.Kind == planAnswerBase && doc.DefaultsBase {
+			doc.Hotfix, doc.BaseBranch = planBaseFromAnswer(doc, sig.Text)
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save base branch: %w", err)
+			}
+			ab, err := planRegenerateTasks(w, &doc)
+			if err != nil {
+				return nil, fmt.Errorf("plan: regenerate tasks: %w", err)
+			}
+			justAborted = ab
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save: %w", err)
+			}
+			continue
+		}
 		// "Meer vragen om het plan te perfectioneren": generate follow-up
 		// questions, APPEND them to the ones already there (the reviewer's
 		// stored answers hang off the existing ids, so those may never move),
@@ -1628,6 +1682,7 @@ func (m *TaskManager) RunsForPlan(key string) []WorkflowRunView {
 // registerPlanActivities wires the three Activities. Called from
 // registerWorkflows in workflows.go.
 func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
+	m.registerPlanQueueActivities(engine)
 	// A chat message (or a topic edit) sent while the tracker runs a
 	// minutes-long generation is recorded at once instead of waiting for that
 	// generation — see Engine.SetRecordSignalsWhileBusy and pendingPlanChat.
@@ -1678,6 +1733,8 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		doc.SplitGenerate = true
 		// And the save straight after a gate answer — see SavesGateAnswer.
 		doc.SavesGateAnswer = true
+		// And no blocking branch question — see DefaultsBase.
+		doc.DefaultsBase = planBaseGateDefaults
 		for _, c := range issue.Comments {
 			doc.Comments = append(doc.Comments, planComment{Author: c.Author, Created: c.Created, Body: c.Body})
 		}
@@ -2296,7 +2353,12 @@ func planSignalRecordsWhileBusy(signal string, payload []byte) bool {
 	if json.Unmarshal(payload, &sig) != nil {
 		return false
 	}
-	if sig.Kind == planAnswerChat || sig.Kind == planAnswerTopic {
+	if sig.Kind == planAnswerChat || sig.Kind == planAnswerTopic || sig.Kind == planAnswerQueue {
+		return true
+	}
+	// A queued action and a branch change are recorded at once as well, and the
+	// internal "execution finished" notice must never wait behind a generation.
+	if signal == SignalPlanAnswer && (sig.Kind == planAnswerBase || sig.Kind == planAnswerExecDone) {
 		return true
 	}
 	// An answer and a new Jira comment are recorded at once too, so a running

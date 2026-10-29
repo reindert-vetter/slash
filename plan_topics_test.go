@@ -121,6 +121,7 @@ func TestRequestLogFileRoundTrip(t *testing.T) {
 // the reported "als ik input aanpas, dan is dat niet aangepast (na een
 // refresh)" for the old intent field, which only rode plan_answer.
 func TestPlanTopicsRideTheHotfixGate(t *testing.T) {
+	withBlockingBaseGate(t)
 	jr := &jira.Fake{}
 	jr.SetIssue("TEST-1", jira.Issue{Key: "TEST-1", Title: "Iets kapots", Description: "Tenant 4804 ziet een verschil.", Type: "Bug"})
 	engine := tembed.New(tembed.NewMemoryStore())

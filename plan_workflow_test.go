@@ -845,6 +845,7 @@ func TestPlanGenerateFreshSplitsQuestionsAndTasksIntoTwoCalls(t *testing.T) {
 // on the hotfix/base-branch question, even though the original Execution had
 // already answered it and gone on to accumulate chat/answers of its own.
 func TestRestartPlanBranchReAsksTheHotfixQuestion(t *testing.T) {
+	withBlockingBaseGate(t)
 	jr := &jira.Fake{}
 	jr.SetIssue("TEST-1", jira.Issue{Key: "TEST-1", Title: "Iets kapots", Type: "Bug"})
 	engine := tembed.New(tembed.NewMemoryStore())
@@ -1139,6 +1140,7 @@ func TestPlanBranchLines(t *testing.T) {
 // generation's own Claude call already sees a stored document without the
 // question — and the read model reports it as generating meanwhile.
 func TestPlanGateAnswerIsStoredBeforeTheGeneration(t *testing.T) {
+	withBlockingBaseGate(t)
 	fake := claude.NewFake()
 	jr := &jira.Fake{}
 	jr.SetIssue("PAYM-813", jira.Issue{Title: "Iets plannen", Description: "Een omschrijving."})

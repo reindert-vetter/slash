@@ -1575,13 +1575,15 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// real text, and a task message a real title, or there is nothing
 			// to signal at all.
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask && body.Kind != planAnswerIntent && body.Kind != planAnswerRetry && body.Kind != planAnswerRegenerate && body.Kind != planAnswerTopics && body.Kind != planAnswerTopic) ||
+				(body.QuestionID == "" && body.Kind != planAnswerFollowup && body.Kind != planAnswerChat && body.Kind != planAnswerComment && body.Kind != planAnswerTask && body.Kind != planAnswerIntent && body.Kind != planAnswerRetry && body.Kind != planAnswerRegenerate && body.Kind != planAnswerTopics && body.Kind != planAnswerTopic && body.Kind != planAnswerQueue && body.Kind != planAnswerBase) ||
 				// A chat message needs real text OR at least one image — see
 				// s.planChatAttachments, and chat_attachment.go for why images
 				// alone are a complete message.
 				(body.Kind == planAnswerChat && strings.TrimSpace(body.Text) == "" && len(body.Attachments) == 0) ||
 				(body.Kind == planAnswerTask && strings.TrimSpace(body.TaskTitle) == "") ||
-				(body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text)) {
+				(body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text)) ||
+				(body.Kind == planAnswerQueue && !validPlanQueueAction(strings.TrimSpace(body.Text))) ||
+				(body.Kind == planAnswerBase && strings.TrimSpace(body.Text) != "" && !planBranchRefPattern.MatchString(strings.TrimSpace(body.Text))) {
 				http.Error(w, "invalid plan answer", http.StatusBadRequest)
 				return
 			}
@@ -1621,8 +1623,9 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// while the gate stands (Kind "chat", see handlePlanChat in
 			// plan_workflow.go) — needs real text and nothing else validated.
 			// The topics above the chat ride it too (see handlePlanSideSignal).
-			if body.Kind == planAnswerTopics || body.Kind == planAnswerTopic {
-				if body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text) {
+			if body.Kind == planAnswerTopics || body.Kind == planAnswerTopic || body.Kind == planAnswerQueue {
+				if body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text) ||
+					body.Kind == planAnswerQueue && !validPlanQueueAction(strings.TrimSpace(body.Text)) {
 					http.Error(w, "invalid plan hotfix", http.StatusBadRequest)
 					return
 				}
@@ -1668,8 +1671,9 @@ func (s *server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
 			// while the gate stands (Kind "chat", see handlePlanChat in
 			// plan_workflow.go) — the only shape allowed through without
 			// Choice == "parent".
-			if body.Kind == planAnswerTopics || body.Kind == planAnswerTopic {
-				if body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text) {
+			if body.Kind == planAnswerTopics || body.Kind == planAnswerTopic || body.Kind == planAnswerQueue {
+				if body.Kind == planAnswerTopic && !validPlanTopicSignal(body.TopicID, body.Text) ||
+					body.Kind == planAnswerQueue && !validPlanQueueAction(strings.TrimSpace(body.Text)) {
 					http.Error(w, "invalid plan scope", http.StatusBadRequest)
 					return
 				}

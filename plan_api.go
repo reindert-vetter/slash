@@ -72,6 +72,11 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if ok && applyRecordedAnswers(hist, &doc) {
 		generating = true
 	}
+	// A queued/cancelled "after the planning" action the tracker recorded but
+	// has not folded in yet (plan_queue.go).
+	if ok {
+		applyRecordedQueue(hist, &doc)
+	}
 	// tembed reads the tracker as `waiting` while a signal's generation runs
 	// inline in it, so the run status alone cannot say "a generation is going
 	// on". The live Claude snapshot of planGenerate can: it exists exactly while

@@ -50,6 +50,7 @@ func TestPendingPlanChatShowsOnlyUnhandledMessages(t *testing.T) {
 // The tracker counts a handled chat message with a client id, so the read
 // model drops it from the pending list the moment it is saved.
 func TestPlanChatCountsHandledClientIDs(t *testing.T) {
+	withBlockingBaseGate(t)
 	jr := &jira.Fake{}
 	jr.SetIssue("TEST-1", jira.Issue{Key: "TEST-1", Title: "Iets kapots", Type: "Bug"})
 	engine := tembed.New(tembed.NewMemoryStore())

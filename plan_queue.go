@@ -1,0 +1,584 @@
+// plan_queue.go — "after the planning" actions the reviewer can queue on the
+// planning page while the plan is still being made, and that the `plan`
+// tracker then starts by itself at their moment.
+//
+// The intent is durable: it is a Signal (Kind "queue") folded into the plan
+// document, so it survives closing the tab or navigating away — the page only
+// sends the Signal and shows the state, it never waits for anything. Three
+// actions can be queued:
+//
+//   - jira: move the ticket to "In Progress" — starts at once, it does not
+//     depend on the plan.
+//   - execute: implement the plan on a fresh branch and open a draft PR
+//     (plan_execute) — starts as soon as the planning is ready.
+//   - review: after that draft PR exists: a self-review (Claude fixes and
+//     pushes), then the review tree (ingest), then the QA run. A failed
+//     self-review does not stop the chain; its step just reads "failed".
+//
+// The plan itself is deliberately NEVER written to Jira.
+//
+// Everything is a pure function of (document + recorded history): the tracker
+// decides from the document, and every side effect is an Activity
+// (.claude/rules/workflow-determinism.md). The chain runs inside the tracker,
+// which is "busy" meanwhile; signals sent in that time are recorded at once
+// (planSignalRecordsWhileBusy) and folded in afterwards.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/reindert-vetter/tembed"
+
+	"slash/modules/claude"
+	"slash/modules/langpref"
+)
+
+const (
+	// planAnswerQueue is the Kind that queues (or cancels) one action. It rides
+	// on any of the tracker's three signals like the chat does. The payload
+	// reuses two existing fields: Text is the action, TopicOff means "cancel".
+	planAnswerQueue = "queue"
+	// planAnswerBase changes the branch the plan goes out from (Text is the
+	// branch, empty = the default). Only for a document that defaults the
+	// branch (planDoc.DefaultsBase).
+	planAnswerBase = "base"
+	// planAnswerExecDone is sent by a finished plan_execute run to the tracker
+	// (planExecuteNotify). Internal: the HTTP layer refuses it.
+	planAnswerExecDone = "execdone"
+)
+
+// The queueable actions, plus the internal step rows the review chain writes.
+const (
+	planQueueJira       = "jira"
+	planQueueExecute    = "execute"
+	planQueueReview     = "review"
+	planQueueSelfReview = "selfreview"
+	planQueueIngest     = "ingest"
+	planQueueQA         = "qa"
+)
+
+// Item statuses. Always shown to the reviewer as a WORD.
+const (
+	planQStatusQueued  = "queued"
+	planQStatusStarted = "started"
+	planQStatusDone    = "done"
+	planQStatusFailed  = "failed"
+	planQStatusSkipped = "skipped"
+)
+
+// planQueueItem is one queued action (or one step of the review chain).
+type planQueueItem struct {
+	Action string `json:"action"`
+	Status string `json:"status"`
+	Note   string `json:"note,omitempty"`
+	// The draft PR an executed plan produced — set on the execute item so the
+	// review chain knows where to work.
+	PR     int    `json:"pr,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	Base   string `json:"base,omitempty"`
+	Dir    string `json:"dir,omitempty"`
+}
+
+// validPlanQueueAction reports whether a reviewer may queue this action.
+func validPlanQueueAction(a string) bool {
+	return a == planQueueJira || a == planQueueExecute || a == planQueueReview
+}
+
+func planQueueFind(q []planQueueItem, action string) int {
+	for i := range q {
+		if q[i].Action == action {
+			return i
+		}
+	}
+	return -1
+}
+
+// planQueueSet inserts or replaces the item for action.
+func planQueueSet(q []planQueueItem, it planQueueItem) []planQueueItem {
+	if i := planQueueFind(q, it.Action); i >= 0 {
+		q[i] = it
+		return q
+	}
+	return append(q, it)
+}
+
+// planQueueRemove drops the item for action.
+func planQueueRemove(q []planQueueItem, action string) []planQueueItem {
+	i := planQueueFind(q, action)
+	if i < 0 {
+		return q
+	}
+	return append(q[:i:i], q[i+1:]...)
+}
+
+// planQueueApply folds one queue Signal into the queue — pure, shared by the
+// tracker and the read model's overlay of not-yet-consumed signals. Turning
+// "review" on also queues "execute" (the chain needs a draft PR); cancelling
+// "execute" also cancels "review". Only a queued item can be cancelled, and
+// only an absent/failed/skipped one can be queued again.
+func planQueueApply(q []planQueueItem, action string, off bool) []planQueueItem {
+	if !validPlanQueueAction(action) {
+		return q
+	}
+	cur := planQueueFind(q, action)
+	if off {
+		if cur >= 0 && q[cur].Status == planQStatusQueued {
+			q = planQueueRemove(q, action)
+			if action == planQueueExecute {
+				if r := planQueueFind(q, planQueueReview); r >= 0 && q[r].Status == planQStatusQueued {
+					q = planQueueRemove(q, planQueueReview)
+				}
+			}
+		}
+		return q
+	}
+	if cur >= 0 && q[cur].Status != planQStatusFailed && q[cur].Status != planQStatusSkipped {
+		return q
+	}
+	if action == planQueueReview {
+		// Drop the old chain steps of an earlier, failed attempt.
+		for _, s := range []string{planQueueSelfReview, planQueueIngest, planQueueQA} {
+			q = planQueueRemove(q, s)
+		}
+		if e := planQueueFind(q, planQueueExecute); e < 0 || q[e].Status == planQStatusFailed || q[e].Status == planQStatusSkipped {
+			q = planQueueSet(q, planQueueItem{Action: planQueueExecute, Status: planQStatusQueued})
+		}
+	}
+	return planQueueSet(q, planQueueItem{Action: action, Status: planQStatusQueued})
+}
+
+// planReadyToExecute: the plan is finished enough to implement. Every gate is
+// answered (the scope question stays blocking), a task list exists, the last
+// generation did not fail, and no aborted generation still has to be redone.
+func planReadyToExecute(doc planDoc) bool {
+	return !doc.NeedsScope && !doc.NeedsHotfix && len(doc.Tasks) > 0 && doc.Error == "" && !doc.GenStale
+}
+
+// handlePlanQueue folds one queue Signal into the document, saves it and lets
+// the queue run whatever is due. Counted per signal name (QueueSeen) so the
+// read model can overlay the ones recorded but not consumed yet.
+func handlePlanQueue(w *tembed.Workflow, doc *planDoc, signal, action string, off bool) error {
+	if doc.QueueSeen == nil {
+		doc.QueueSeen = map[string]int{}
+	}
+	doc.QueueSeen[signal]++
+	doc.Queue = planQueueApply(doc.Queue, strings.TrimSpace(action), off)
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save queue: %w", err)
+	}
+	return planQueueDrain(w, doc)
+}
+
+// planQueueSave saves the document after a queue state change.
+func planQueueSave(w *tembed.Workflow, doc *planDoc) error {
+	if err := w.ExecuteActivity("planSave", *doc, nil); err != nil {
+		return fmt.Errorf("plan: save queue state: %w", err)
+	}
+	return nil
+}
+
+// planQueueStep is the recorded outcome of one queue Activity. Activities never
+// fail the tracker for a "the world said no" outcome: it becomes a note.
+type planQueueStep struct {
+	OK   bool   `json:"ok"`
+	Note string `json:"note,omitempty"`
+	PR   int    `json:"pr,omitempty"`
+	Dir  string `json:"dir,omitempty"`
+	Br   string `json:"branch,omitempty"`
+	Base string `json:"base,omitempty"`
+}
+
+// planQueueDrain starts every queued action that is due. Called after each
+// handled signal and at the top of the main loop (right after a generation
+// finished), so "the planning is ready" is noticed without any polling. With an
+// empty queue it does nothing at all — no Activity — which keeps an Execution
+// recorded before this existed replaying unchanged.
+func planQueueDrain(w *tembed.Workflow, doc *planDoc) error {
+	if len(doc.Queue) == 0 {
+		return nil
+	}
+	// 1. Jira "In Progress": immediately, whatever the plan looks like.
+	if i := planQueueFind(doc.Queue, planQueueJira); i >= 0 && doc.Queue[i].Status == planQStatusQueued {
+		if err := w.ExecuteActivity("jiraStartProgress", *doc, nil); err != nil {
+			return fmt.Errorf("plan: queue jira: %w", err)
+		}
+		doc.Queue[i].Status = planQStatusDone
+		if err := planQueueSave(w, doc); err != nil {
+			return err
+		}
+	}
+	// 2. Execute: once the planning is ready.
+	if i := planQueueFind(doc.Queue, planQueueExecute); i >= 0 && doc.Queue[i].Status == planQStatusQueued && planReadyToExecute(*doc) {
+		var step planQueueStep
+		if err := w.ExecuteActivity("planQueueStartExecute", PlanExecuteInput{Key: doc.Key}, &step); err != nil {
+			return fmt.Errorf("plan: queue execute: %w", err)
+		}
+		if step.OK {
+			doc.Queue[i].Status = planQStatusStarted
+		} else {
+			doc.Queue[i].Status, doc.Queue[i].Note = planQStatusFailed, step.Note
+			planQueueSkipReview(doc, "de uitvoering is niet gestart")
+		}
+		if err := planQueueSave(w, doc); err != nil {
+			return err
+		}
+	}
+	// 3. Review chain: once a draft PR exists.
+	return planQueueChain(w, doc)
+}
+
+// planQueueSkipReview marks a still-queued review (and nothing else) skipped.
+func planQueueSkipReview(doc *planDoc, why string) {
+	if r := planQueueFind(doc.Queue, planQueueReview); r >= 0 && doc.Queue[r].Status == planQStatusQueued {
+		doc.Queue[r].Status, doc.Queue[r].Note = planQStatusSkipped, why
+	}
+}
+
+// handlePlanExecDone processes the "a plan_execute run finished" signal: record
+// what it produced on the execute item, then let the chain continue.
+func handlePlanExecDone(w *tembed.Workflow, doc *planDoc) error {
+	e := planQueueFind(doc.Queue, planQueueExecute)
+	if e < 0 || doc.Queue[e].Status != planQStatusStarted {
+		return nil
+	}
+	var step planQueueStep
+	if err := w.ExecuteActivity("planQueueExecResult", PlanExecuteInput{Key: doc.Key}, &step); err != nil {
+		return fmt.Errorf("plan: queue exec result: %w", err)
+	}
+	it := &doc.Queue[e]
+	if step.PR > 0 {
+		it.Status, it.PR, it.Branch, it.Base, it.Dir, it.Note = planQStatusDone, step.PR, step.Br, step.Base, step.Dir, step.Note
+	} else {
+		it.Status, it.Note = planQStatusFailed, step.Note
+		if it.Note == "" {
+			it.Note = "er is geen draft-PR gekomen"
+		}
+		planQueueSkipReview(doc, "geen draft-PR")
+	}
+	if err := planQueueSave(w, doc); err != nil {
+		return err
+	}
+	return planQueueDrain(w, doc)
+}
+
+// planQueueChain runs self-review → review tree → QA for a queued review whose
+// execute item produced a draft PR. Each step is its own Activity and its own
+// saved row, so the page shows exactly where it is; a failed step is recorded
+// and the chain goes on.
+func planQueueChain(w *tembed.Workflow, doc *planDoc) error {
+	r := planQueueFind(doc.Queue, planQueueReview)
+	e := planQueueFind(doc.Queue, planQueueExecute)
+	if r < 0 || e < 0 || doc.Queue[r].Status != planQStatusQueued || doc.Queue[e].Status != planQStatusDone || doc.Queue[e].PR <= 0 {
+		return nil
+	}
+	ex := doc.Queue[e]
+	doc.Queue[r].Status = planQStatusStarted
+	for _, s := range []string{planQueueSelfReview, planQueueIngest, planQueueQA} {
+		doc.Queue = planQueueSet(doc.Queue, planQueueItem{Action: s, Status: planQStatusQueued})
+	}
+	if err := planQueueSave(w, doc); err != nil {
+		return err
+	}
+	arg := planQueueChainArg{Key: doc.Key, PR: ex.PR, Branch: ex.Branch, Base: ex.Base, Dir: ex.Dir}
+	anyFailed := false
+	for _, s := range []struct{ action, activity string }{
+		{planQueueSelfReview, "planQueueSelfReview"},
+		{planQueueIngest, "planQueueIngest"},
+		{planQueueQA, "planQueueQA"},
+	} {
+		i := planQueueFind(doc.Queue, s.action)
+		doc.Queue[i].Status = planQStatusStarted
+		if err := planQueueSave(w, doc); err != nil {
+			return err
+		}
+		var step planQueueStep
+		if err := w.ExecuteActivity(s.activity, arg, &step); err != nil {
+			return fmt.Errorf("plan: queue %s: %w", s.action, err)
+		}
+		i = planQueueFind(doc.Queue, s.action)
+		doc.Queue[i].Note = step.Note
+		if step.OK {
+			doc.Queue[i].Status = planQStatusDone
+		} else {
+			doc.Queue[i].Status = planQStatusFailed
+			anyFailed = true
+		}
+		if err := planQueueSave(w, doc); err != nil {
+			return err
+		}
+	}
+	r = planQueueFind(doc.Queue, planQueueReview)
+	if anyFailed {
+		doc.Queue[r].Status = planQStatusFailed
+	} else {
+		doc.Queue[r].Status = planQStatusDone
+	}
+	return planQueueSave(w, doc)
+}
+
+// planQueueChainArg is what the chain's Activities get.
+type planQueueChainArg struct {
+	Key    string `json:"key"`
+	PR     int    `json:"pr"`
+	Branch string `json:"branch"`
+	Base   string `json:"base"`
+	Dir    string `json:"dir"`
+}
+
+// applyRecordedQueue overlays the queue Signals the tracker has recorded but
+// not consumed yet (it is busy) on doc.Queue — a display copy, same idea as
+// applyRecordedAnswers. Per signal name the tracker consumes strictly in order,
+// so the queue signals past doc.QueueSeen[name] are the unconsumed ones.
+func applyRecordedQueue(hist []tembed.Event, doc *planDoc) {
+	seen := map[string]int{}
+	for _, ev := range hist {
+		if ev.Type != tembed.EventSignalReceived {
+			continue
+		}
+		if ev.Name != SignalPlanAnswer && ev.Name != SignalPlanHotfix && ev.Name != SignalPlanScope {
+			continue
+		}
+		var sig struct {
+			Kind     string `json:"kind"`
+			Text     string `json:"text"`
+			TopicOff bool   `json:"topicOff"`
+		}
+		if json.Unmarshal(ev.Payload, &sig) != nil || sig.Kind != planAnswerQueue {
+			continue
+		}
+		seen[ev.Name]++
+		if seen[ev.Name] <= doc.QueueSeen[ev.Name] {
+			continue
+		}
+		doc.Queue = planQueueApply(append([]planQueueItem(nil), doc.Queue...), strings.TrimSpace(sig.Text), sig.TopicOff)
+	}
+}
+
+// planBaseFromAnswer folds a planAnswerBase Signal: an empty/invalid text is the
+// default branch.
+func planBaseFromAnswer(doc planDoc, text string) (bool, string) {
+	return resolvePlanBase(doc, PlanHotfixSignal{Branch: strings.TrimSpace(text)})
+}
+
+// ---------------------------------------------------------------------------
+// Activities
+
+// planExecuteStarter replaces the real start of a plan_execute run — a test
+// seam only (a real run would implement the plan in a real checkout).
+var planExecuteStarter func(key string) (string, error)
+
+// startPlanExecuteQueued is StartPlanExecute for the queue: a run that already
+// goes for this ticket counts as started (its own finish signal still reaches
+// the tracker).
+func (m *TaskManager) startPlanExecuteQueued(key string) planQueueStep {
+	if planExecuteStarter != nil {
+		if _, err := planExecuteStarter(key); err != nil {
+			return planQueueStep{Note: err.Error()}
+		}
+		return planQueueStep{OK: true}
+	}
+	if m.PlanExecuteRunning(key) {
+		return planQueueStep{OK: true}
+	}
+	if _, err := m.StartPlanExecute(key); err != nil {
+		return planQueueStep{Note: err.Error()}
+	}
+	return planQueueStep{OK: true}
+}
+
+// notifyPlanTracker tells the plan tracker a plan_execute run finished. It is
+// sent from its own goroutine: an idle tracker drives the whole review chain
+// inline inside that signal, which must not keep the finished plan_execute run
+// "running" meanwhile. Best-effort with a few retries; a lost signal leaves the
+// queue item on "started" (the page still shows the run's own real status).
+func (m *TaskManager) notifyPlanTracker(key string) {
+	if m == nil || m.engine == nil {
+		return
+	}
+	go func() {
+		for attempt := 0; attempt < 3; attempt++ {
+			err := m.engine.SignalWorkflow(planRunID(key), SignalPlanAnswer, PlanAnswerSignal{Kind: planAnswerExecDone})
+			if err == nil {
+				return
+			}
+			m.logf("plan: tell tracker %s the execution finished: %v", key, err)
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+		}
+	}()
+}
+
+func (m *TaskManager) registerPlanQueueActivities(engine *tembed.Engine) {
+	engine.RegisterActivity("planQueueStartExecute", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PlanExecuteInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(m.startPlanExecuteQueued(strings.ToUpper(strings.TrimSpace(arg.Key))))
+	})
+	engine.RegisterActivity("planQueueExecResult", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PlanExecuteInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		view, _ := m.PlanExecution(strings.ToUpper(strings.TrimSpace(arg.Key)))
+		return json.Marshal(planQueueStep{OK: view.PRNumber > 0, Note: view.Note, PR: view.PRNumber, Br: view.Branch, Base: view.Base, Dir: view.Dir})
+	})
+	engine.RegisterActivity("planQueueSelfReview", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg planQueueChainArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(m.runPlanSelfReview(ctx, arg))
+	})
+	engine.RegisterActivity("planQueueIngest", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg planQueueChainArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(m.runPlanQueueIngest(ctx, arg))
+	})
+	engine.RegisterActivity("planQueueQA", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg planQueueChainArg
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(m.runPlanQueueQA(arg))
+	})
+}
+
+// runPlanQueueIngest builds the review tree of the draft PR.
+func (m *TaskManager) runPlanQueueIngest(ctx context.Context, arg planQueueChainArg) planQueueStep {
+	repo := repoSlugFor("")
+	ctx, cancel := context.WithTimeout(ctx, ingestTimeout)
+	defer cancel()
+	if _, err := m.StartIngest(ctx, repo, arg.PR); err != nil {
+		m.logf("plan queue %s: ingest pr=%d: %v", arg.Key, arg.PR, err)
+		return planQueueStep{Note: "de review-tree kon niet worden opgebouwd: " + err.Error()}
+	}
+	m.EnsureRelations(ctx, repo, arg.PR)
+	if _, err := m.EnsurePRStatus(repo, arg.PR); err != nil {
+		m.logf("plan queue %s: ensure pr_status pr=%d: %v", arg.Key, arg.PR, err)
+	}
+	return planQueueStep{OK: true}
+}
+
+// runPlanQueueQA starts the QA run of the draft PR (it keeps going in the
+// background, like the page's own button).
+func (m *TaskManager) runPlanQueueQA(arg planQueueChainArg) planQueueStep {
+	in, err := m.nextQARunInput(QARunInput{Repo: canonRepo(repoSlugFor("")), PR: arg.PR})
+	if err != nil {
+		return planQueueStep{Note: err.Error()}
+	}
+	if _, err := m.StartQARun(in); err != nil {
+		return planQueueStep{Note: "de QA-run kon niet starten: " + err.Error()}
+	}
+	return planQueueStep{OK: true}
+}
+
+// planSelfReviewPrompt is the self-review instruction. Not the interactive
+// /review skill: that one asks questions and is report-only. This follows the
+// same rubric (the repo's own REVIEW.md) and fixes what it finds.
+func planSelfReviewPrompt(arg planQueueChainArg) string {
+	var b strings.Builder
+	b.WriteString("You are in the checkout of branch ")
+	b.WriteString(arg.Branch)
+	b.WriteString(" (draft PR #")
+	b.WriteString(fmt.Sprint(arg.PR))
+	b.WriteString(", base ")
+	b.WriteString(arg.Base)
+	b.WriteString("). Do a self-review of the WHOLE change on this branch before anyone else sees it.\n\n")
+	b.WriteString("1. Read REVIEW.md in the repository root fresh (rules, severity calibration, the \"Recurring review themes\", and what NOT to flag).\n")
+	b.WriteString("2. Read the diff with `git diff origin/")
+	b.WriteString(arg.Base)
+	b.WriteString("...HEAD` and check every hunk against that rubric.\n")
+	b.WriteString("3. Fix the Critical and Warning findings directly in the code, with the smallest change that solves each. No refactors, nothing outside this change's scope, no new features. Run the relevant tests when it is cheap to do so.\n")
+	b.WriteString("4. Do NOT commit, do NOT push and do not create report files; the caller commits and pushes what you leave behind.\n\n")
+	b.WriteString("Finish with at most 10 short lines: what you found and what you fixed (or `no findings`).")
+	return b.String()
+}
+
+// runPlanSelfReview is the self-review step: a Claude run in the plan's own
+// checkout that fixes what a review would flag, then Go commits and pushes
+// with the existing git guarantees (plain `git push`: fast-forward only, never
+// forced). Never returns an error — the chain goes on after a failure.
+func (m *TaskManager) runPlanSelfReview(ctx context.Context, arg planQueueChainArg) planQueueStep {
+	fail := func(note string) planQueueStep {
+		m.logf("plan queue %s: self-review: %s", arg.Key, note)
+		return planQueueStep{Note: note}
+	}
+	if m.claude == nil {
+		return fail("Claude is niet beschikbaar, dus de self-review is overgeslagen.")
+	}
+	if arg.Dir == "" || arg.Branch == "" || !planBranchRefPattern.MatchString(arg.Branch) || !planBranchRefPattern.MatchString(arg.Base) {
+		return fail("de werkmap of branch van de uitvoering is niet bekend.")
+	}
+	convID := planExecuteConversationID(arg.Key)
+	defer clearChatPendingFiles("", 0)
+	startChatProgress("", 0, convID)
+	defer finishChatProgress("", 0, convID)
+	setChatProgressLabel("", 0, convID, "self-review")
+
+	release := acquireWriteTurnSlot(ctx, "dir:"+arg.Dir, "plan self-review "+arg.Key, func() {
+		advanceChatProgress("", 0, convID, chatPhaseWaiting)
+	})
+	defer release()
+
+	cur, err := runGitIn(ctx, arg.Dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil || strings.TrimSpace(string(cur)) != arg.Branch {
+		return fail("de werkmap " + arg.Dir + " staat niet meer op branch " + arg.Branch + "; de self-review is overgeslagen.")
+	}
+	if dirty, err := checkoutIsDirty(ctx, arg.Dir); err != nil || dirty {
+		return fail("de werkmap " + arg.Dir + " heeft niet-vastgelegde wijzigingen; die laat ik met rust.")
+	}
+	before, err := runGitIn(ctx, arg.Dir, "rev-parse", "HEAD")
+	if err != nil {
+		return fail("kon de huidige commit niet lezen: " + err.Error())
+	}
+	if _, err := runGitIn(ctx, arg.Dir, "fetch", "origin", arg.Base); err != nil {
+		return fail("kon de basisbranch niet ophalen: " + err.Error())
+	}
+	advanceChatProgress("", 0, convID, chatPhaseStarting)
+	dir := arg.Dir
+	res, err := m.claude.RunChat(ctx, claude.RunRequest{
+		Model:   claude.ModelOpus,
+		Prompt:  planSelfReviewPrompt(arg) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+		WorkDir: dir,
+		Tools:   []string{"Read", "Grep", "Glob", "Edit", "Bash"},
+		OnEvent: chatProgressSinkLogging("", 0, convID, &dir, true),
+	})
+	if err != nil {
+		return fail("Claude kon de self-review niet afronden: " + err.Error())
+	}
+	summary := truncatePlanText(strings.TrimSpace(res.Text), 600)
+	// Go commits what Claude left behind (it may also have committed itself).
+	if status, err := runGitStdoutIn(ctx, arg.Dir, "status", "--porcelain"); err == nil && strings.TrimSpace(string(status)) != "" {
+		if _, err := runGitIn(ctx, arg.Dir, "add", "-A"); err != nil {
+			return fail("kon de self-review-wijzigingen niet klaarzetten: " + err.Error())
+		}
+		if _, err := runGitIn(ctx, arg.Dir, "commit", "-m", "Self-review fixes for "+arg.Key); err != nil {
+			return fail("kon de self-review-wijzigingen niet committen: " + err.Error())
+		}
+	}
+	after, err := runGitIn(ctx, arg.Dir, "rev-parse", "HEAD")
+	if err != nil {
+		return fail("kon de commit niet lezen: " + err.Error())
+	}
+	if strings.TrimSpace(string(after)) == strings.TrimSpace(string(before)) {
+		return planQueueStep{OK: true, Note: nonEmpty(summary, "geen bevindingen")}
+	}
+	if _, err := runGitIn(ctx, arg.Dir, "push", "origin", arg.Branch); err != nil {
+		return fail("de self-review-fixes staan lokaal, maar pushen is geweigerd: " + err.Error())
+	}
+	return planQueueStep{OK: true, Note: nonEmpty(summary, "fixes gepusht")}
+}
+
+func nonEmpty(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
+}

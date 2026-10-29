@@ -177,37 +177,52 @@ func planExecuteWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
 	}
+	res, err := planExecuteRun(w, in)
+	if err != nil {
+		return nil, err
+	}
+	// Tell the plan tracker this run is over, so a queued review chain can go on
+	// (plan_queue.go). Last on purpose: the Activities above keep their
+	// positions in the history of a run recorded before this existed.
+	if err := w.ExecuteActivity("planExecuteNotify", in, nil); err != nil {
+		return nil, fmt.Errorf("plan execute: notify tracker: %w", err)
+	}
+	return json.Marshal(res)
+}
+
+// planExecuteRun is the body of planExecuteWorkflow: load, agent, open the PR.
+func planExecuteRun(w *tembed.Workflow, in PlanExecuteInput) (planExecuteResult, error) {
 	var doc planDoc
 	if err := w.ExecuteActivity("planExecuteLoad", in, &doc); err != nil {
-		return nil, fmt.Errorf("plan execute: load plan: %w", err)
+		return planExecuteResult{}, fmt.Errorf("plan execute: load plan: %w", err)
 	}
 	if len(doc.Tasks) == 0 {
-		return json.Marshal(planExecuteResult{Note: "Er staat nog geen takenlijst in dit plan."})
+		return planExecuteResult{Note: "Er staat nog geen takenlijst in dit plan."}, nil
 	}
 	// Every task unchecked is not an empty plan but an empty RUN: nothing to
 	// implement, and a branch + draft PR for nothing is worse than a note.
 	if !planHasEnabledTask(doc) {
-		return json.Marshal(planExecuteResult{Note: "Alle taken staan uitgevinkt: er is niets om uit te voeren."})
+		return planExecuteResult{Note: "Alle taken staan uitgevinkt: er is niets om uit te voeren."}, nil
 	}
 	branch := planBranchName(doc.Key, doc.Title)
 	base := planBaseBranch(doc)
 	var res planExecuteResult
 	if err := w.ExecuteActivity("planExecuteAgent", planExecuteAgentArg{Doc: doc, Branch: branch, Base: base}, &res); err != nil {
-		return nil, fmt.Errorf("plan execute: agent: %w", err)
+		return res, fmt.Errorf("plan execute: agent: %w", err)
 	}
 	if !res.Changed || res.Commit == "" {
-		return json.Marshal(res)
+		return res, nil
 	}
 	var pr planExecuteResult
 	arg := planExecutePRArg{Key: doc.Key, Title: doc.Title, Branch: branch, Base: base, URL: doc.URL, Tasks: planTaskTitles(doc), Dir: res.Dir}
 	if err := w.ExecuteActivity("planExecuteOpenPR", arg, &pr); err != nil {
-		return nil, fmt.Errorf("plan execute: open pr: %w", err)
+		return res, fmt.Errorf("plan execute: open pr: %w", err)
 	}
 	res.PRURL, res.PRNumber = pr.PRURL, pr.PRNumber
 	if pr.Note != "" {
 		res.Note = pr.Note
 	}
-	return json.Marshal(res)
+	return res, nil
 }
 
 // planHasEnabledTask reports whether at least one task is still ticked (see
@@ -544,6 +559,17 @@ func (m *TaskManager) registerPlanExecuteActivities(engine *tembed.Engine) {
 			return nil, err
 		}
 		return json.Marshal(m.runPlanExecuteAgent(ctx, arg))
+	})
+
+	// Activity: tell the plan tracker this run finished (plan_queue.go). Never
+	// fails the run.
+	engine.RegisterActivity("planExecuteNotify", func(ctx context.Context, in []byte) ([]byte, error) {
+		var arg PlanExecuteInput
+		if err := json.Unmarshal(in, &arg); err != nil {
+			return nil, err
+		}
+		m.notifyPlanTracker(strings.ToUpper(strings.TrimSpace(arg.Key)))
+		return nil, nil
 	})
 
 	// Activity: push the branch and open the DRAFT pull request (gh, a real
