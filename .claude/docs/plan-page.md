@@ -1765,10 +1765,18 @@ now ride the exact same machinery, so nothing plan-specific was invented:
   a local `cur()` rather than closing over one — a keyed node is reused without
   re-running its bindings, so a captured snapshot would freeze the pane on
   whichever frame mounted it (`.claude/rules/arrowjs-pitfalls.md`).
-- **The streamed text is Markdown for the execution, preformatted for the
-  generation** (`livePartialHTML`). The generation's answer is one big JSON
-  document by construction, and Markdown ate its braces/quotes into
-  emphasis — verified live against PAYM-813, before and after.
+- **Generation and topics runs show a status bar, not the streamed text**
+  (`liveStatusBar`, `src/plan.mjs`). Their answer is one big JSON document, so
+  the raw text is never shown: instead a progress bar (`role=progressbar`,
+  `-progress`) stepped by phase (preparing 5, starting 12, thinking 25, writing
+  30 + 10 per task up to 95, finished 100) with a WORD line next to it
+  (`-progress-text`: "schrijven · 50% · 2 taken geschreven"), and the last
+  readable sentence of the stream without JSON syntax (`-last`,
+  `lastReadableText`). The task count (`scanPartialJson`) is the number of
+  `"title"` keys at the shallowest depth seen, so nested children do not
+  inflate it; there is no real total, hence 95 max until the run ends. The
+  execution run is unchanged: its prose stays Markdown (`-partial`). Test:
+  `tests/plan-live-statusbar.spec.mjs`.
 - **`planConvIds()`** is the single list of the three conversations this page
   watches, so the SSE filter, the resync read (`loadChatProgressResync` now
   reads all three, so a tab opened mid-run catches up) and the 1s

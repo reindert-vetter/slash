@@ -3271,16 +3271,117 @@ function liveStepsHTML(steps) {
 // without re-running its bindings" in .claude/rules/arrowjs-pitfalls.md).
 // Reading it inside the binding also registers the dependency on the store,
 // which is what makes each new SSE frame repaint this pane.
-// livePartialHTML renders the streamed answer text — as Markdown for the
-// EXECUTION (prose: Claude explaining what it is doing), as preformatted text
-// for the GENERATION, whose answer is one big JSON document by construction
-// (parsePlanAnswer, plan_workflow.go). Running that through Markdown ate its
-// braces and quotes into emphasis/headings, which made the one thing the
-// reviewer wanted to watch harder to read, not easier. Verified live against
-// PAYM-813.
+// scanPartialJson walks the (possibly cut-off) streamed JSON once and returns
+// every string VALUE (keys dropped, escapes decoded, a trailing unterminated
+// string included) plus the number of tasks started so far. A task is a
+// "title" key at the SHALLOWEST brace depth a title was seen at, so nested
+// children/example blocks do not inflate the count. Pure, no DOM.
+export function scanPartialJson(text) {
+  const values = []
+  const titleDepths = []
+  let depth = 0
+  let i = 0
+  const n = text.length
+  while (i < n) {
+    const ch = text[i]
+    if (ch === '{' || ch === '[') depth++
+    else if (ch === '}' || ch === ']') depth--
+    else if (ch === '"') {
+      let j = i + 1
+      let raw = ''
+      while (j < n && text[j] !== '"') {
+        if (text[j] === '\\' && j + 1 < n) {
+          const e = text[j + 1]
+          raw += e === 'n' || e === 't' ? ' ' : e === 'u' ? '' : e
+          j += 2
+        } else raw += text[j++]
+      }
+      const closed = j < n
+      let k = j + 1
+      while (k < n && /\s/.test(text[k])) k++
+      const isKey = closed && text[k] === ':'
+      if (isKey) {
+        if (raw === 'title') titleDepths.push(depth)
+      } else if (raw.trim()) values.push(raw.trim())
+      i = j
+    }
+    i++
+  }
+  const minDepth = titleDepths.length ? Math.min(...titleDepths) : 0
+  return { values, tasks: titleDepths.filter((d) => d === minDepth).length }
+}
+
+// lastReadableText is the last streamed sentence/fragment without any JSON
+// syntax — what the generation/topics status bar shows instead of the raw
+// document.
+export function lastReadableText(text) {
+  const { values } = scanPartialJson(text || '')
+  for (let v = values.length - 1; v >= 0; v--) {
+    const val = values[v]
+    if (!/[A-Za-z\u00c0-\u024f]{3}/.test(val)) continue
+    const parts = val.split(/(?<=[.!?])\s+/).filter(Boolean)
+    const last = parts[parts.length - 1] || val
+    return last.length > 160 ? last.slice(0, 160) + '\u2026' : last
+  }
+  return ''
+}
+
+// liveProgress maps the snapshot onto a stepped bar: phases give the base
+// position, the task count creeps through the writing phase, 100 only when the
+// run is no longer running. Always paired with WORDS, never colour alone.
+export function liveProgress(p, tasks) {
+  if (!p.running) return { pct: 100, word: 'klaar', steps: 5 }
+  switch (p.phase) {
+    case 'preparing':
+      return { pct: 5, word: 'voorbereiden', steps: 1 }
+    case 'starting':
+      return { pct: 12, word: 'starten', steps: 2 }
+    case 'thinking':
+      return { pct: 25, word: 'denken', steps: 3 }
+    default:
+      return { pct: Math.min(95, 30 + tasks * 10), word: 'schrijven', steps: 4 }
+  }
+}
+
+function isStreamedRun(convId) {
+  return convId !== execConvId()
+}
+
+// livePartialHTML renders the streamed answer text as Markdown. Only the
+// EXECUTION shows it (prose); generation/topics answer in one big JSON
+// document and show liveStatusBar's last readable sentence instead.
 function livePartialHTML(convId, text) {
-  if (convId === execConvId()) return renderMarkdown(text)
-  return '<pre class="whitespace-pre-wrap break-words font-mono text-[10.5px]">' + escapeHtml(text) + '</pre>'
+  return renderMarkdown(text)
+}
+
+function liveStatusBar(convId) {
+  const cur = () => turnProgress(convId) || {}
+  const tid = liveTestid(convId)
+  const prog = () => liveProgress(cur(), scanPartialJson(cur().partial || '').tasks)
+  return html`
+    <div class="mt-1" data-testid="${tid + '-bar'}">
+      <div
+        class="h-2 w-full overflow-hidden rounded border border-slate-300 bg-white dark:border-zinc-700 dark:bg-zinc-950/40"
+        role="progressbar"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="${() => String(prog().pct)}"
+        data-testid="${tid + '-progress'}"
+      >
+        <div class="h-full bg-slate-500 dark:bg-zinc-400" style="${() => 'width:' + prog().pct + '%'}"></div>
+      </div>
+      <p class="mt-0.5 text-[10.5px] text-slate-500 dark:text-zinc-400" data-testid="${tid + '-progress-text'}">
+        ${() => {
+          const g = prog()
+          const n = scanPartialJson(cur().partial || '').tasks
+          return t(g.word) + ' \u00b7 ' + g.pct + '%' + (n ? ' \u00b7 ' + n + ' ' + t('taken geschreven') : '')
+        }}
+      </p>
+      <p class="mt-0.5 truncate text-[11.5px] italic text-slate-600 dark:text-zinc-300" data-testid="${tid + '-last'}">
+        ${() => lastReadableText(cur().partial || '') || '\u2026'}
+      </p>
+    </div>
+  `
 }
 
 function livePane(convId) {
@@ -3319,14 +3420,16 @@ function livePane(convId) {
         </div>
         <div class="contents">
           ${() =>
-            cur().partial
-              ? html`<div
-                  class="markdown-body mt-1 max-h-48 overflow-y-auto rounded border border-slate-200 bg-white px-1.5 py-1 text-[11.5px] leading-relaxed dark:border-zinc-800 dark:bg-zinc-950/40"
-                  data-live-scroll="true"
-                  data-testid="${liveTestid(convId) + '-partial'}"
-                  .innerHTML="${() => livePartialHTML(convId, cur().partial || '')}"
-                ></div>`
-              : ''}
+            isStreamedRun(convId)
+              ? liveStatusBar(convId)
+              : cur().partial
+                ? html`<div
+                    class="markdown-body mt-1 max-h-48 overflow-y-auto rounded border border-slate-200 bg-white px-1.5 py-1 text-[11.5px] leading-relaxed dark:border-zinc-800 dark:bg-zinc-950/40"
+                    data-live-scroll="true"
+                    data-testid="${liveTestid(convId) + '-partial'}"
+                    .innerHTML="${() => livePartialHTML(convId, cur().partial || '')}"
+                  ></div>`
+                : ''}
         </div>
         <div class="contents">
           ${() =>
