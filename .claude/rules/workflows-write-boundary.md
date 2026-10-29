@@ -177,6 +177,19 @@ result). No Edit tool, no repo/`.env` writes. Its live snapshot
 (`qa_run_progress.go`) and its cancel (`POST /api/qa/cancel`) are in-memory,
 like `test_run`'s. See `.claude/docs/qa-page.md`.
 
+## Exception: the plan chat may act through a shell and MCP
+
+Same shape as the QA carve-out above, granted by Reindert ("/plan moet wel die
+rechten kunnen krijgen"): a `planChatReply` Activity (`plan_workflow.go`) runs
+Claude on every turn with `Read/Grep/Glob/Bash` plus Playwright and
+laravel-boost MCP, in the plan's own clean sticky checkout
+(`resolvePlanWorkDir`), so it can read the code, run artisan/tests and try the
+local stack in a browser. **No Edit tool**; it must not change code or `.env`,
+commit or push (prompt rule, not a technical one: Bash could). Like QA it may
+change local data and containers; those side effects are not recorded one by
+one. It holds the checkout's write-turn slot. Production MySQL/ClickHouse stay
+out of reach (no credentials). See `.claude/docs/plan-page.md`.
+
 ## Why
 
 The workflow event history is the **source of truth**: durable, replayable,

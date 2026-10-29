@@ -587,6 +587,14 @@ type planChatTools struct {
 	// RequestLog: the configured identifier.db path (DuckDB), queryable
 	// through `duckdb -readonly <path>`; "" when not configured/not found.
 	RequestLog string
+	// Shell: the turn has Bash, a Playwright browser and laravel-boost (no
+	// Edit) in WorkDir, the plan's own clean checkout; ShotDir is where its
+	// screenshots go. NoDirNote says why there is no checkout (then Code and
+	// Shell are false).
+	Shell     bool
+	WorkDir   string
+	ShotDir   string
+	NoDirNote string
 }
 
 // writePlanDataSources tells the chat what it can look at itself and what the
@@ -601,6 +609,11 @@ func writePlanDataSources(b *strings.Builder, tools planChatTools) {
 	b.WriteString("WAT JE KUNT RAADPLEGEN:\n")
 	if tools.Code {
 		b.WriteString("- De code: je draait in een checkout van de repository en mag Read/Grep/Glob gebruiken om te kijken hoe het nu werkt. Doe dat als het antwoord ervan afhangt, in plaats van te gokken.\n")
+	}
+	if tools.Shell {
+		fmt.Fprintf(b, "- Een echte shell, een browser en laravel-boost, in %s (de eigen, schone checkout van dit plan; docker compose draait daar). Je mag dingen zelf uitproberen: tests draaien, artisan, de lokale stack in de browser (Playwright MCP) doorlopen om te zien wat er afwijkt van de huidige werking. Je hebt GEEN Edit en wijzigt geen code of .env; commit/push niet. Screenshotmap (absoluut pad, gebruik dit in elke `filename`): %s — de afbeeldingen daarin worden na je antwoord onder je bericht getoond.\n", tools.WorkDir, tools.ShotDir)
+	} else if tools.NoDirNote != "" {
+		fmt.Fprintf(b, "- Geen code, shell of browser deze beurt: %s Zeg dat eerlijk als de vraag ervan afhangt.\n", tools.NoDirNote)
 	}
 	b.WriteString("- Productiedata (MySQL en ClickHouse): de reviewer kan read-only queries op productie draaien en het resultaat terugplakken. Heb je data nodig, geef dan ÉÉN query tegelijk in een ```sql-fence, met één regel ervoor wat de query doet en wat de uitkomst zou bewijzen, en wacht op het resultaat voor je verdergaat. Zeg of het MySQL (de applicatiedatabase) of ClickHouse (de statistieken: orders/order_items/subscriptions/products, ClickHouse-dialect) is. Alleen SELECT, met een LIMIT, en met een concrete tenant/id als die bekend is.\n")
 	if tools.RequestLog != "" {

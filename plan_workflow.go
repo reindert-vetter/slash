@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -1910,36 +1911,55 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		// look at — together with the --add-dir that lets it out of the scratch
 		// directory. See chat_attachment.go.
 		attachmentPaths := existingChatAttachmentPaths(m.appDataDirOrDefault(), convID, lastPlanChatAttachments(doc))
-		var tools, addDirs []string
+		var addDirs []string
 		if len(attachmentPaths) > 0 {
-			tools = []string{"Read"}
 			addDirs = []string{chatAttachmentConvDir(m.appDataDirOrDefault(), convID)}
 		}
-		// Planning happens in this chat now (reviewer request: "ik wil het met
-		// een chat kunnen plannen"), so the turn may look things up itself:
-		// the code, read-only, in the plan's werkmap (the same checkout the
-		// current-code panes read, planCurrentWorkDir), and the production
-		// request log through exactly `duckdb -readonly <path>` — a Bash
-		// permission PATTERN, so any other shell command is refused by the
-		// CLI itself. The production databases are not reachable from here on
-		// purpose: the reviewer runs those queries (see writePlanDataSources).
+		// Planning happens in this chat (reviewer request: "ik wil het met een
+		// chat kunnen plannen") and the turn may test things itself: every turn
+		// gets Read/Grep/Glob, Bash, Playwright and laravel-boost — no Edit — in
+		// the plan's own clean sticky checkout (plan_chat_shell.go), holding that
+		// directory's write-turn slot like every other shell turn. Without a
+		// usable checkout it falls back to the request-log pattern only. The
+		// production databases stay out of reach on purpose: the reviewer runs
+		// those queries (see writePlanDataSources).
 		access := planChatTools{RequestLog: usableRequestLog()}
-		workDir := planCurrentWorkDir(ctx, m.dataDir, doc.Key)
+		workDir, noDir := resolvePlanChatWorkDir(ctx, m, doc)
+		var mcpConfig string
+		timeout := planClaudeTimeout
+		var heartbeat func()
+		shotDir := ""
 		if workDir != "" {
-			access.Code = true
-			tools = append(tools, "Read", "Grep", "Glob")
+			access.Code, access.Shell, access.WorkDir = true, true, workDir
+			slotKey := "dir:" + workDir
+			release := acquireWriteTurnSlot(ctx, slotKey, "plan chat "+doc.Key, func() {
+				advanceChatProgress("", 0, convID, chatPhaseWaiting)
+			})
+			defer release()
+			heartbeat = func() { touchWriteTurnHolder(slotKey) }
+			timeout = planChatIdleTimeout
+			dir := chatScreenshotDir(m.appDataDirOrDefault(), convID, now)
+			if err := os.MkdirAll(dir, 0o755); err == nil {
+				shotDir = dir
+				defer os.RemoveAll(dir)
+				access.ShotDir = dir
+				mcpConfig = qaMCPConfig(dir)
+				addDirs = append(addDirs, dir)
+			}
+		} else {
+			access.NoDirNote = noDir
 		}
-		if access.RequestLog != "" {
-			tools = append(tools, "Bash(duckdb -readonly "+access.RequestLog+":*)")
-		}
+		tools := planChatToolset(workDir != "", access.RequestLog, len(attachmentPaths) > 0)
 		result, err := m.claude.RunChat(ctx, claude.RunRequest{
-			Model:   claude.ModelOpus,
-			Prompt:  planChatPrompt(doc, access) + chatAttachmentPromptNote(attachmentPaths) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
-			Tools:   dedupeStrings(tools),
-			AddDirs: addDirs,
-			WorkDir: workDir,
-			OnEvent: chatProgressSink("", 0, convID, &checkoutDir),
-			Timeout: planClaudeTimeout,
+			Model:       claude.ModelOpus,
+			Prompt:      planChatPrompt(doc, access) + chatAttachmentPromptNote(attachmentPaths) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
+			Tools:       dedupeStrings(tools),
+			AddDirs:     addDirs,
+			WorkDir:     workDir,
+			MCPConfig:   mcpConfig,
+			OnEvent:     chatProgressSink("", 0, convID, &checkoutDir),
+			OnHeartbeat: heartbeat,
+			Timeout:     timeout,
 		})
 		reply := strings.TrimSpace(result.Text)
 		if err != nil || reply == "" {
@@ -1948,7 +1968,14 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			}
 			reply = "Kon geen antwoord genereren, probeer het opnieuw."
 		}
-		doc.Chat = append(doc.Chat, planChatMessage{Role: "assistant", Body: reply, CreatedAt: now})
+		msg := planChatMessage{Role: "assistant", Body: reply, CreatedAt: now}
+		// Screenshots Claude took this turn show up under its own bubble.
+		if shotDir != "" {
+			for _, a := range harvestChatScreenshots(m.appDataDirOrDefault(), convID, shotDir) {
+				msg.Attachments = append(msg.Attachments, ChatAttachmentRef{ID: a.ID, Name: a.Name, MIME: a.MIME})
+			}
+		}
+		doc.Chat = append(doc.Chat, msg)
 		doc.Chat = trimPlanChat(doc.Chat)
 		publishChatChanged("", 0, convID)
 		return json.Marshal(doc)

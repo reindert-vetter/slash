@@ -469,21 +469,35 @@ immediate reload).
 
 ### What the chat may look up itself
 
-`planChatReply` is no longer a tool-less completion:
+`planChatReply` is no longer a tool-less completion. Reviewer request: *"/plan
+moet wel die rechten kunnen krijgen"* (Claude had answered it could not read
+the repo, run docker or test in the browser). Every turn, from the first one,
+gets the QA run's tool set (`planChatToolset`, `plan_chat_shell.go`):
 
-- **Code:** `Read/Grep/Glob` with `WorkDir` = the plan's werkmap
-  (`planCurrentWorkDir`, the same checkout the current-code panes read) — only
-  when one resolves.
-- **The production request log:** `Bash(duckdb -readonly <path>:*)`, a
-  permission PATTERN, so the CLI refuses any other shell command. The path is
-  the settings-page "Request-log (identifier.db)" row (`requestlog.go`, default
-  `/Users/reindert/dev/plug-and-pay/identifier.db`; a `.wal` is normalized to
-  its `.db` — DuckDB replays its WAL itself), only granted when the file
-  exists. `modules/claude`'s `agenticToolUniverse` reduces such a pattern to
-  its bare tool name for `--tools`. The prompt (`writePlanDataSources`) carries
+- **Tools:** `Read, Grep, Glob, Bash, mcp__playwright, mcp__laravel-boost` —
+  **no Edit**. Full `Bash` (so it also covers the request-log's
+  `duckdb -readonly <path>`), the Playwright browser and laravel-boost, wired
+  with `qaMCPConfig` exactly like `qa_run.go`. A write-boundary carve-out, see
+  "Exception: the plan chat may act through a shell and MCP" in
+  `.claude/rules/workflows-write-boundary.md`.
+- **Working dir:** the plan's own clean, sticky checkout
+  (`resolvePlanChatWorkDir` -> `resolvePlanWorkDir`, the one `plan_execute`
+  uses; `docker compose` runs there). There is deliberately **no fallback** to
+  a dirty or foreign checkout: with none usable the turn gets no shell/code
+  (only attachment `Read` and the duckdb pattern) and the prompt says why
+  (`planChatTools.NoDirNote`).
+- **One writer per checkout:** the turn holds `acquireWriteTurnSlot("dir:"+dir)`
+  like every other shell turn (waiting shows the "waiting" phase), with
+  `OnHeartbeat` -> `touchWriteTurnHolder`, and an **idle** timeout of 20 minutes
+  (`planChatIdleTimeout`) instead of `planClaudeTimeout`.
+- **Screenshots:** a per-turn dir (`chatScreenshotDir`, in `AddDirs`, removed
+  afterwards) is harvested by `harvestChatScreenshots` onto the assistant
+  message's `attachments`, shown under the bubble.
+- **The production request log:** the prompt (`writePlanDataSources`) carries
   the load-bearing gotchas of plug-and-pay's `search-in-requests` skill (UTC,
   per-day coverage first, `last` reserved, report a lock rather than copy).
-  Read-only, so no write-boundary carve-out is involved.
+  Path from the settings-page "Request-log (identifier.db)" row
+  (`requestlog.go`).
 - **Production MySQL/ClickHouse:** never from here (slash has no credentials,
   by design). The reviewer runs them: the prompt asks for ONE query at a time
   in a `sql` fence, with what it proves, naming MySQL vs ClickHouse, then wait
