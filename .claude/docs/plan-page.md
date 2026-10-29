@@ -1229,6 +1229,11 @@ description and none of the three appearing for a main task),
 
 ## Which branch does this go out from?
 
+> **Superseded for new Executions:** the question below no longer blocks; the
+> branch defaults to develop and stays changeable — see "The branch question no
+> longer blocks (`DefaultsBase`)" in the after-planning queue section. What follows
+> still describes the blocking gate an older Execution replays.
+
 Reviewer request, verbatim: *"is het een bug, vraag dan eerst of het een hotfix
 is vanuit master of niet"*, followed by *"Het kan namelijk ook vanaf een andere
 branche zijn, 3e keuze moet een drop down zijn waarbij eigen branches bovenaan
@@ -2156,12 +2161,72 @@ on the first question, and the workflow refuses an empty plan anyway. It
 carries no example code, so `curBlocks` yields nothing for it and `→` opens no
 block column.
 
-Because pressing it pushes a branch and opens a PR, **the first `Enter`/click
-only arms it** (`state.confirmExec`, the button then reads "Zeker weten? Druk
-nog een keer"); moving the cursor away disarms it again. Its state is always
-spelled out in WORDS (`nog niet uitgevoerd` / `draait…` / `klaar` /
-`draft-PR klaar` / `mislukt`), never a colour on its own — the colourblind
-rule.
+**One click queues it, no confirmation** (reviewer decision; the old
+"Zeker weten? Druk nog een keer" arm step is gone). Its state is always spelled
+out in WORDS (see "The after-planning queue" below), never a colour on its own —
+the colourblind rule.
+
+### The after-planning queue (`plan_queue.go`)
+
+Reviewer request: *"ik moet hiervoor kunnen kiezen, maar als het nog ergens mee
+bezig is, moet het duidelijk zijn dat het gelijk mag beginnen als planning
+eenmaal klaar is. al dit soort dingen ook starten als ik naar een andere pagina
+navigeer (of tab sluit)"*. So the choice is a **durable intent in the `plan`
+tracker**, never frontend waiting logic: the page only sends a Signal (Kind
+`queue`, `Text` = the action, `TopicOff` = cancel — it rides on whichever of
+`plan_answer`/`plan_scope`/`plan_hotfix` the tracker is parked on, exactly like
+the chat), the tracker folds it into `planDoc.Queue` and starts the action
+itself. Three actions, the card ("Naar een draft-PR", also shown while the plan
+is still generating or the scope gate stands):
+
+- **`jira`** — Jira to In Progress, **at once** when queued (it does not depend
+  on the plan). This replaced the implicit "answering the branch question moves
+  the ticket" step for new Executions: `DefaultsBase` documents no longer do it
+  by themselves.
+- **`execute`** — `plan_execute`, started by the Activity
+  `planQueueStartExecute` as soon as `planReadyToExecute` (a task list, no open
+  gate, no error, no aborted generation left to redo). It is checked at the top
+  of the main loop — right after a generation finished — and after every queue
+  Signal, so "the planning is ready" needs no polling. The **scope gate stays
+  blocking**: the item reads `wacht op jouw keuze: subtaak-scope`.
+- **`review`** — after the draft PR exists: **self-review → review tree
+  (ingest) → QA run**, each its own Activity and its own saved row
+  (`selfreview`/`ingest`/`qa` items). Turning it on queues `execute` too;
+  cancelling `execute` cancels it. The self-review is **not** the interactive
+  `/review` skill of the plug-and-pay repo (that one asks which base branch and
+  is report-only): it is a Claude run in the plan's own checkout that follows
+  the same rubric (`REVIEW.md`, `git diff origin/<base>...HEAD`), **fixes** the
+  Critical/Warning findings, then Go commits and does a plain `git push` (fast
+  forward only, never forced; a refused push is a failed step, the fixes stay
+  local). **A failed self-review does not stop the chain** — the step reads
+  `mislukt` and ingest + QA still start.
+
+**The plan is deliberately never written to Jira** (reviewer: *"nergens plan
+opslaan in jira"*) — don't add a `jiraPlan` action.
+
+How the tracker hears that `plan_execute` finished: its last Activity
+(`planExecuteNotify`) sends the internal Kind `execdone` on `plan_answer` from
+its own goroutine (an idle tracker would otherwise drive the whole chain inline
+inside that signal and keep the finished run "running"); the HTTP layer refuses
+that Kind. A lost notice leaves the item on `draait…` while the page still shows
+the run's own real status. All of these Kinds are in
+`planSignalRecordsWhileBusy`, so a click while the tracker generates is recorded
+at once and `applyRecordedQueue` overlays it on `GET /api/plan`'s `doc.queue`
+(counted per signal name in `QueueSeen`, like `ChatSeen`). A new answer or chat
+message never cancels the queue. With an empty queue the drain runs no
+Activity, so an Execution recorded before this keeps replaying unchanged.
+Tests: `plan_queue_test.go`, `tests/plan-queue.spec.mjs`.
+
+**The branch question no longer blocks (`DefaultsBase`).** Reviewer: *"dit moet
+standaard op develop staan (alles moet daar vanuit gaan), dus het kan niet
+onbeantwoord zijn"*. A freshly loaded document (`planLoadIssue` sets the flag)
+skips the `plan_hotfix` wait: `BaseBranch` is `develop`, `Hotfix` false, and the
+queue card shows `Vanaf branch: develop (standaard)` with one button to switch
+to the hotfix branch and back (Kind `base` on `plan_answer`, which adjusts the
+plan afterwards). Everything about `SavesGateAnswer` stays as it was — it only
+applies to the scope gate for such a document. An Execution recorded without
+`DefaultsBase` keeps its blocking gate (and its Activity order) on replay; tests
+of the old gate switch it off with `withBlockingBaseGate`.
 
 ### The `plan_execute` workflow
 

@@ -1065,32 +1065,67 @@ async function sendHotfix(body, rowID) {
   state.saving = ''
 }
 
-// triggerExecute is the index's LAST action: implement the plan on a fresh
-// branch and open a DRAFT pull request (plan_execute.go). It pushes and opens
-// a PR, so the first press only ARMS it — the second one really starts it. The
-// armed state is shown in words, never by a colour alone.
-async function triggerExecute() {
-  if (state.startingExec || execRunning()) return
-  if (!state.confirmExec) {
-    state.confirmExec = true
-    return
-  }
-  state.confirmExec = false
-  state.startingExec = true
-  try {
-    const res = await fetch('/api/workflows/plan_execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: state.key }),
-    })
-    if (res.ok) {
+// queueItem is one queued "after the planning" action (or a step of the review
+// chain) as the server reports it — GET /api/plan's doc.queue, which already
+// includes a click the tracker has recorded but not folded in yet.
+function queueItem(action) {
+  return (state.doc.queue || []).find((q) => q.action === action) || null
+}
+
+// sendQueue queues (off=false) or cancels (off=true) one action. It is only a
+// Signal: the TRACKER holds the intent and starts the action itself when its
+// moment comes, so this keeps working after navigating away or closing the tab.
+// Fire and forget on purpose — an idle tracker handles the Signal inline (a
+// Jira call, or even a whole review chain), and the page must not wait for that;
+// the next poll shows what the tracker recorded.
+async function sendQueue(action, off) {
+  if (!state.runId) await ensureTracker()
+  if (!state.runId) return
+  fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/' + chatSignalName(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ questionId: '', optionId: '', kind: 'queue', text: action, topicOff: !!off }),
+  })
+    .catch(() => {})
+    .then(() => {
       lastPayload = ''
-      await loadPlan()
-    }
-  } catch (err) {
-    // Nothing to undo: the next poll shows what the tracker really recorded.
-  }
-  state.startingExec = false
+      loadPlan()
+    })
+  setTimeout(() => {
+    lastPayload = ''
+    loadPlan()
+  }, 300)
+}
+
+// toggleQueue: one click queues the action, a second one while it still waits
+// cancels it. A started or finished action cannot be undone from here.
+function toggleQueue(action) {
+  const it = queueItem(action)
+  if (it && (it.status === 'started' || it.status === 'done')) return
+  sendQueue(action, !!it && it.status === 'queued')
+}
+
+// triggerExecute is the index's LAST action: implement the plan on a fresh
+// branch and open a DRAFT pull request (plan_execute.go) — queued, one click,
+// no confirmation; the tracker starts it as soon as the planning is ready.
+function triggerExecute() {
+  if (execRunning()) return
+  toggleQueue('execute')
+}
+
+// sendBase changes the branch the plan goes out from ('' = the default).
+function sendBase(branch) {
+  if (!state.runId || gateOpen()) return
+  fetch('/api/workflows/' + encodeURIComponent(state.runId) + '/signals/plan_answer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ questionId: '', optionId: '', kind: 'base', text: branch || '' }),
+  })
+    .catch(() => {})
+    .then(() => {
+      lastPayload = ''
+      loadPlan()
+    })
 }
 
 function execRunning() {
@@ -3450,8 +3485,30 @@ function livePane(convId) {
 // executeCard is the last card of the index: one action row that runs the
 // plan. It reports its state in WORDS (never a colour on its own, per the
 // colourblind rule) and links to the draft PR once there is one.
+// planningReady: the page's own view of "the planning is finished" — a task
+// list exists and nothing is generating or waiting on a gate.
+function planningReady() {
+  return (state.doc.tasks || []).length > 0 && !busyGenerating() && !gateOpen()
+}
+
+// queueWord spells the state of one queued action in WORDS (never a colour on
+// its own, per the colourblind rule).
+function queueWord(action) {
+  const it = queueItem(action)
+  if (!it) return t('uit')
+  if (it.status === 'started') return t('draait…')
+  if (it.status === 'done') return t('klaar')
+  if (it.status === 'failed') return t('mislukt')
+  if (it.status === 'skipped') return t('overgeslagen')
+  // queued
+  if (action === 'jira') return t('in de wachtrij')
+  if (action === 'review') return t('in de wachtrij: start na de draft-PR')
+  if (needsScope()) return t('wacht op jouw keuze: subtaak-scope')
+  return planningReady() ? t('in de wachtrij: start zo meteen') : t('in de wachtrij: start direct als de planning klaar is')
+}
+
 function execStatusWord() {
-  if (state.startingExec) return t('starten…')
+  if (queueItem('execute')) return queueWord('execute')
   if (!state.exec) return t('nog niet uitgevoerd')
   if (state.exec.status === 'running') return t('draait…')
   if (state.exec.status === 'failed') return t('mislukt')
@@ -3459,12 +3516,103 @@ function execStatusWord() {
   return t('klaar')
 }
 
+function queueButtonWord(action, label) {
+  const it = queueItem(action)
+  if (it && it.status === 'queued') return t('Annuleren')
+  if (it && it.status === 'started') return t('draait…')
+  if (it && it.status === 'done') return t('klaar')
+  return label
+}
+
 function execButtonWord() {
-  if (state.startingExec) return t('starten…')
-  if (execRunning()) return t('draait…')
-  if (state.confirmExec) return t('Zeker weten? Druk nog een keer')
-  if (state.exec) return t('Opnieuw uitvoeren en draft-PR maken')
-  return t('Plan uitvoeren en draft-PR maken')
+  const it = queueItem('execute')
+  if (!it && state.exec) return t('Opnieuw uitvoeren en draft-PR maken')
+  return queueButtonWord('execute', planningReady() ? t('Plan uitvoeren en draft-PR maken') : t('Uitvoeren zodra de planning klaar is'))
+}
+
+function queueLocked(action) {
+  const it = queueItem(action)
+  return !!it && (it.status === 'started' || it.status === 'done')
+}
+
+// queueRow is one extra queueable action under the execute button: a word for
+// its state, one button to queue it and the same button to cancel it.
+function queueRow(action, title, label, desc) {
+  return html`
+    <div class="mt-2 rounded-md border border-slate-200 px-2 py-1.5 dark:border-zinc-800" data-testid="${'plan-queue-' + action}">
+      <div class="flex items-start gap-2">
+        <div class="min-w-0 flex-1">
+          <div class="text-[12.5px] font-medium leading-snug text-slate-900 dark:text-zinc-100">${title}</div>
+          <p class="mt-0.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">${desc}</p>
+        </div>
+        <span
+          class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+          data-testid="${'plan-queue-status-' + action}"
+          >${() => queueWord(action)}</span
+        >
+      </div>
+      <div class="contents">
+        ${() => {
+          const it = queueItem(action)
+          return it && it.note
+            ? html`<p class="mt-1 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300" data-testid="${'plan-queue-note-' + action}">${it.note}</p>`
+            : ''
+        }}
+      </div>
+      <button
+        type="button"
+        data-testid="${'plan-queue-toggle-' + action}"
+        disabled="${() => queueLocked(action)}"
+        class="mt-1.5 w-full rounded-md border border-slate-300 px-2 py-1 text-[11.5px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+        @click="${(e) => {
+          if (e && e.stopPropagation) e.stopPropagation()
+          toggleQueue(action)
+        }}"
+      >
+        ${() => queueButtonWord(action, label)}
+      </button>
+    </div>
+  `
+}
+
+const QUEUE_STEP_LABEL = { selfreview: 'Self-review', ingest: 'Review-tree', qa: 'QA-run' }
+
+// queueSteps lists the review chain's own steps once it started.
+function queueSteps() {
+  return ['selfreview', 'ingest', 'qa']
+    .map((a) => queueItem(a))
+    .filter(Boolean)
+    .map((it) =>
+      html`<p class="mt-1 text-[11.5px] text-slate-600 dark:text-zinc-300" data-testid="${'plan-queue-step-' + it.action}">
+        ${'• ' + t(QUEUE_STEP_LABEL[it.action]) + ': ' + queueWord(it.action) + (it.note ? ' — ' + it.note : '')}
+      </p>`.key('qstep:' + it.action + ':' + it.status),
+    )
+}
+
+// baseRow shows the branch the plan goes out from — develop unless changed — so
+// the question can never stay open; one button switches it to the hotfix branch
+// and back.
+function baseRow() {
+  const hot = () => state.doc.hotfixBranch || 'master'
+  const def = () => state.doc.defaultBranch || 'develop'
+  return html`
+    <div class="mt-2 flex items-center gap-2 text-[11.5px] text-slate-600 dark:text-zinc-300" data-testid="plan-queue-base">
+      <span class="min-w-0 flex-1" data-testid="plan-queue-base-text"
+        >${() => t('Vanaf branch') + ': ' + (state.doc.baseBranch || def()) + (state.doc.hotfix ? ' (' + t('hotfix') + ')' : ' (' + t('standaard') + ')')}</span
+      >
+      <button
+        type="button"
+        data-testid="plan-queue-base-toggle"
+        class="shrink-0 rounded-md border border-slate-300 px-2 py-0.5 text-[11px] hover:bg-slate-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
+        @click="${(e) => {
+          if (e && e.stopPropagation) e.stopPropagation()
+          sendBase(state.doc.hotfix ? '' : hot())
+        }}"
+      >
+        ${() => (state.doc.hotfix ? t('Terug naar') + ' ' + def() : t('Hotfix vanaf') + ' ' + hot())}
+      </button>
+    </div>
+  `
 }
 
 // executeCard also names the WERKMAP the newest attempt ran in: the reviewer's
@@ -3504,7 +3652,7 @@ function executeCard(row) {
       <button
         type="button"
         data-testid="plan-execute-button"
-        disabled="${() => state.startingExec || execRunning()}"
+        disabled="${() => execRunning() || queueLocked('execute')}"
         class="mt-2 w-full rounded-md bg-indigo-600 px-2 py-1 text-[12px] font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
         @click="${(e) => {
           if (e && e.stopPropagation) e.stopPropagation()
@@ -3515,6 +3663,18 @@ function executeCard(row) {
       >
         ${() => execButtonWord()}
       </button>
+      <div class="contents">
+        ${() =>
+          (state.doc.queue || []).some((q) => q.status === 'queued')
+            ? html`<p class="mt-1.5 text-[11.5px] leading-relaxed text-slate-600 dark:text-zinc-300" data-testid="plan-queue-hint">
+                ${t('Dit staat in de wachtrij en gaat vanzelf door zodra het kan, ook als je naar een andere pagina gaat of de tab sluit.')}
+              </p>`
+            : ''}
+      </div>
+      <div class="contents">${() => (state.doc.defaultsBase && !gateOpen() ? [baseRow().key('queue-base')] : [])}</div>
+      ${queueRow('jira', t('Jira op In Progress'), t('Zet het ticket nu in de wachtrij'), t('Het ticket gaat meteen naar In Progress, ook al is de planning nog bezig.'))}
+      ${queueRow('review', t('Daarna review en QA'), t('Zet review en QA in de wachtrij'), t('Na de draft-PR: eerst een self-review (Claude fixt en pusht), daarna de review-tree en de QA-run.'))}
+      <div class="contents">${() => queueSteps()}</div>
       <div class="contents">${() => livePane(execConvId())}</div>
       <div class="contents">
         ${() =>
@@ -3699,10 +3859,7 @@ function tasksSection() {
                   </p>`.key('no-tasks')]}
           </div>
           <div class="contents">
-            ${() => {
-              const row = navRows().find((r) => r.kind === 'action')
-              return row ? executeCard(row) : ''
-            }}
+            ${() => executeCard(navRows().find((r) => r.kind === 'action') || null)}
           </div>
         </section>
   `.key('tasks')
@@ -3897,6 +4054,7 @@ function questionsColumn() {
           ${() => (!gateOpen() && navRows().some((r) => r.kind === 'regenerate') ? [regenerateCard()] : [])}
         </div>
         <div class="contents">${() => (gateOpen() ? [] : [tasksSection()])}</div>
+        <div class="contents">${() => (gateOpen() ? [executeCard(null)] : [])}</div>
       </div>
     </div>
   `
