@@ -57,6 +57,18 @@ func (s *server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if doc.NeedsScope || doc.NeedsHotfix {
 		generating = false
 	}
+	// The other way round: once a gate answer is stored (SavesGateAnswer),
+	// the first generation runs INLINE in that answer's Signal, and the tembed
+	// run keeps reading as `waiting` meanwhile — so a refresh in that window
+	// must still say "bezig" instead of showing an empty plan.
+	if planAwaitsFirstGeneration(doc) {
+		generating = true
+		for _, run := range runs {
+			if run.Workflow == WorkflowPlan && run.Status == "failed" {
+				generating = false
+			}
+		}
+	}
 	if !ok {
 		doc = planDoc{Key: key, Questions: []planQuestion{}, Tasks: []planTask{}, Answers: []planAnswer{}}
 	}
@@ -180,4 +192,13 @@ func (s *server) handlePlanRestartBranch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"runId": runID})
+}
+
+// planAwaitsFirstGeneration is true between a stored gate answer and the
+// first generation landing: no gate open, nothing generated, no error. Only
+// for a document that saves its gate answer (SavesGateAnswer) — an older one
+// never stored that in-between state.
+func planAwaitsFirstGeneration(doc planDoc) bool {
+	return doc.SavesGateAnswer && !doc.NeedsScope && !doc.NeedsHotfix &&
+		len(doc.Questions) == 0 && len(doc.Tasks) == 0 && doc.Error == ""
 }

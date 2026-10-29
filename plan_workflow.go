@@ -577,6 +577,15 @@ type planDoc struct {
 	// consuming the already-bound listener (main.go), so a live subprocess
 	// call blocked there hangs EVERY request, not just the plan page's own.
 	SplitGenerate bool           `json:"splitGenerate,omitempty"`
+	// SavesGateAnswer says this Execution saves the document straight after
+	// the scope/branch gate is answered, BEFORE the minutes-long generation.
+	// Without that save the page kept reading needsHotfix/needsScope until the
+	// generation landed, so a refresh in between showed the question again and
+	// re-routed every chat/topic signal onto a gate signal the tracker never
+	// waits on any more (reported on STAT-1155). Set by planLoadIssue, same
+	// replay-safety shape as SplitGenerate: an Execution recorded before it
+	// existed lacks the flag and keeps its original Activity order.
+	SavesGateAnswer bool `json:"savesGateAnswer,omitempty"`
 	Questions     []planQuestion `json:"questions"`
 	Tasks         []planTask     `json:"tasks"`
 	// TaskStates is the reviewer's checkbox/note per task (see planTaskState).
@@ -909,6 +918,11 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			break
 		}
 		doc.NeedsScope = false
+		if doc.SavesGateAnswer {
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save scope answer: %w", err)
+			}
+		}
 	}
 	// EVERY ticket is asked ONE more thing before anything is generated: does
 	// this go out as a hotfix (from the hotfix branch), from the ordinary base
@@ -943,6 +957,13 @@ func planWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 		}
 		doc.NeedsHotfix = false
 		doc.Hotfix, doc.BaseBranch = resolvePlanBase(doc, hf)
+		// Store the answer FIRST (see SavesGateAnswer), exactly like an
+		// ordinary plan_answer below: everything after this is slow.
+		if doc.SavesGateAnswer {
+			if err := w.ExecuteActivity("planSave", doc, nil); err != nil {
+				return nil, fmt.Errorf("plan: save base branch answer: %w", err)
+			}
+		}
 		// Answering this question is where the work STARTS: a branch has been
 		// chosen, so the ticket moves to "In Progress" in Jira and with it out
 		// of /pr-overview's todo lane into its planning lane (see
@@ -1540,6 +1561,8 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		// two-call (questions, then tasks) generation path — see
 		// SplitGenerate's own doc comment.
 		doc.SplitGenerate = true
+		// And the save straight after a gate answer — see SavesGateAnswer.
+		doc.SavesGateAnswer = true
 		for _, c := range issue.Comments {
 			doc.Comments = append(doc.Comments, planComment{Author: c.Author, Created: c.Created, Body: c.Body})
 		}

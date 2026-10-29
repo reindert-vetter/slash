@@ -1131,3 +1131,63 @@ func TestPlanBranchLines(t *testing.T) {
 		t.Fatalf("an empty read must yield nil")
 	}
 }
+
+// TestPlanGateAnswerIsStoredBeforeTheGeneration — reported on STAT-1155: the
+// branch choice vanished on a refresh during the (minutes-long) first
+// generation, because the document still said needsHotfix until that
+// generation landed. With SavesGateAnswer the answer is saved FIRST, so the
+// generation's own Claude call already sees a stored document without the
+// question — and the read model reports it as generating meanwhile.
+func TestPlanGateAnswerIsStoredBeforeTheGeneration(t *testing.T) {
+	fake := claude.NewFake()
+	jr := &jira.Fake{}
+	jr.SetIssue("PAYM-813", jira.Issue{Title: "Iets plannen", Description: "Een omschrijving."})
+	pl, err := plan.Open(filepath.Join(t.TempDir(), "plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := tembed.New(tembed.NewMemoryStore())
+	m := NewTaskManager(engine, &github.Fake{}, nil, testInbox(t), testRelations(t), testPRMeta(t), nil, nil, nil, nil, fake, jr, nil, "", "test/repo")
+	m.plan = pl
+
+	var during *planDoc
+	fake.SetChatHook(func(claude.RunRequest) {
+		if during != nil {
+			return
+		}
+		raw, ok, err := pl.Get(context.Background(), "PAYM-813")
+		if err != nil || !ok {
+			t.Errorf("no stored document during the generation: ok=%v err=%v", ok, err)
+			return
+		}
+		var d planDoc
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			t.Error(err)
+			return
+		}
+		during = &d
+	})
+
+	runID, err := m.StartPlan("PAYM-813")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SignalWorkflow(runID, SignalPlanHotfix, PlanHotfixSignal{Hotfix: true}); err != nil {
+		t.Fatal(err)
+	}
+	if during == nil {
+		t.Fatal("the generation never called Claude")
+	}
+	if during.NeedsHotfix || !during.Hotfix || during.BaseBranch != planHotfixBranch {
+		t.Fatalf("doc during the generation = needsHotfix %v, hotfix %v, base %q — want the answer already stored", during.NeedsHotfix, during.Hotfix, during.BaseBranch)
+	}
+	if !planAwaitsFirstGeneration(*during) {
+		t.Fatalf("the read model must report the in-between document as generating: %+v", *during)
+	}
+	// An older document (no flag) never reports that in-between state.
+	old := *during
+	old.SavesGateAnswer = false
+	if planAwaitsFirstGeneration(old) {
+		t.Fatal("a document without SavesGateAnswer must not be reported as generating")
+	}
+}

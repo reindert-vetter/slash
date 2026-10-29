@@ -1360,6 +1360,28 @@ one).
   untouched** — see the trigger bullet above for the full mechanism
   (`.claude/rules/workflow-determinism.md`).
 
+### The gate answer is stored before the generation (`SavesGateAnswer`)
+
+Reported on STAT-1155: *"wat ik hier heb gekozen en getyped, is weg na een
+refresh"*. The branch (and scope) answer was in the tembed history, but the
+workflow only saved the document again after the whole first generation —
+minutes — so a refresh in between read `needsHotfix: true` again (the page's
+`hotfixPending` is tab-local), showed the question again, and
+`chatSignalName()` routed the next chat/topic signal onto `plan_hotfix`, a
+signal the tracker never waits on again: lost for good.
+
+Now the workflow saves the document straight after a gate answer
+(`NeedsScope`/`NeedsHotfix=false`, `Hotfix`/`BaseBranch`), before
+`jiraStartProgress`/`planLoadContext`/`planGenerate` — the same "store the
+answer first" an ordinary `plan_answer` already did. It is gated on
+`doc.SavesGateAnswer`, set by `planLoadIssue`, so an Execution recorded before
+it existed keeps its original Activity order on replay
+(`.claude/rules/workflow-determinism.md`). Because the run reads as `waiting`
+while that answer's Signal runs the generation inline, `GET /api/plan` reports
+`generating: true` for exactly that in-between document
+(`planAwaitsFirstGeneration`: flag set, no gate, no questions/tasks, no error,
+no failed `plan` run). Test: `TestPlanGateAnswerIsStoredBeforeTheGeneration`.
+
 ### The branch question also starts the work (Jira → In Progress)
 
 Reviewer request: *"als je in todo een branch hebt aangemaakt (eerste vraag),
