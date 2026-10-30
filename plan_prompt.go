@@ -316,6 +316,43 @@ func planPrompt(doc planDoc, mode string) string {
 // attempt must be small, not the same size again.
 const planCompactTail = "\n\nBELANGRIJK: je vorige antwoord was te lang en werd afgekapt. Maak dit antwoord VEEL korter: hooguit 8 taken, per taak één voorbeeldblok van hooguit 8 regels code, geen geneste \"children\" dieper dan één niveau, korte notes en uitleg. Een korte maar complete, geldige JSON is belangrijker dan volledigheid.\n"
 
+// planCompactQuestionsTail is the questions-phase counterpart: that call has
+// no tasks, so telling it to cut "tasks" would leave the real bulk (the nested
+// example blocks under every option) untouched.
+const planCompactQuestionsTail = "\n\nBELANGRIJK: je vorige antwoord was te lang en werd afgekapt. Maak dit antwoord VEEL korter: hooguit 3 vragen, per vraag 2 of 3 opties, per optie hooguit één voorbeeldblok van hooguit 6 regels code zonder \"children\", korte notes en uitleg. Een korte maar complete, geldige JSON is belangrijker dan volledigheid.\n"
+
+// planCompactTailFor picks the retry nudge that matches the call's mode.
+func planCompactTailFor(mode string) string {
+	if mode == "questions" {
+		return planCompactQuestionsTail
+	}
+	return planCompactTail
+}
+
+// planSalvageAnswer is the last resort after both attempts were cut off: it
+// keeps the complete questions (mode "questions") or tasks (mode "tasks") that
+// did arrive. ok is false when nothing usable is left.
+func planSalvageAnswer(mode, text string) (qs []planQuestion, tasks []planTask, ok bool) {
+	if mode != "tasks" && mode != "questions" {
+		return nil, nil, false
+	}
+	body := planSalvageTruncated(planJSONObject(text))
+	if body == "" {
+		body = planSalvageTruncated(text)
+	}
+	if body == "" {
+		return nil, nil, false
+	}
+	q, t, err := parsePlanAnswer(body)
+	if err != nil {
+		return nil, nil, false
+	}
+	if (mode == "tasks" && len(t) > 0) || (mode == "questions" && len(q) > 0) {
+		return q, t, true
+	}
+	return nil, nil, false
+}
+
 // planTrim trims s and caps it at max bytes, marking that it was cut.
 func planTrim(s string, max int) string {
 	s = strings.TrimSpace(s)

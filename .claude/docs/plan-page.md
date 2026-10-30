@@ -2864,3 +2864,13 @@ pointer change because `checkout -B` left the submodule work tree behind and
 - Not covered: a commit Claude makes itself through Bash, and the merge
   conflict commit in chat_merge.go.
 - Test: `submodule_align_test.go`.
+
+### A cut-off questions answer: tailored retry nudge + salvage
+
+STAT-1155 (2026-10-29 `data/server.log`): `plan: parse STAT-1155 (questions) attempt 1/2: unexpected end of JSON input`,
+i.e. the model's output limit cut the nested example blocks off mid-object. The retry nudge used to be
+tasks-oriented ("hooguit 8 taken"), which does nothing for a questions-only call, and only `tasks` had a salvage.
+Now `planCompactTailFor(mode)` gives the questions call its own nudge (<=3 questions, 2-3 options, one short block
+without children), and after both attempts `planSalvageAnswer` keeps the complete questions (or tasks) that arrived
+and sets `doc.Error` to a "afgekapt: N vragen zijn gered" note; only when nothing complete is left is the plain parse
+error surfaced. Test: `plan_salvage_test.go`.

@@ -2008,7 +2008,7 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 				// (STAT-1155: three "unexpected end of JSON input" in a row, minutes
 				// each), so the retry asks for a much smaller one.
 				if arg.Mode != "adjust" {
-					prompt = basePrompt + planCompactTail
+					prompt = basePrompt + planCompactTailFor(arg.Mode)
 				}
 				// Attempt 1's unparseable answer is already in the snapshot;
 				// without this it stays glued in front of the retry's own
@@ -2051,11 +2051,9 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		// Both attempts cut off: keep the tasks that DID arrive complete rather
 		// than throwing minutes of work away (a note tells the reviewer).
 		salvaged := false
-		if perr != nil && arg.Mode == "tasks" {
-			if body := planSalvageTruncated(lastText); body != "" {
-				if sq, st, serr := parsePlanAnswer(body); serr == nil && len(st) > 0 {
-					qs, tasks, perr, salvaged = sq, st, nil, true
-				}
+		if perr != nil {
+			if sq, st, ok := planSalvageAnswer(arg.Mode, lastText); ok {
+				qs, tasks, perr, salvaged = sq, st, nil, true
 			}
 		}
 		if perr != nil {
@@ -2064,7 +2062,11 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		}
 		doc.Error = ""
 		if salvaged {
-			doc.Error = fmt.Sprintf("het antwoord van Claude was afgekapt: %d taken zijn gered, de rest ontbreekt — gebruik Plan opnieuw opstellen voor een volledige lijst", len(tasks))
+			if arg.Mode == "questions" {
+				doc.Error = fmt.Sprintf("het antwoord van Claude was afgekapt: %d vragen zijn gered, de rest ontbreekt — gebruik Plan opnieuw opstellen voor een volledige lijst", len(qs))
+			} else {
+				doc.Error = fmt.Sprintf("het antwoord van Claude was afgekapt: %d taken zijn gered, de rest ontbreekt — gebruik Plan opnieuw opstellen voor een volledige lijst", len(tasks))
+			}
 		}
 		switch arg.Mode {
 		case "adjust":
