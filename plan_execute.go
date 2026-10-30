@@ -89,6 +89,8 @@ const (
 	planExecuteMaxNoteLen     = 400
 	planExecuteMaxBranchSlug  = 40
 	planExecuteMaxBodyEntries = 12
+	// planExecuteMaxSummary caps the run's closing text kept for the PR body.
+	planExecuteMaxSummary = 3000
 )
 
 // planBranchRefPattern is the allow-list a reviewer-picked base branch (the
@@ -145,6 +147,8 @@ type planExecutePRArg struct {
 	// Dir is the werkmap the agent Activity actually used — carried over
 	// rather than re-resolved, see the file header (point 4).
 	Dir string `json:"dir,omitempty"`
+	// Summary is the agent run's closing text, see planExecuteResult.Summary.
+	Summary string `json:"summary,omitempty"`
 }
 
 // planExecuteResult is what the workflow records — deliberately bounded (a
@@ -156,7 +160,10 @@ type planExecuteResult struct {
 	Base string `json:"base,omitempty"`
 	// Dir is the werkmap this attempt ran in (chat_checkout.go's own selection
 	// ladder), so the page can say WHERE the plan was implemented.
-	Dir      string `json:"dir,omitempty"`
+	Dir string `json:"dir,omitempty"`
+	// Summary is Claude's closing text of the agentic run (bounded), so the
+	// PR body can say what was really done. Empty on an older history.
+	Summary  string `json:"summary,omitempty"`
 	Commit   string `json:"commit,omitempty"`
 	PRURL    string `json:"prUrl,omitempty"`
 	PRNumber int    `json:"prNumber,omitempty"`
@@ -214,7 +221,7 @@ func planExecuteRun(w *tembed.Workflow, in PlanExecuteInput) (planExecuteResult,
 		return res, nil
 	}
 	var pr planExecuteResult
-	arg := planExecutePRArg{Key: doc.Key, Title: doc.Title, Branch: branch, Base: base, URL: doc.URL, Tasks: planTaskTitles(doc), Dir: res.Dir}
+	arg := planExecutePRArg{Key: doc.Key, Title: doc.Title, Branch: branch, Base: base, URL: doc.URL, Tasks: planTaskTitles(doc), Dir: res.Dir, Summary: res.Summary}
 	if err := w.ExecuteActivity("planExecuteOpenPR", arg, &pr); err != nil {
 		return res, fmt.Errorf("plan execute: open pr: %w", err)
 	}
@@ -673,7 +680,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 	// itself while implementing (see .claude/rules/workflows-write-boundary.md,
 	// "the Claude chat turn may act through a shell").
 	advanceChatProgress("", 0, convID, chatPhaseStarting)
-	if _, err := m.claude.RunChat(ctx, claude.RunRequest{
+	runRes, err := m.claude.RunChat(ctx, claude.RunRequest{
 		Model:   claude.ModelOpus,
 		Prompt:  planExecutePrompt(arg.Doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain)),
 		WorkDir: dir,
@@ -684,11 +691,13 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		// take. dir is already resolved here, so an Edit's absolute path is
 		// logged repo-relative.
 		OnEvent: chatProgressSinkLogging("", 0, convID, &dir, true),
-	}); err != nil {
+	})
+	if err != nil {
 		m.logf("plan execute %s: claude: %v", arg.Doc.Key, err)
 		res.Note = "Claude kon het plan niet uitvoeren: " + err.Error()
 		return res
 	}
+	res.Summary = planTrim(strings.TrimSpace(runRes.Text), planExecuteMaxSummary)
 
 	// Go commits, not Claude (see the file header, point 3).
 	status, err := runGitStdoutIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
@@ -873,6 +882,16 @@ func planPRBody(arg planExecutePRArg) string {
 	if arg.URL != "" {
 		b.WriteString("Jira: " + arg.URL + "\n\n")
 	}
+	if s := strings.TrimSpace(arg.Summary); s != "" {
+		b.WriteString("Implemented:\n\n" + s + "\n\n")
+		if len(arg.Tasks) > 0 {
+			b.WriteString("Planned tasks (some may already have existed; see above):\n")
+			for _, t := range arg.Tasks {
+				b.WriteString("- " + t + "\n")
+			}
+		}
+		return b.String()
+	}
 	if len(arg.Tasks) > 0 {
 		b.WriteString("Plan:\n")
 		for _, t := range arg.Tasks {
@@ -985,6 +1004,7 @@ func planExecutePrompt(doc planDoc) string {
 	b.WriteString("- Werk zo ver als je verantwoord komt. Kom je iets tegen dat echt niet kan zonder een nieuwe beslissing, doe dan de rest wel en laat dat punt staan.\n")
 	b.WriteString("- Je hoeft NIET te committen of te pushen: dat gebeurt automatisch nadat je klaar bent.\n")
 	b.WriteString("- Code, identifiers en commentaar in het Engels.\n")
+	b.WriteString("- Sluit af met een korte, feitelijke lijst in het Engels (dit komt in de PR-beschrijving): per taak \"done\" of \"already existed: <path>\", plus wat je echt hebt gewijzigd. Geen uitgebreid verhaal.\n")
 	return b.String()
 }
 

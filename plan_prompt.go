@@ -706,3 +706,28 @@ func parsePlanTopics(raw string) ([]planTopic, error) {
 	}
 	return out, nil
 }
+
+// planGenerateToolset is the tool list of a plan generation call: read-only
+// code search in the plan's checkout, no shell, no Edit.
+func planGenerateToolset() []string { return []string{"Read", "Grep", "Glob"} }
+
+// planCodeAccessTail tells the generation what it may look at. With a werkmap
+// the model must check the code first, use only paths it has seen and leave out
+// work that already exists (naming the existing path in a related task's
+// explanation); without one it must not invent paths.
+func planCodeAccessTail(workDir, note string) string {
+	var b strings.Builder
+	b.WriteString("\n\nCODE:\n")
+	if workDir == "" {
+		b.WriteString("- Je hebt nu GEEN toegang tot de code. Noem alleen paden die in het ticket of de context hierboven staan en verzin geen andere.")
+		if strings.TrimSpace(note) != "" {
+			b.WriteString(" (" + strings.TrimSpace(note) + ")")
+		}
+		b.WriteString("\n")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "- Je staat in de checkout van de basisbranch (%s) en mag lezen en zoeken (Read/Grep/Glob). Zoek EERST in de code wat er al bestaat, voordat je vragen, taken of voorbeeldcode schrijft.\n", workDir)
+	b.WriteString("- Gebruik ALLEEN paden en symbolen die je daar echt hebt gezien; verzin geen mappen of bestanden. Een nieuw bestand mag, maar alleen in een map die bestaat.\n")
+	b.WriteString("- Bestaat (een deel van) het werk al op de basisbranch, laat die taak dan WEG en noem het bestaande pad kort in de explanation van een verwante taak als context.\n")
+	return b.String()
+}

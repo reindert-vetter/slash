@@ -329,3 +329,24 @@ func TestPlanExecutePromptCarriesTheConcreteFields(t *testing.T) {
 		t.Fatalf("an empty task must write no detail lines:\n%s", bare)
 	}
 }
+
+func TestPlanPRBodySummary(t *testing.T) {
+	arg := planExecutePRArg{Key: "K-1", Tasks: []string{"a", "b"}}
+	if got := planPRBody(arg); !strings.Contains(got, "Plan:\n- a") || strings.Contains(got, "Implemented") {
+		t.Fatalf("old shape changed: %q", got)
+	}
+	arg.Summary = "a: done\nb: already existed: x.php"
+	got := planPRBody(arg)
+	if !strings.Contains(got, "Implemented:\n\na: done") || !strings.Contains(got, "Planned tasks") {
+		t.Fatalf("summary missing: %q", got)
+	}
+}
+
+func TestPlanCodeAccessTail(t *testing.T) {
+	if got := planCodeAccessTail("/w", ""); !strings.Contains(got, "Zoek EERST") {
+		t.Fatalf("with dir: %q", got)
+	}
+	if got := planCodeAccessTail("", "geen werkmap"); !strings.Contains(got, "GEEN toegang") || !strings.Contains(got, "geen werkmap") {
+		t.Fatalf("without dir: %q", got)
+	}
+}

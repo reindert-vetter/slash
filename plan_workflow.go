@@ -594,7 +594,7 @@ type planDoc struct {
 	// runs synchronously in newTasks, itself called before http.Serve starts
 	// consuming the already-bound listener (main.go), so a live subprocess
 	// call blocked there hangs EVERY request, not just the plan page's own.
-	SplitGenerate bool           `json:"splitGenerate,omitempty"`
+	SplitGenerate bool `json:"splitGenerate,omitempty"`
 	// SavesGateAnswer says this Execution saves the document straight after
 	// the scope/branch gate is answered, BEFORE the minutes-long generation.
 	// Without that save the page kept reading needsHotfix/needsScope until the
@@ -643,9 +643,9 @@ type planDoc struct {
 	GenOutcome string `json:"genOutcome"`
 	// GenStale: a generation was aborted for a waiting change that does not
 	// regenerate by itself (a topic edit), so the next loop turn does.
-	GenStale bool `json:"genStale"`
-	Questions     []planQuestion `json:"questions"`
-	Tasks         []planTask     `json:"tasks"`
+	GenStale  bool           `json:"genStale"`
+	Questions []planQuestion `json:"questions"`
+	Tasks     []planTask     `json:"tasks"`
 	// TaskStates is the reviewer's checkbox/note per task (see planTaskState).
 	// Absent for every document written before task 22 existed, which reads as
 	// "every task checked, no notes" — the default.
@@ -1966,6 +1966,25 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		if arg.Mode == "adjust" {
 			prompt = planAdjustPrompt(doc) + explainLangTail(m.LangFor(ctx, langpref.KindExplain))
 		}
+		// Read-only access to the plan's own clean checkout (the same one the
+		// planning chat uses), so the plan only names paths that exist and
+		// leaves out what the base branch already contains. Without a usable
+		// checkout the call stays text-only and the prompt says so. The
+		// timeout then becomes an idle bound with a heartbeat: searching code
+		// takes time. See planCodeAccessTail.
+		genWorkDir, genNoDir := resolvePlanChatWorkDir(ctx, m, doc)
+		genTimeout := planClaudeTimeout
+		var genHeartbeat func()
+		var genTools []string
+		if genWorkDir != "" {
+			slotKey := "dir:" + genWorkDir
+			release := acquireWriteTurnSlot(ctx, slotKey, "plan generate "+doc.Key, func() {})
+			defer release()
+			genHeartbeat = func() { touchWriteTurnHolder(slotKey) }
+			genTimeout = planChatIdleTimeout
+			genTools = planGenerateToolset()
+		}
+		prompt += planCodeAccessTail(genWorkDir, genNoDir)
 		basePrompt := prompt
 		// Live progress, same machinery as planChatReply below and
 		// plan_execute.go: this call has NO Tools, so it never reports a tool
@@ -1982,7 +2001,6 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 		var tasks []planTask
 		var ops planOpsAnswer
 		var perr error
-		var checkoutDir string
 		var lastText string
 		for attempt := 1; attempt <= 2; attempt++ {
 			if attempt > 1 {
@@ -2000,10 +2018,13 @@ func (m *TaskManager) registerPlanActivities(engine *tembed.Engine) {
 			}
 			advanceChatProgress("", 0, genConv, chatPhaseStarting)
 			result, err := m.claude.RunChat(ctx, claude.RunRequest{
-				Model:   claude.ModelOpus,
-				Prompt:  prompt,
-				Timeout: planClaudeTimeout,
-				OnEvent: chatProgressSinkLogging("", 0, genConv, &checkoutDir, true),
+				Model:       claude.ModelOpus,
+				Prompt:      prompt,
+				Timeout:     genTimeout,
+				Tools:       genTools,
+				WorkDir:     genWorkDir,
+				OnHeartbeat: genHeartbeat,
+				OnEvent:     chatProgressSinkLogging("", 0, genConv, &genWorkDir, true),
 			})
 			if aborted.Load() {
 				doc.GenOutcome = planGenAborted

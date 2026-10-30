@@ -2379,6 +2379,30 @@ header for the full reasoning; the essentials:
   so the POST returns immediately and the minutes-long run drains in the
   background (same as `test_run`/`comment_batch`).
 
+## Generation reads the code; the PR body says what was really done
+
+**`planGenerate` (every mode) runs with read-only code access.** It resolves
+the plan's own clean checkout (`resolvePlanChatWorkDir`, the same werkmap the
+planning chat uses), takes that directory's write-turn slot and runs Claude with
+`Read/Grep/Glob` (`planGenerateToolset`: no shell, no Edit) in it. The prompt
+tail (`planCodeAccessTail`) says: search the code first, use only paths you saw,
+and LEAVE OUT a task whose work already exists on the base branch (naming the
+existing path in a related task's explanation). Before this the call had no
+tools at all, so it invented paths (STAT-1155: `app/Statistics/SessionFlow/...`)
+and planned work already merged as STAT-1102. The timeout is the idle bound with
+heartbeat (`planChatIdleTimeout`, `OnHeartbeat` touches the slot), not the fixed
+5 minutes. No usable werkmap: the call stays text-only and the prompt says it
+has no code access (do not invent paths). No new Activity and no order change,
+so old histories replay untouched. `plan_testmain_test.go` points the checkout
+home scan at an empty dir so tests never `git fetch` real clones.
+
+**The PR body reports the run.** `planExecuteResult.Summary` keeps Claude's
+closing text of the agentic run (bounded, `planExecuteMaxSummary`); the prompt
+asks for a short per-task "done" / "already existed: <path>" list. It travels
+on `planExecutePRArg.Summary` and `planPRBody` prints it under "Implemented:",
+followed by the ticked tasks as "Planned tasks". Without a summary (older
+history) the body is the old "Plan:" list.
+
 ## The `plan` workflow (one tracker per ticket)
 
 `plan_workflow.go` + `plan_prompt.go`, Workflow Type **`plan`**, Run ID
