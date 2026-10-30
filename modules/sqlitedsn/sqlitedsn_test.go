@@ -3,6 +3,7 @@ package sqlitedsn_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,10 +18,10 @@ import (
 // tembed's NewSQLiteStore — otherwise a path with a query string would get a
 // second "?" and the driver would reject the whole DSN.
 func TestDSNPicksSeparator(t *testing.T) {
-	if got, want := sqlitedsn.DSN("/tmp/x.db"), "/tmp/x.db?_pragma=busy_timeout(5000)"; got != want {
+	if got, want := sqlitedsn.DSN("/tmp/x.db"), "/tmp/x.db?_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)&_txlock=immediate"; got != want {
 		t.Fatalf("plain path: got %q want %q", got, want)
 	}
-	if got, want := sqlitedsn.DSN("/tmp/x.db?mode=rw"), "/tmp/x.db?mode=rw&_pragma=busy_timeout(5000)"; got != want {
+	if got, want := sqlitedsn.DSN("/tmp/x.db?mode=rw"), "/tmp/x.db?mode=rw&_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)&_txlock=immediate"; got != want {
 		t.Fatalf("path with query: got %q want %q", got, want)
 	}
 }
@@ -48,8 +49,8 @@ func TestModuleStoreHasBusyTimeout(t *testing.T) {
 	if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&ms); err != nil {
 		t.Fatal(err)
 	}
-	if ms != 5000 {
-		t.Fatalf("busy_timeout = %d, want 5000", ms)
+	if ms != 30000 {
+		t.Fatalf("busy_timeout = %d, want 30000", ms)
 	}
 }
 
@@ -96,4 +97,25 @@ func TestWriterWaitsForLockInsteadOfFailing(t *testing.T) {
 		t.Fatalf("write did not wait for the lock: %v", err)
 	}
 	<-done
+}
+
+// Retry is the safety net behind busy_timeout: a BUSY that outlasts the wait
+// is retried instead of failing the Activity; any other error is not retried.
+func TestRetryRidesOutBusyOnly(t *testing.T) {
+	calls := 0
+	err := sqlitedsn.Retry(context.Background(), func() error {
+		calls++
+		if calls < 3 {
+			return errors.New("database is locked (5) (SQLITE_BUSY)")
+		}
+		return nil
+	})
+	if err != nil || calls != 3 {
+		t.Fatalf("err=%v calls=%d, want nil/3", err, calls)
+	}
+	calls = 0
+	boom := errors.New("constraint failed")
+	if err := sqlitedsn.Retry(context.Background(), func() error { calls++; return boom }); err != boom || calls != 1 {
+		t.Fatalf("non-busy error retried: err=%v calls=%d", err, calls)
+	}
 }

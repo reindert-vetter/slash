@@ -54,7 +54,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	if strings.Contains(path, "?") {
 		sep = "&"
 	}
-	db, err := sql.Open("sqlite", path+sep+"_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", path+sep+"_pragma=busy_timeout(30000)&_pragma=synchronous(NORMAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("tembed: open sqlite: %w", err)
 	}

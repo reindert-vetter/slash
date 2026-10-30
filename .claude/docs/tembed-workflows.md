@@ -179,3 +179,16 @@ failure still reaches the UI.
 The shared CLI-bridge modules are documented where they are first driven:
 `modules/comments`/`modules/github`/`modules/jira` in `workflows-comments.md`,
 `modules/claude` in `workflows-analysis.md`.
+
+## SQLITE_BUSY must never reach a workflow
+
+Dozens of `resolve_call` runs write at once, and a BUSY from `mark searching`
+used to fail the whole run (an Activity error is terminal). Layers, outermost
+last: every store opens with `sqlitedsn.Params` (`modules/sqlitedsn`:
+`busy_timeout(30000)`, `synchronous(NORMAL)`, `_txlock=immediate` so the write
+lock is taken at BEGIN where the timeout applies; per connection, via the DSN);
+`tembed/store_sqlite.go` (workflows.db) repeats the same string since tembed
+imports no slash package; `sqlitedsn.Retry` (short backoff, inside the Activity)
+wraps the `resolve_call` writes; `executeActivityWithLockRetry` (durable
+`w.Sleep`) is the last net. A plain concurrent-write test did not reproduce BUSY
+at 60 goroutines, so no write-pool/mutex was added; add one per DB if it recurs.

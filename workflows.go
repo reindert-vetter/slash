@@ -35,6 +35,7 @@ import (
 	"slash/modules/prsnooze"
 	"slash/modules/relations"
 	"slash/modules/reviewerusage"
+	"slash/modules/sqlitedsn"
 	"slash/modules/testcovers"
 	"slash/modules/touchai"
 	"slash/modules/warndismiss"
@@ -2100,7 +2101,9 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if m.callresolve == nil {
 			return nil, nil
 		}
-		return nil, m.callresolve.SaveSearching(ctx, arg.Repo, arg.PR, arg.CallerID, arg.Calls)
+		return nil, sqlitedsn.Retry(ctx, func() error {
+			return m.callresolve.SaveSearching(ctx, arg.Repo, arg.PR, arg.CallerID, arg.Calls)
+		})
 	})
 
 	// Activity: resolve calls with one LLM model (Haiku = context-only shortlist,
@@ -2126,7 +2129,7 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 			return nil, nil
 		}
 		for _, e := range entries {
-			if err := m.callresolve.Save(ctx, e); err != nil {
+			if err := sqlitedsn.Retry(ctx, func() error { return m.callresolve.Save(ctx, e) }); err != nil {
 				return nil, err
 			}
 		}
@@ -5345,7 +5348,7 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 	if len(in.Calls) == 0 {
 		return json.Marshal(map[string]int{"found": 0})
 	}
-	if err := w.ExecuteActivity("markCallsSearching", in, nil); err != nil {
+	if err := executeActivityWithLockRetry(w, "markCallsSearching", in, nil); err != nil {
 		return nil, fmt.Errorf("mark searching: %w", err)
 	}
 
@@ -5375,7 +5378,7 @@ func resolveCallWorkflow(w *tembed.Workflow, input []byte) ([]byte, error) {
 			}
 		}
 	}
-	if err := w.ExecuteActivity("saveResolutions", final, nil); err != nil {
+	if err := executeActivityWithLockRetry(w, "saveResolutions", final, nil); err != nil {
 		return nil, fmt.Errorf("save resolutions: %w", err)
 	}
 	return json.Marshal(map[string]int{"found": found})
