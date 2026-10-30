@@ -115,7 +115,15 @@ func (e *Engine) RegisterWorkflow(name string, fn WorkflowFunc) {
 func (e *Engine) RegisterActivity(name string, fn ActivityFunc) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.activities[name] = fn
+	// Every Activity gets the transient SQLite-lock retry (retryTransient), so
+	// no one has to remember it per Activity and a BUSY never fails a run.
+	e.activities[name] = func(ctx context.Context, input []byte) (out []byte, err error) {
+		err = retryTransient(ctx, func() error {
+			out, err = fn(ctx, input)
+			return err
+		})
+		return out, err
+	}
 }
 
 // SetRecordSignalsWhileBusy opts a workflow type into recording a signal

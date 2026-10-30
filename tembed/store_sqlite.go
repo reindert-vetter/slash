@@ -1,6 +1,7 @@
 package tembed
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -87,6 +88,10 @@ func migrateSQLite(db *sql.DB) {
 const tsLayout = time.RFC3339Nano
 
 func (s *SQLiteStore) CreateRun(r RunRecord) error {
+	return retryTransient(context.Background(), func() error { return s.createRun(r) })
+}
+
+func (s *SQLiteStore) createRun(r RunRecord) error {
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO runs (id, workflow, status, created_at, updated_at, parent_run_id)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -95,6 +100,10 @@ func (s *SQLiteStore) CreateRun(r RunRecord) error {
 }
 
 func (s *SQLiteStore) SetStatus(runID, status string, at time.Time) error {
+	return retryTransient(context.Background(), func() error { return s.setStatus(runID, status, at) })
+}
+
+func (s *SQLiteStore) setStatus(runID, status string, at time.Time) error {
 	_, err := s.db.Exec(
 		`UPDATE runs SET status = ?, updated_at = ? WHERE id = ?`,
 		status, at.Format(tsLayout), runID)
@@ -102,6 +111,10 @@ func (s *SQLiteStore) SetStatus(runID, status string, at time.Time) error {
 }
 
 func (s *SQLiteStore) AppendEvent(runID string, e Event) error {
+	return retryTransient(context.Background(), func() error { return s.appendEvent(runID, e) })
+}
+
+func (s *SQLiteStore) appendEvent(runID string, e Event) error {
 	_, err := s.db.Exec(
 		`INSERT INTO events (run_id, seq, type, name, payload, error, time)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -183,6 +196,10 @@ func (s *SQLiteStore) ListRuns() ([]RunRecord, error) {
 // TruncateEvents deletes runID's events from fromSeq onwards. One statement;
 // affecting 0 rows is not an error (idempotent). See Store.
 func (s *SQLiteStore) TruncateEvents(runID string, fromSeq int) error {
+	return retryTransient(context.Background(), func() error { return s.truncateEvents(runID, fromSeq) })
+}
+
+func (s *SQLiteStore) truncateEvents(runID string, fromSeq int) error {
 	_, err := s.db.Exec(`DELETE FROM events WHERE run_id = ? AND seq >= ?`, runID, fromSeq)
 	return err
 }
@@ -195,6 +212,10 @@ func (s *SQLiteStore) TruncateEvents(runID string, fromSeq int) error {
 // regardless. Deleting a run that doesn't exist affects 0 rows, which is not
 // an error (idempotent).
 func (s *SQLiteStore) DeleteRun(runID string) error {
+	return retryTransient(context.Background(), func() error { return s.deleteRun(runID) })
+}
+
+func (s *SQLiteStore) deleteRun(runID string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err

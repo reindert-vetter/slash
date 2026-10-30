@@ -21,6 +21,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -176,7 +177,13 @@ type Entry struct {
 }
 
 // Module owns the call-resolution store.
-type Module struct{ db *sql.DB }
+// wmu serializes this DB's writes in Go. Hundreds of resolve_call runs can
+// start at once (a restart's Recover, a rebuild fan-out); queueing here instead
+// of inside SQLite means they never contend for the file lock at all.
+type Module struct {
+	db  *sql.DB
+	wmu sync.Mutex
+}
 
 // Open opens (or creates) the callresolve DB at path and applies the schema.
 func Open(path string) (*Module, error) {
@@ -225,6 +232,8 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 // Go scan has no "resolved" answer to improve on for a class-level-only
 // annotation.
 func (m *Module) UpsertGo(ctx context.Context, entries []Entry) error {
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -274,6 +283,8 @@ WHERE call_resolutions.status NOT IN ('searching','found')
 // no longer on a changed line; either way the row — LLM-owned included, its call
 // site is gone — is meaningless. WRITE — workflow-Activity-only.
 func (m *Module) Prune(ctx context.Context, repo string, pr int, keep []Entry) error {
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	if len(keep) == 0 {
 		_, err := m.db.ExecContext(ctx, `DELETE FROM call_resolutions WHERE repo = ? AND pr = ?`, repo, pr)
 		return err
@@ -298,6 +309,8 @@ func (m *Module) Prune(ctx context.Context, repo string, pr int, keep []Entry) e
 // per-PR data-retention cleanup path (see the cleanup workflow). Returns the
 // number of rows removed, for logging.
 func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) {
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	res, err := m.db.ExecContext(ctx, `DELETE FROM call_resolutions WHERE repo = ? AND pr = ?`, repo, pr)
 	if err != nil {
 		return 0, err
@@ -308,6 +321,8 @@ func (m *Module) Purge(ctx context.Context, repo string, pr int) (int64, error) 
 // SaveSearching marks the given calls of a caller as in-progress. WRITE —
 // workflow-Activity-only.
 func (m *Module) SaveSearching(ctx context.Context, repo string, pr int, callerID string, calls []string) error {
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -332,6 +347,8 @@ ON CONFLICT(pr, caller_id, call_key) DO UPDATE SET status = excluded.status, upd
 // Save upserts one LLM-produced resolution (found or notfound). WRITE —
 // workflow-Activity-only.
 func (m *Module) Save(ctx context.Context, e Entry) error {
+	m.wmu.Lock()
+	defer m.wmu.Unlock()
 	kind := e.Kind
 	if kind == "" {
 		kind = KindMethodCall

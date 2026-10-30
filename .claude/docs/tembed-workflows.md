@@ -182,13 +182,21 @@ The shared CLI-bridge modules are documented where they are first driven:
 
 ## SQLITE_BUSY must never reach a workflow
 
-Dozens of `resolve_call` runs write at once, and a BUSY from `mark searching`
-used to fail the whole run (an Activity error is terminal). Layers, outermost
-last: every store opens with `sqlitedsn.Params` (`modules/sqlitedsn`:
-`busy_timeout(30000)`, `synchronous(NORMAL)`, `_txlock=immediate` so the write
-lock is taken at BEGIN where the timeout applies; per connection, via the DSN);
-`tembed/store_sqlite.go` (workflows.db) repeats the same string since tembed
-imports no slash package; `sqlitedsn.Retry` (short backoff, inside the Activity)
-wraps the `resolve_call` writes; `executeActivityWithLockRetry` (durable
-`w.Sleep`) is the last net. A plain concurrent-write test did not reproduce BUSY
-at 60 goroutines, so no write-pool/mutex was added; add one per DB if it recurs.
+Hundreds of `resolve_call` runs can be live at once (a restart's Recover plus
+rebuild fan-outs; 566 were seen), all writing, and a BUSY used to fail a run
+(an Activity error is terminal). Layers:
+1. Every store opens with `sqlitedsn.Params` (`modules/sqlitedsn`:
+   `busy_timeout(30000)`, `synchronous(NORMAL)`, `_txlock=immediate` so the
+   write lock is taken at BEGIN where the timeout applies; per connection, via
+   the DSN). `tembed/store_sqlite.go` (workflows.db) repeats the string, since
+   tembed imports no slash package.
+2. `modules/callresolve` serializes its writes with a Go mutex (`wmu`): the
+   fan-out queues in Go instead of contending for the file lock.
+3. **Generic, in tembed:** `Engine.RegisterActivity` wraps EVERY Activity in
+   `retryTransient` (`tembed/transient.go`, 10 tries, ~15s), and the
+   `SQLiteStore` writes retry the same way. The outcome is recorded only after
+   the retries, so replay never sees them (deterministic). Nobody has to
+   remember it per Activity.
+4. Last net, durable: `executeActivityWithLockRetry` (workflow `w.Sleep`
+   ladder), used by `saveReaction` and the resolve_call mark/save steps.
+Tests set `tembed.TransientAttempts = 1` to observe the workflow ladder alone.

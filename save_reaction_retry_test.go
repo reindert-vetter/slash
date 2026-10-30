@@ -16,7 +16,9 @@ func shrinkDBLockRetryDelays(t *testing.T) {
 	t.Helper()
 	orig := dbLockRetryDelays
 	dbLockRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}
-	t.Cleanup(func() { dbLockRetryDelays = orig })
+	origAttempts := tembed.TransientAttempts
+	tembed.TransientAttempts = 1 // observe the workflow ladder, not the in-Activity retry
+	t.Cleanup(func() { dbLockRetryDelays = orig; tembed.TransientAttempts = origAttempts })
 }
 
 // TestExecuteActivityWithLockRetryRetriesTransientBusyError proves that a
