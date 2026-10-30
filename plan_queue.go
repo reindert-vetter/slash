@@ -526,7 +526,7 @@ func (m *TaskManager) ensurePlanPRTree(ctx context.Context, arg planQueueChainAr
 	if arg.PR <= 0 {
 		return planQueueStep{Note: "er is geen draft-PR om een review-tree van te maken"}
 	}
-	repo := repoSlugFor("")
+	repo := canonRepo(repoSlugFor(""))
 	if m.prIngestRunning(repo, arg.PR) {
 		return planQueueStep{OK: true, Note: "de review-tree werd al gegenereerd"}
 	}
@@ -581,7 +581,7 @@ func (m *TaskManager) prHasBlocks(pr int) bool {
 
 // runPlanQueueIngest builds the review tree of the draft PR.
 func (m *TaskManager) runPlanQueueIngest(ctx context.Context, arg planQueueChainArg) planQueueStep {
-	repo := repoSlugFor("")
+	repo := canonRepo(repoSlugFor(""))
 	ctx, cancel := context.WithTimeout(ctx, ingestTimeout)
 	defer cancel()
 	if _, err := m.StartIngest(ctx, repo, arg.PR); err != nil {

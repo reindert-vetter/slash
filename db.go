@@ -188,9 +188,24 @@ func migratePRIngestRepo(db *sql.DB) error {
 	return nil
 }
 
+// stampRepo sets the canonical repo on every block (a copy), so the id prefix
+// and the stored repo column always agree with the repo the DELETE ran for. The
+// scan pipeline never sets Block.Repo itself; without this a write for repo X
+// deleted nothing (rows were stored with an empty repo) and the re-insert hit the
+// blocks.id UNIQUE constraint (PR 14461, plan-queue ingest passing the slug).
+func stampRepo(repo string, blocks []Block) []Block {
+	out := make([]Block, len(blocks))
+	for i, b := range blocks {
+		b.Repo = repo
+		out[i] = b
+	}
+	return out
+}
+
 // replacePRBlocks replaces all blocks of one PR in a single transaction
 // (idempotent re-ingest: DELETE + bulk INSERT).
 func replacePRBlocks(db *sql.DB, repo string, pr int, blocks []Block) error {
+	repo = canonRepo(repo)
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -209,7 +224,7 @@ func replacePRBlocks(db *sql.DB, repo string, pr int, blocks []Block) error {
 	}
 	defer stmt.Close()
 
-	for _, b := range blocks {
+	for _, b := range stampRepo(repo, blocks) {
 		approved := 0
 		if b.Approved {
 			approved = 1
@@ -235,6 +250,7 @@ func replacePRBlocks(db *sql.DB, repo string, pr int, blocks []Block) error {
 // counterpart to replacePRBlocks's full per-PR swap — the write path for
 // refreshIngestDelta. A no-op for an empty files list.
 func upsertPRFileBlocks(db *sql.DB, repo string, pr int, files []string, blocks []Block) error {
+	repo = canonRepo(repo)
 	if len(files) == 0 {
 		return nil
 	}
@@ -264,7 +280,7 @@ func upsertPRFileBlocks(db *sql.DB, repo string, pr int, files []string, blocks 
 	}
 	defer stmt.Close()
 
-	for _, b := range blocks {
+	for _, b := range stampRepo(repo, blocks) {
 		approved := 0
 		if b.Approved {
 			approved = 1

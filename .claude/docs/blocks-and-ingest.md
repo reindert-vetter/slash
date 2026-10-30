@@ -1546,3 +1546,15 @@ candidates, a below-threshold pair staying split, the tiny-method guard, and the
 old side read through `blockAlignedRows`) and `tests/block-moved.spec.mjs` (PR
 122 fixture `tests/fixtures/blockmove-blocks.json` +
 `materializeBlockMoveWorktrees`).
+
+## The repo is canonicalized in the blocks write path
+
+`replacePRBlocks`/`upsertPRFileBlocks` (`db.go`) run `canonRepo(repo)` and stamp
+that repo on every block (`stampRepo`) before the DELETE and the INSERT, so both
+use one key and the id prefix (`ops#` for a non-primary repo, none for the
+primary) matches the stored `repo` column. The scan pipeline never sets
+`Block.Repo` itself. Before this, a caller passing the primary repo's slug
+instead of `""` (the plan queue's `ensurePlanPRTree`) deleted nothing, then hit
+`UNIQUE constraint failed: blocks.id` on the re-insert (PR 14461). `StartIngest`
+and the plan queue canonicalize too. Ingests are already serialized by
+`ingestMu`. Test: `ingest_repo_idempotent_test.go`.
