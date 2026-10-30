@@ -4293,6 +4293,7 @@ function App() {
               </div>`
             : ''}
       </div>
+      <div class="w-[100vw] shrink-0" aria-hidden="true" data-testid="plan-columns-tail"></div>
       <div class="contents">${() => (menu.open ? [planMenuOverlay()] : [])}</div>
     </div>
   `

@@ -1510,6 +1510,13 @@ on the last row (the execute action) it arms and then starts the execution;
 in a block column it drills. A keydown while an input has focus is left alone
 (`Escape` blurs it), and `Enter` inside the field answers with that text.
 
+`→` slides the newly focused column to the left edge (`scrollFocusIntoView`,
+`inline:'start'`). That only works when the flow can scroll that far: the last
+column is narrower than the viewport, so the flow ends in a `100vw` spacer
+(`data-testid=plan-columns-tail`); without it the browser clamped the scroll and
+the example-code column stayed on the right. Test:
+`tests/plan-arrow-right-slide.spec.mjs`.
+
 Which column owns the keyboard is spelled out **in words** in its header
 (`◆ actief`, `data-testid=column-active`), never by a colour alone.
 
