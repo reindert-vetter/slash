@@ -666,6 +666,8 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		res.Note = "Kon in werkmap " + dir + " geen branch " + arg.Branch + " klaarzetten."
 		return res
 	}
+	// Keep modules/Ai on the base branch's pointer (best-effort).
+	alignSubmodulesToTarget(ctx, dir, base)
 
 	// The shell carve-out a chat turn already has: Claude may run git/tests
 	// itself while implementing (see .claude/rules/workflows-write-boundary.md,
@@ -689,7 +691,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 	}
 
 	// Go commits, not Claude (see the file header, point 3).
-	status, err := runGitStdoutIn(ctx, dir, "status", "--porcelain")
+	status, err := runGitStdoutIn(ctx, dir, "status", "--porcelain", "--ignore-submodules=all")
 	if err != nil {
 		res.Note = "Kon de wijzigingen niet bekijken: " + err.Error()
 		return res
@@ -707,6 +709,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		res.Note = "Kon de wijzigingen niet klaarzetten: " + err.Error()
 		return res
 	}
+	unstageSubmodulePointers(ctx, dir)
 	if _, err := runGitIn(ctx, dir, "commit", "-m", planCommitMessage(arg.Doc)); err != nil {
 		m.logf("plan execute %s: commit: %v", arg.Doc.Key, err)
 		res.Note = "Kon niet committen: " + err.Error()

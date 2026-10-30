@@ -688,6 +688,7 @@ func (m *TaskManager) runPlanSelfReview(ctx context.Context, arg planQueueChainA
 		if _, err := runGitIn(ctx, arg.Dir, "add", "-A"); err != nil {
 			return fail("kon de self-review-wijzigingen niet klaarzetten: " + err.Error())
 		}
+		unstageSubmodulePointers(ctx, arg.Dir)
 		if _, err := runGitIn(ctx, arg.Dir, "commit", "-m", "Self-review fixes for "+arg.Key); err != nil {
 			return fail("kon de self-review-wijzigingen niet committen: " + err.Error())
 		}

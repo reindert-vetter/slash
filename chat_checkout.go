@@ -1363,6 +1363,9 @@ func checkoutOntoBranch(ctx context.Context, dir, headRef string) error {
 		return err
 	}
 	_, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "checkout", "-B", headRef, "origin/"+headRef)
+	if err == nil {
+		alignSubmodulesToTarget(ctx, dir, baseBranchFor(""))
+	}
 	return err
 }
 
@@ -1371,6 +1374,9 @@ func fastForwardCheckoutToOrigin(ctx context.Context, dir, headRef string) error
 		return err
 	}
 	_, err := runGitIn(ctx, dir, "-c", "submodule.recurse=false", "merge", "--ff-only", "origin/"+headRef)
+	if err == nil {
+		alignSubmodulesToTarget(ctx, dir, baseBranchFor(""))
+	}
 	return err
 }
 
@@ -2179,6 +2185,7 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, cl claude.Clien
 			log.Printf("chat_checkout: pr %d: stage %s: %v", pr, dir, err)
 			return newMsg("Kon de wijziging niet stagen (reden: "+err.Error()+").", true)
 		}
+		unstageSubmodulePointers(ctx, dir)
 		// "Los laten": keep the reviewer's own pre-existing, unrelated changes
 		// OUT of Claude's commit, recorded once when that decision was made.
 		for _, p := range a.KeepSeparatePaths {

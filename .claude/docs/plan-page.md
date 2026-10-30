@@ -2810,3 +2810,26 @@ tree's PR-comment panel, which has all of those; a smaller, read-mostly
 feature was the explicit ask here.
 
 **The frontend panel was removed.** The Jira-opmerkingen panel (`commentsPanel()`, the dedicated side column next to the ticket, its nav row `COMMENTS_ROW_ID`, the reply composer/@-mention picker, the threaded view, the collapsed fold and `tests/plan-comments.spec.mjs`) is gone from `src/plan.mjs` on the reviewer's request ("jira comments section mag weg"); only the UI went. `GET /api/jira/comments`, `GET /api/jira/users`, the `jira_comment` workflow and the comments feeding the plan prompt/intent are unchanged, so a UI can be rebuilt on them. The "Gerelateerde tickets" block is a separate thing and stays.
+
+## Submodule `modules/Ai` follows the target (`submodule_align.go`)
+
+Every checkout slash works in keeps the submodules in `alignedSubmodules`
+(just `modules/Ai`; extend the list) on the commit the **base branch**
+(`origin/<base>`) records, so a deviating pointer is never a diff, dirty state
+or accidental bump (incident: the STAT-1155 plan run committed a `modules/Ai`
+pointer change because `checkout -B` left the submodule work tree behind and
+`add -A` staged it).
+
+- `alignSubmodulesToTarget(ctx, dir, base)` — only the submodule directory is
+  touched: init if needed, targeted `fetch origin <sha>` when the sha is
+  missing, plain `checkout --detach <sha>` (never forced; a submodule with its
+  own work is skipped). Best-effort: failures are logged, never returned.
+  Called after the plan's `checkout -B` (plan_execute.go) and after
+  `checkoutOntoBranch`/`fastForwardCheckoutToOrigin` (chat_checkout.go).
+- `unstageSubmodulePointers(ctx, dir)` — between `add -A` and `commit`, resets
+  the index entry back to HEAD's, so slash's own commits (plan execute,
+  self-review, chat landing) never carry a bump. The plan's own dirty check
+  uses `--ignore-submodules=all`.
+- Not covered: a commit Claude makes itself through Bash, and the merge
+  conflict commit in chat_merge.go.
+- Test: `submodule_align_test.go`.
