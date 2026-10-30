@@ -2115,6 +2115,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		release, err := acquireAnalysisSlot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		entries := resolveCallsWithModel(ctx, m.claude, m.dataDir, arg)
 		return json.Marshal(entries)
 	})
@@ -2190,6 +2195,11 @@ func NewTaskManager(engine *tembed.Engine, gh github.Client, cs *comments.Module
 		if err := json.Unmarshal(in, &arg); err != nil {
 			return nil, err
 		}
+		release, err := acquireAnalysisSlot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		entries := resolveTestCoversWithModel(ctx, m.claude, m.dataDir, arg)
 		return json.Marshal(entries)
 	})

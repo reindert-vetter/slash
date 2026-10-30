@@ -894,6 +894,15 @@ an unrelated agentic `code_warning` run. Three causes, all fixed:
    `slow.maxConcurrent()` between 2 and 4), `TestHandleResolveCallDoesNotBlockOnTheLLMCall`
    (the HTTP response returns well under the LLM delay).
 
+4. **A run-level cap: `analysisRunSlots` (`analysis_gate.go`, 8).** The CLI cap
+   above only bounds `claude` subprocesses; after a restart `Recover()` resumes
+   every unfinished run at once (522 `resolve_call` runs for one PR), all
+   building indexes and hitting SQLite together. The `resolveWithModel` and
+   `resolveTestCoversWithModel` Activities now acquire a slot from this shared
+   in-memory pool first (`acquireAnalysisSlot`, context-aware) and hold it for
+   their whole body; the rest simply wait. Nothing is dropped, the wait is not
+   recorded in history (replay-safe) and recovery re-runs the Activity as before.
+
 ### The search starts automatically server-side
 
 Right after `buildRelations`' `UpsertGo`/`Prune` (so via both `build_relations`
