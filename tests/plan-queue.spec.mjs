@@ -98,3 +98,21 @@ test('the scope gate keeps the queue waiting, visibly', async ({ page }) => {
   await appReady(page)
   await expect(page.getByTestId('plan-execute-status')).toContainText('wacht op jouw keuze: subtaak-scope')
 })
+
+test('a finished draft PR links to its review tree, with the PR number and its state in words', async ({ page }) => {
+  let tree = { action: 'tree', status: 'started', pr: 4242 }
+  await page.route('**/api/plan?*', (route) => {
+    const body = planBody([{ action: 'execute', status: 'done', pr: 4242 }, tree], {})
+    body.exec = { runId: 'r1', status: 'completed', prUrl: 'https://github.com/o/r/pull/4242', prNumber: 4242, branch: 'queue-1-x', base: 'develop' }
+    route.fulfill({ json: body })
+  })
+  await page.goto('/plan/' + KEY)
+  await appReady(page)
+  const link = page.getByTestId('plan-execute-tree')
+  await expect(link).toHaveAttribute('href', '/pr/4242')
+  await expect(link).toContainText('Review-tree #4242 (wordt gegenereerd…)')
+  tree = { action: 'tree', status: 'done', pr: 4242 }
+  await page.reload()
+  await appReady(page)
+  await expect(page.getByTestId('plan-execute-tree')).toContainText('Review-tree #4242 (klaar)')
+})

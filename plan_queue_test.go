@@ -176,3 +176,61 @@ func TestPlanQueueExecDoneWithoutPRSkipsReview(t *testing.T) {
 		t.Fatalf("want execute failed and review skipped, got %+v", doc.Queue)
 	}
 }
+
+// A finished draft PR gets its review tree at once, also without a queued
+// review; with a queued review the chain's own ingest step reuses that tree
+// instead of ingesting a second time.
+func TestPlanQueueExecDoneBuildsTreeOnce(t *testing.T) {
+	for _, withReview := range []bool{false, true} {
+		planExecuteStarter = func(string) (string, error) { return "run", nil }
+		planExecViewReader = func(string) PlanExecView {
+			return PlanExecView{Status: "completed", PRNumber: 4242, Branch: "paym-813-x", Base: "develop"}
+		}
+		m, engine, _, _ := newQueueTestManager(t, jira.Issue{Title: "Hoofdtaak", Subtasks: []jira.IssueRef{{Key: "PAYM-814", Title: "Deel"}}})
+		db, err := openDB(filepath.Join(t.TempDir(), "graph.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.db = db
+		ingests := 0
+		planTreeIngester = func(arg planQueueChainArg) planQueueStep {
+			ingests++
+			if _, err := db.Exec(`INSERT INTO blocks (id, name, file, line, pr) VALUES ('b', 'f', 'a.php', 1, ?)`, arg.PR); err != nil {
+				t.Fatal(err)
+			}
+			return planQueueStep{OK: true}
+		}
+		t.Cleanup(func() { planExecuteStarter, planExecViewReader, planTreeIngester = nil, nil, nil })
+
+		runID, err := m.StartPlan("PAYM-813")
+		if err != nil {
+			t.Fatal(err)
+		}
+		action := planQueueExecute
+		if withReview {
+			action = planQueueReview
+		}
+		if err := engine.SignalWorkflow(runID, SignalPlanScope, PlanScopeSignal{Kind: planAnswerQueue, Text: action}); err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.SignalWorkflow(runID, SignalPlanScope, PlanScopeSignal{Choice: "parent"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.SignalWorkflow(runID, SignalPlanAnswer, PlanAnswerSignal{Kind: planAnswerExecDone}); err != nil {
+			t.Fatal(err)
+		}
+		doc, _ := m.PlanDoc(context.Background(), "PAYM-813")
+		tr := planQueueFind(doc.Queue, planQueueTree)
+		if tr < 0 || doc.Queue[tr].Status != planQStatusDone || doc.Queue[tr].PR != 4242 {
+			t.Fatalf("review=%v: want a done tree row for #4242, got %+v", withReview, doc.Queue)
+		}
+		if ingests != 1 {
+			t.Fatalf("review=%v: the tree must be ingested exactly once, got %d (%+v)", withReview, ingests, doc.Queue)
+		}
+		if withReview {
+			if i := planQueueFind(doc.Queue, planQueueIngest); i < 0 || doc.Queue[i].Note != "de review-tree stond al klaar" {
+				t.Fatalf("the chain's ingest step must reuse the tree: %+v", doc.Queue)
+			}
+		}
+	}
+}

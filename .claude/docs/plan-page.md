@@ -2201,6 +2201,25 @@ is still generating or the scope gate stands):
   local). **A failed self-review does not stop the chain** — the step reads
   `mislukt` and ingest + QA still start.
 
+**A finished draft PR gets its review tree at once — queued review or not.**
+Reviewer: *"nadat een draft pr klaar is, wil ik ook een link zien naar de tree,
+de tree mag gelijk beginnen met genereren (als dat niet al begonnen is)"*.
+`handlePlanExecDone` writes a `tree` row (`PR` = the draft PR) and runs the
+Activity `planQueueTree` **before** the review chain, so the chain's own
+`ingest` step then finds the tree and reads `de review-tree stond al klaar` —
+never a second ingest. Both Activities share `ensurePlanPRTree`, which is
+idempotent: an ingest Execution already running for the PR (or an in-memory
+ingest stage) or blocks already stored means no new ingest. Newer commits (the
+self-review's push) reach the tree through `pr_status`'s ingest-refresh poller,
+not through the chain. Replay guard: the tree step only runs when the recorded
+`planQueueExecResult` result carries `tree:true`, so an execdone handled before
+this existed replays without it. The card shows `Review-tree #<n> (wordt
+gegenereerd… / klaar / mislukt) →` linking to `/pr/<n>`
+(`data-testid=plan-execute-tree`) under the draft-PR link — word plus number,
+never colour alone; without a `tree` row (older run) the link still shows,
+without a state word. Tests: `TestPlanQueueExecDoneBuildsTreeOnce`, the last
+spec in `tests/plan-queue.spec.mjs`.
+
 **The plan is deliberately never written to Jira** (reviewer: *"nergens plan
 opslaan in jira"*) — don't add a `jiraPlan` action.
 

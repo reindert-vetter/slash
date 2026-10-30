@@ -3615,6 +3615,43 @@ function baseRow() {
   `
 }
 
+// treeWord spells the state of the draft PR's review tree, which the tracker
+// starts by itself once the draft PR exists (plan_queue.go, the "tree" row).
+// '' when there is no such row (an older run): the link still works, /pr/<n>
+// offers its own "generate" there.
+function treeWord(pr) {
+  const it = queueItem('tree')
+  if (!it || it.pr !== pr) return ''
+  if (it.status === 'started') return t('wordt gegenereerd…')
+  if (it.status === 'failed') return t('mislukt')
+  if (it.status === 'done') return t('klaar')
+  return ''
+}
+
+// treeLink: the review tree of the draft PR — the word plus the PR number,
+// never a colour on its own (the colourblind rule). Always an array, so the
+// slot never switches between a single element and a list.
+function treeLink() {
+  const pr = state.exec && state.exec.prUrl ? state.exec.prNumber : 0
+  if (!pr) return []
+  const word = treeWord(pr)
+  const it = queueItem('tree')
+  return [
+    html`<div class="mt-1" data-testid="plan-execute-tree-wrap">
+      <a
+        href="${'/pr/' + pr}"
+        data-testid="plan-execute-tree"
+        class="block truncate text-[12px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+        >${t('Review-tree') + ' #' + pr + (word ? ' (' + word + ')' : '') + ' →'}</a
+      >
+      ${() =>
+        it && it.pr === pr && it.status === 'failed' && it.note
+          ? [html`<p class="mt-0.5 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300" data-testid="plan-execute-tree-note">${it.note}</p>`.key('tree-note')]
+          : []}
+    </div>`.key('tree:' + pr + ':' + word),
+  ]
+}
+
 // executeCard also names the WERKMAP the newest attempt ran in: the reviewer's
 // own local checkout, picked through the review tree's own selection ladder
 // (plan_execute.go's resolvePlanWorkDir), never a throwaway worktree any more.
@@ -3689,6 +3726,7 @@ function executeCard(row) {
               >`
             : ''}
       </div>
+      <div class="contents">${() => treeLink()}</div>
       <div class="contents">
         ${() =>
           state.exec && state.exec.note
