@@ -516,7 +516,8 @@ func TestPrepareChatShellWorkDirSkipsDirtyDecisionForOwnPendingEdit(t *testing.T
 	// what finishChatProgress (chat_progress.go) does right before a write
 	// turn's own progress snapshot is cleared.
 	markChatFilesPending(repo, pr, []string{"foo.txt"})
-	t.Cleanup(func() { clearChatPendingFiles(repo, pr) })
+	beginChatLanding(repo, pr)
+	t.Cleanup(func() { endChatLanding(repo, pr); clearChatPendingFiles(repo, pr) })
 
 	dir, decision, ok := prepareChatShellWorkDirAt(ctx, nil, dataDir, repo, pr, "", "feature/x")
 	if ok || dir != "" {

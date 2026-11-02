@@ -214,9 +214,13 @@ func enqueueChatMerge(tm *TaskManager, arg chatCommitInput) {
 		return
 	}
 	if err := tm.engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{
+	// Counted before the Signal so a write turn of another conversation sees
+	// "a landing is coming" from the first moment (chatLandExpected).
+	beginChatLanding(arg.Repo, arg.PR)
 		ConversationID: arg.ConversationID, TurnID: arg.TurnID,
 	}); err != nil {
 		tm.logf("chat_merge: signal pr %d conversation %s: %v", arg.PR, arg.ConversationID, err)
+		endChatLanding(arg.Repo, arg.PR)
 	}
 }
 
@@ -225,6 +229,7 @@ func enqueueChatMerge(tm *TaskManager, arg chatCommitInput) {
 // delegate to processChatMergeAt.
 func processChatMerge(ctx context.Context, tm *TaskManager, cm *chat.Module, cl claude.Client, dataDir string, arg chatMergeInput) chat.Message {
 	meta, err := fetchPRMeta(ctx, arg.Repo, arg.PR)
+	defer endChatLanding(arg.Repo, arg.PR)
 	if err != nil || meta.HeadRefName == "" {
 		msg := chat.Message{
 			ID: chatMessageID(arg.TurnID, ""), ConversationID: arg.ConversationID, Repo: arg.Repo, PR: arg.PR,

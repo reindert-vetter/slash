@@ -1767,6 +1767,19 @@ Tests: `chat_checkout_test.go`'s
 ownership guard, and that the owner's own decision survives untouched) and
 `TestPrepareChatShellWorkDirMenuAnswerBypassesOwnership` (the `""` exception);
 `chat_workflow_test.go`'s
+**The flag alone was not enough (PR 14354, hours-long loop).** A turn killed
+mid-run (`signal: killed`, ended as `KindRetrying`) left dirty files and a
+`chatPendingLandExpected` that nothing ever cleared, because the clear only runs
+for a `KindCancelled`/`KindError` turn that itself changed the checkout and no
+landing was ever enqueued. Every conversation then looped on the transient
+"probeer het zo weer" forever. `chatLandExpected` now ALSO requires a landing
+that really is queued or running for the PR: `chatLandInFlight`
+(`chat_edit_pending.go`) is +1 in `enqueueChatMerge` (before the Signal, undone
+if the Signal fails) and -1 via `defer` in `processChatMerge`. No landing in
+flight means the dirty tree is just a dirty tree (`autoAcceptDirtyTree`, "meenemen
+in de commit"). In-memory only, like the rest of that registry. Test:
+`TestChatLandExpectedNeedsLandingInFlight` (`chat_edit_pending_test.go`).
+
 `TestClaudeChatPlainQuestionNeverTouchesAnotherConversationsCheckoutDecision`
 drives this end to end through the real workflow — a plain question in one
 conversation while another conversation's decision is pending, asserting

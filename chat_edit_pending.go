@@ -48,7 +48,34 @@ var (
 	// later write turn of that PR waited out the whole chatRetryDelays ladder
 	// on a transient "probeer het zo weer" that could never come true.
 	chatPendingLandExpected = map[prKey]bool{}
+	// chatLandInFlight counts the landings (chat_merge "merge" requests) that
+	// are queued or running right now for (repo, pr): +1 in enqueueChatMerge,
+	// -1 when processChatMerge returns. chatLandExpected requires it > 0, so
+	// the pending flag alone can no longer outlive a landing that is not
+	// coming (reported: a killed turn left edits behind, no landing was ever
+	// enqueued and every later write turn of the PR looped on "probeer het zo
+	// weer" for hours). In-memory like the rest of this registry.
+	chatLandInFlight = map[prKey]int{}
 )
+
+// beginChatLanding records that a landing for (repo, pr) was just queued.
+func beginChatLanding(repo string, pr int) {
+	chatPendingEditMu.Lock()
+	defer chatPendingEditMu.Unlock()
+	chatLandInFlight[prKey{Repo: repo, PR: pr}]++
+}
+
+// endChatLanding records that a queued landing finished (or never got queued).
+func endChatLanding(repo string, pr int) {
+	key := prKey{Repo: repo, PR: pr}
+	chatPendingEditMu.Lock()
+	defer chatPendingEditMu.Unlock()
+	if chatLandInFlight[key] <= 1 {
+		delete(chatLandInFlight, key)
+		return
+	}
+	chatLandInFlight[key]--
+}
 
 // markChatFilesPending records that files are edited but not yet landed for
 // (repo, pr) — additive: a second turn/conversation touching a different
@@ -112,7 +139,7 @@ func chatLandExpected(repo string, pr int) bool {
 	key := prKey{Repo: repo, PR: pr}
 	chatPendingEditMu.Lock()
 	defer chatPendingEditMu.Unlock()
-	return chatPendingLandExpected[key]
+	return chatPendingLandExpected[key] && chatLandInFlight[key] > 0
 }
 
 // chatPendingEditedFilesFor is the read-only view buildCheckoutView (chat_
