@@ -1191,6 +1191,8 @@ anything is touched. See `chat_checkout.go` (the implementation, replacing
 `chat_shadow.go`) and `todo/todo-local-checkout-chat-edits.md` (the design —
 kept local/uncommitted, not part of the repo) for the full mechanism:
 candidate matching/exclusion rules, the dirty-tree/reuse-merged-branch
+**No `*.worktrees` werkmappen.** `isWorktreesCheckoutDir` (`checkout_dir_filter.go`) rejects any directory with a path segment ending in `.worktrees` (e.g. `~/dev/plug-and-pay.worktrees/BUG-1`): in `listCheckoutCandidates`' `add()` (home scan and `chatCheckoutDirs` alike) and when loading a persisted choice (`loadPersistedCheckout`/`loadPersistedPlanCheckout`, which then report "nothing saved" so the ladder re-picks; the rows are not deleted). Slash itself never creates such directories.
+
 decisions, why `chat_write_gate.go`'s existing one-code-turn-at-a-time gate
 already makes this shared checkout safe with no extra locking, and how
 landing now works (a local, network-less `git fetch` of the checkout's new

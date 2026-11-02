@@ -85,7 +85,7 @@ func loadPersistedCheckout(dataDir, repo string, pr int) (dir, branch string, ok
 		return "", "", false
 	}
 	err := db.QueryRow(`SELECT dir, branch FROM chat_checkout WHERE repo = ? AND pr = ?`, repo, pr).Scan(&dir, &branch)
-	if err != nil || dir == "" {
+	if err != nil || dir == "" || isWorktreesCheckoutDir(dir) {
 		return "", "", false
 	}
 	return dir, branch, true
@@ -142,7 +142,7 @@ func loadPersistedPlanCheckout(dataDir, key string) (dir, branch string, ok bool
 		return "", "", false
 	}
 	err := db.QueryRow(`SELECT dir, branch FROM plan_checkout WHERE key = ?`, key).Scan(&dir, &branch)
-	if err != nil || dir == "" {
+	if err != nil || dir == "" || isWorktreesCheckoutDir(dir) {
 		return "", "", false
 	}
 	return dir, branch, true

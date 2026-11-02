@@ -587,7 +587,7 @@ func listCheckoutCandidates(ctx context.Context, dataDir, repoSlug, headRef, bas
 
 	add := func(rawDir string) {
 		dir := expandTilde(strings.TrimSpace(rawDir))
-		if dir == "" || seen[dir] {
+		if dir == "" || seen[dir] || isWorktreesCheckoutDir(dir) {
 			return
 		}
 		seen[dir] = true
