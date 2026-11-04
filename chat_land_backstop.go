@@ -144,12 +144,7 @@ func (m *TaskManager) repairMissedLanding(ctx context.Context, repo string, pr i
 	if sha == "" {
 		return
 	}
-	key := prKey{Repo: repo, PR: pr}
-	landBackstopMu.Lock()
-	already := landBackstopTried[key] == sha
-	landBackstopTried[key] = sha
-	landBackstopMu.Unlock()
-	if already {
+	if !claimLandBackstopAttempt(repo, pr, sha) {
 		return
 	}
 	runID, err := m.EnsureChatMergeQueue(repo, pr)
@@ -160,5 +155,43 @@ func (m *TaskManager) repairMissedLanding(ctx context.Context, repo string, pr i
 	m.logf("chat_merge: landing backstop pr=%d: local commit %s was never landed, enqueueing a landing", pr, short(sha))
 	if err := m.engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{}); err != nil {
 		m.logf("chat_merge: landing backstop pr=%d: signal: %v", pr, err)
+	}
+}
+
+// claimLandBackstopAttempt records sha as this process's backstop attempt for
+// (repo, pr) and reports whether it is a NEW one — false when the backstop
+// already tried it, or when an ordinary landing of that very sha just ended
+// in a merge conflict (noteConflictedLanding).
+func claimLandBackstopAttempt(repo string, pr int, sha string) bool {
+	key := prKey{Repo: repo, PR: pr}
+	landBackstopMu.Lock()
+	defer landBackstopMu.Unlock()
+	if landBackstopTried[key] == sha {
+		return false
+	}
+	landBackstopTried[key] = sha
+	return true
+}
+
+// noteConflictedLanding is called by processChatMergeAt (chat_merge.go) when
+// a landing ended in chatMergeConflictConsultMsg: the merge was aborted, so
+// the checkout's HEAD is exactly the commit that failed to land. Marking it
+// as tried keeps the backstop from re-running the same doomed merge (and its
+// one Claude resolution attempt) behind the reviewer's back — PR 14561: the
+// conflict was already put to the reviewer in the conversation, and the
+// backstop silently repeated it a minute later in his own checkout. A NEW
+// local commit has a different sha and is eligible again.
+func noteConflictedLanding(ctx context.Context, dataDir, repo string, pr int) {
+	a := getCheckoutAssignment(dataDir, repo, pr)
+	if a == nil || a.Dir == "" {
+		return
+	}
+	headOut, err := runGitIn(ctx, a.Dir, "rev-parse", "HEAD")
+	if err != nil {
+		log.Printf("chat_merge: landing backstop pr=%d: head after conflict in %s: %v", pr, a.Dir, err)
+		return
+	}
+	if head := strings.TrimSpace(string(headOut)); head != "" {
+		claimLandBackstopAttempt(repo, pr, head)
 	}
 }

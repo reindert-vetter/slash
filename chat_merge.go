@@ -213,14 +213,14 @@ func enqueueChatMerge(tm *TaskManager, arg chatCommitInput) {
 		tm.logf("chat_merge: no queue for pr %d: %v", arg.PR, err)
 		return
 	}
-	if err := tm.engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{
 	// Counted before the Signal so a write turn of another conversation sees
 	// "a landing is coming" from the first moment (chatLandExpected).
 	beginChatLanding(arg.Repo, arg.PR)
+	if err := tm.engine.SignalWorkflow(runID, SignalChatMerge, ChatMergeRequest{
 		ConversationID: arg.ConversationID, TurnID: arg.TurnID,
 	}); err != nil {
-		tm.logf("chat_merge: signal pr %d conversation %s: %v", arg.PR, arg.ConversationID, err)
 		endChatLanding(arg.Repo, arg.PR)
+		tm.logf("chat_merge: signal pr %d conversation %s: %v", arg.PR, arg.ConversationID, err)
 	}
 }
 
@@ -371,6 +371,9 @@ func processChatMergeAt(ctx context.Context, tm *TaskManager, cm *chat.Module, c
 		// looks at).
 		if isBlockingLandingFailure(msg.Body) {
 			markCheckoutLandingFailedAt(ctx, dataDir, arg.Repo, arg.PR, headRefName, msg.Body, arg.ConversationID, arg.TurnID)
+		}
+		if strings.HasPrefix(msg.Body, chatMergeConflictConsultPrefix) {
+			noteConflictedLanding(ctx, dataDir, arg.Repo, arg.PR)
 		}
 		publishCheckoutChanged(arg.Repo, arg.PR)
 		broadcastCheckoutFreed(tm, checkoutWriteSlotKey(dataDir, arg.Repo, arg.PR))

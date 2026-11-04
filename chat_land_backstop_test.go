@@ -146,3 +146,27 @@ func TestReadOnlyWorkDirPrefersACheckoutThatIsAhead(t *testing.T) {
 		t.Fatalf("checkout behind: dir=%q, want the worktree %q", dir, headDir)
 	}
 }
+
+// PR 14561: an ordinary landing that ended in a merge conflict must not be
+// retried by the backstop for that same commit — only a new commit is.
+func TestConflictedLandingIsNotRetriedByTheBackstop(t *testing.T) {
+	bareDir, _ := setupChatShadowRepo(t, "feature/x", "hello\n")
+	checkout := cloneCheckoutDir(t, bareDir, "feature/x")
+	ctx := context.Background()
+	const pr = 1804
+	assignCheckoutWithBranch(t, pr, checkout, "feature/x")
+
+	head := commitLocally(t, checkout, "removed\n")
+	noteConflictedLanding(ctx, "", "", pr)
+	if claimLandBackstopAttempt("", pr, head) {
+		t.Fatalf("conflicted sha %s was claimed again by the backstop", head)
+	}
+
+	next := commitLocally(t, checkout, "removed again\n")
+	if !claimLandBackstopAttempt("", pr, next) {
+		t.Fatalf("new local commit %s was not eligible for the backstop", next)
+	}
+	if claimLandBackstopAttempt("", pr, next) {
+		t.Fatalf("backstop claimed %s twice", next)
+	}
+}
