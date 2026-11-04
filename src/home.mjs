@@ -19132,8 +19132,7 @@ TopLoadingBar(state, topLoadingActive)(app)
 
 // Start with the search box already focused so the reviewer can type straight
                   ${() =>
-                    mainLeftExitsToOverview()
-                      ? html`<button
+                    html`<button
                           type="button"
                           title="${t('Open PR-overzicht in nieuwe tab')}"
                           aria-label="${t('Open PR-overzicht in nieuwe tab')}"
@@ -19148,8 +19147,7 @@ TopLoadingBar(state, topLoadingActive)(app)
                           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4" aria-hidden="true">
                             <path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" stroke-linecap="round" stroke-linejoin="round"></path>
                           </svg>
-                        </button>`
-                      : ''}
+                        </button>`}
 // away — a frame later, once BlockList has rendered the input into the DOM.
 // Only when landing in list mode: a diff deep-link (state.mode restored to
 // 'diff' from the URL, see bindUrlState above) must not hijack keyboard focus

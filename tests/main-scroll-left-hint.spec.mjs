@@ -95,9 +95,9 @@ test('at stop 1 a second button opens the PR overview in a new tab', async ({ pa
   const hint = page.getByTestId('main-scroll-left-hint')
   const newTab = page.getByTestId('main-scroll-left-newtab-button')
 
-  // Not at stop 1 yet: the left button only steps within the page.
+  // Visible whenever the back button is, also before stop 1.
   await expect(hint).toBeVisible()
-  await expect(newTab).toHaveCount(0)
+  await expect(newTab).toBeVisible()
 
   await page.getByTestId('main-scroll-left-button').dispatchEvent('click')
   await expect(page.getByTestId('pr-info-column')).toBeVisible()
