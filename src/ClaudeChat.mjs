@@ -503,6 +503,17 @@ function claudePartialBubble(view) {
   `
 }
 
+// steerInFlight — a reviewer message handed to the RUNNING turn (id
+// `steer-…`, see deliverChatSteer) that the turn has not finished yet: Claude
+// has it but only picks it up at its next step boundary. Rendered dashed plus
+// the word "doorgegeven" (never colour alone); turns into an ordinary bubble
+// when the turn ends. Read inside function bindings, so it stays reactive.
+function steerInFlight(view, msg) {
+  if (msg.role !== 'user' || !String(msg.id || '').startsWith('steer-')) return false
+  const p = view.progress()
+  return !!(p && p.running && Date.parse(msg.createdAt) >= (p.startedAt || 0))
+}
+
 // claudeQueuedBubbles — the reviewer's own turns typed while an earlier one is
 // still running ("doorpraten", see queueClaudeMessage in RelatedPanel.mjs).
 // Shown immediately, in the same right-aligned place their real bubble will
@@ -849,6 +860,7 @@ function claudeBubble(
   retryAllBusy,
   canEdit,
   onEditMessage,
+  steerInFlight,
 ) {
   const mine = msg.role === 'user'
   const isError = msg.kind === 'error'
@@ -902,6 +914,15 @@ function claudeBubble(
           ${mine ? t('Jij') : CLAUDE_NAME}
         </span>
         ${() => chatKindBadge(msg)} ${() => claudeModelPill(msg)} ${() => claudeNoShellPill(msg)}
+        ${() =>
+          steerInFlight && steerInFlight(msg)
+            ? html`<span
+                class="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-600 dark:bg-zinc-800 dark:text-zinc-300"
+                data-testid="claude-steered-badge"
+                title="${t('Doorgegeven aan Claude; wordt bij de volgende stap opgepakt')}"
+                >↪ ${t('doorgegeven')}</span
+              >`
+            : ''}
         <div class="contents">
           ${() => (mine && !readOnly && onEditMessage && canEdit && canEdit(msg) ? claudeEditButton(msg, onEditMessage) : '')}
         </div>
@@ -923,6 +944,7 @@ function claudeBubble(
                       ? 'border-indigo-300 bg-indigo-50 text-slate-800 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-zinc-200'
                       : 'border-slate-300 bg-slate-100 text-slate-800 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300') +
             (active ? ' ring-2 ring-indigo-400' : '')
+            (steerInFlight && steerInFlight(msg) ? ' border-dashed' : '') +
           )
         }}"
         data-testid="claude-message-body"
@@ -1448,6 +1470,7 @@ export function claudeChatColumn(view, callbacks, readOnly, onEnterReadOnly, opt
             // working exactly as before.
             const files = imageFilesFrom(e.clipboardData)
             if (!files.length) return
+              (msg) => steerInFlight(view, msg),
             const bucket = chatAttachmentBucket(view)
             if (!bucket) return
             e.preventDefault()

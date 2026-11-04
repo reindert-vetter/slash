@@ -3458,6 +3458,24 @@ auto-grow `@input` is new.
 Before this, `claude` genuinely had no idea what code a conversation was
 about — the CLI's `Prompt` was just the reviewer's typed text, so a question
 like "wat weet jij over de code wat ik heb geselecteerd?" (asked with nothing
+- **Transcript order: Claude -> reviewer -> Claude.** The CLI's final `result`
+  frame carries only the LAST text block (verified against the real CLI), so
+  the blocks Claude wrote before a steer landed exist nowhere else.
+  `deliverChatSteer` therefore first persists the already-COMPLETE blocks of
+  the live `Partial` (`takeChatPartialBefore`, `chat_progress.go`; the block
+  still streaming is left in `Partial` because the result frame holds it in
+  full, so flushing it would show it twice) as an assistant message
+  `steer-<id>-before` stamped 1 ms before the steer message itself. The final
+  message is saved at turn end, so created_at order gives the three-part read.
+  Known gap: blocks written AFTER the steer that are not the last one are still
+  not persisted (pre-existing behaviour of the single final save).
+- **Still-in-flight steer bubble.** A `steer-…` user message whose turn is
+  still running renders with a dashed border plus the word "doorgegeven"
+  (`steerInFlight`, `ClaudeChat.mjs`; shape and word, never colour alone). It
+  means "Claude has it, picks it up at its next step"; whether Claude has
+  actually read it is not observable, so it stays until the turn ends. The
+  queue's "in de wachtrij" pill means the opposite: Claude does not know yet.
+  Test: `tests/claude-chat-steer-bubble.spec.mjs`.
 else in the prompt) could only be answered "I don't know, tell me the
 file/line". Fixed end to end, but deliberately **invisible**: the reviewer's
 own chat bubble must show exactly what they typed, nothing more.

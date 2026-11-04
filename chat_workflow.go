@@ -1762,8 +1762,11 @@ func chatProgressSinkLogging(repo string, pr int, conversationID string, checkou
 				// Unleash-config..."). A blank line separates them into
 				// their own paragraphs once rendered as markdown
 				// (claudePartialBubble, src/ClaudeChat.mjs).
-				if p.Phase != chatPhaseWriting && p.Partial != "" {
-					p.Partial += "\n\n"
+				if p.Phase != chatPhaseWriting {
+					if p.Partial != "" {
+						p.Partial += "\n\n"
+					}
+					p.segStart = len(p.Partial)
 				}
 				p.Phase = chatPhaseWriting
 				p.Tool, p.Detail = "", ""

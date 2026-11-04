@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"slash/modules/claude"
 )
 
 // TestSteerReachesTheRunningTurn is the feature's core assertion: with a turn
@@ -121,5 +123,35 @@ func TestSteerWithNothingRunningFallsBackToAnOrdinaryTurn(t *testing.T) {
 	}
 	if len(fake.Steered()) != 0 {
 		t.Fatalf("nothing was running, so nothing may have been steered: %+v", fake.Steered())
+	}
+}
+
+// TestTakeChatPartialBeforeKeepsTheOpenBlock: a steer flushes only the text
+// blocks that are already complete. The block still streaming stays in Partial
+// because the CLI's final result frame carries it in full (flushing it too
+// would show it twice).
+func TestTakeChatPartialBeforeKeepsTheOpenBlock(t *testing.T) {
+	const conv = "conv-take-partial"
+	startChatProgress("", 970741, conv)
+	t.Cleanup(func() { finishChatProgress("", 970741, conv) })
+	sink := chatProgressSink("", 970741, conv, new(string))
+	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "Eerste."})
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Read"})
+	sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: "Tweede, nog bezig"})
+
+	if got := takeChatPartialBefore("", 970741, conv); got != "Eerste." {
+		t.Fatalf("expected only the completed block, got %q", got)
+	}
+	if p, _ := mutateChatProgress(conv, func(*chatProgress) {}); p.Partial != "Tweede, nog bezig" {
+		t.Fatalf("the open block must stay in Partial, got %q", p.Partial)
+	}
+	// Nothing more complete: a second take is empty.
+	if got := takeChatPartialBefore("", 970741, conv); got != "" {
+		t.Fatalf("expected nothing left to flush, got %q", got)
+	}
+	// After a tool call the open block is complete too.
+	sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Bash"})
+	if got := takeChatPartialBefore("", 970741, conv); got != "Tweede, nog bezig" {
+		t.Fatalf("expected the now-complete block, got %q", got)
 	}
 }

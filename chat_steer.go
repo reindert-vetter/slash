@@ -253,9 +253,24 @@ func deliverChatSteer(ctx context.Context, tm *TaskManager, cm *chat.Module, arg
 	if !steerChatTurn(arg.ConversationID, chatSteerPrompt(arg.Body)) {
 		return chatSteerResult{}
 	}
+	// What Claude already said this turn goes into the transcript BEFORE the
+	// reviewer's message (see takeChatPartialBefore), stamped one millisecond
+	// earlier so created_at ordering keeps Claude -> reviewer -> Claude.
+	at := time.Now().UTC()
+	if before := takeChatPartialBefore(arg.Repo, arg.PR, arg.ConversationID); before != "" {
+		prior := chat.Message{
+			ID: chatSteerMessageID(arg.MessageID) + "-before", ConversationID: arg.ConversationID,
+			Repo: arg.Repo, PR: arg.PR, Role: "assistant", Body: before,
+			CreatedAt: at.Add(-time.Millisecond).Format(time.RFC3339Nano),
+		}
+		if err := cm.SaveMessage(ctx, prior); err != nil && tm != nil {
+			tm.logf("chat_steer: save pre-steer text for conversation %s: %v", arg.ConversationID, err)
+		}
+	}
 	msg := chat.Message{
 		ID: chatSteerMessageID(arg.MessageID), ConversationID: arg.ConversationID,
 		Repo: arg.Repo, PR: arg.PR, Role: "user", Body: arg.Body,
+		CreatedAt: at.Format(time.RFC3339Nano),
 	}
 	if err := cm.SaveMessage(ctx, msg); err != nil && tm != nil {
 		tm.logf("chat_steer: save steered message for conversation %s: %v", arg.ConversationID, err)

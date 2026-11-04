@@ -17,6 +17,7 @@
 package main
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -108,6 +109,11 @@ type chatProgress struct {
 	// unchanged, and neither belongs in the snapshot the browser renders.
 	repo string
 	pr   int
+	// segStart is the offset in Partial where the text block currently being
+	// streamed begins (everything before it is a COMPLETED block). Unexported:
+	// only takeChatPartialBefore reads it, to flush the completed blocks when
+	// a steer lands without splitting a block the final result also holds.
+	segStart int
 }
 
 // chatStep is one entry of chatProgress.Steps: a tool call as it happened.
@@ -197,6 +203,36 @@ func resetChatProgressPartial(repo string, pr int, conversationID string) {
 		return
 	}
 	publishChatProgress(repo, pr, conversationID, snap)
+}
+
+// takeChatPartialBefore removes from the running turn's Partial every text
+// block that is already COMPLETE and returns it (trimmed), leaving only the
+// block still streaming (or nothing, when no text block is open). Used when a
+// steer lands (deliverChatSteer): the CLI's final `result` frame carries only
+// the LAST text block, so the earlier ones exist nowhere else — persisting
+// them as their own bubble before the reviewer's steer message is what makes
+// the transcript read Claude -> reviewer -> Claude. The block still streaming
+// is deliberately NOT taken: the result frame will contain it in full, so
+// flushing it too would show it twice. "" when there is nothing to flush.
+func takeChatPartialBefore(repo string, pr int, conversationID string) string {
+	var done string
+	snap, ok := mutateChatProgress(conversationID, func(p *chatProgress) {
+		if strings.HasPrefix(strings.TrimSpace(p.Partial), "{") {
+			return // an internal JSON directive (need_write …), never reviewer text
+		}
+		cut := len(p.Partial)
+		if p.Phase == chatPhaseWriting && p.segStart <= cut {
+			cut = p.segStart
+		}
+		done = p.Partial[:cut]
+		p.Partial = p.Partial[cut:]
+		p.segStart = 0
+	})
+	if !ok {
+		return ""
+	}
+	publishChatProgress(repo, pr, conversationID, snap)
+	return strings.TrimSpace(done)
 }
 
 // mutateChatProgress applies fn to the stored snapshot and returns the result.

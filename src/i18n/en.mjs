@@ -103,6 +103,8 @@ export const EN = {
 
   // ── src/commentBatch.mjs ────────────────────────────────────────────────
   'in de wachtrij': 'queued',
+  doorgegeven: 'forwarded',
+  'Doorgegeven aan Claude; wordt bij de volgende stap opgepakt': 'Forwarded to Claude; picked up at its next step',
   'Claude bezig': 'Claude working',
   verwerkt: 'processed',
   '{label}: {note}': '{label}: {note}',
