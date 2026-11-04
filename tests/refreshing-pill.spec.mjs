@@ -35,7 +35,8 @@ test('the pill shows on the index row and the diff card while a landed edit awai
     .getByTestId('block-row')
     .filter({ hasText: 'RangeSelectAction::execute' })
   await expect(row).toBeVisible()
-  await expect(row.getByTestId('row-refreshing')).toContainText('wordt bijgewerkt')
+  await expect(row.getByTestId('row-editing')).toHaveAttribute('data-state', 'refreshing')
+  await expect(row.getByTestId('row-editing')).toHaveAttribute('title', /geland/)
 
   await row.click()
   await expect(page.getByTestId('block-refreshing').first()).toContainText('wordt bijgewerkt')
@@ -102,7 +103,7 @@ test('a blocks.changed event carrying landedFiles in its OWN payload refreshes a
   await execute.click()
   // No pill either — the checkout read model never reported anything pending,
   // by design of this test. The auto-refresh below must fire regardless.
-  await expect(page.getByTestId('row-refreshing')).toHaveCount(0)
+  await expect(page.getByTestId('row-editing')).toHaveCount(0)
 
   release()
 

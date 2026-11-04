@@ -693,46 +693,24 @@ function unpushedPill(state, b) {
 // the ordinary ingest-refresh — so the pill's lifetime tracks "not yet
 // visible in the diff", not merely "the turn is still running".
 function editingPill(state, b) {
-  const files =
-    state.checkout && Array.isArray(state.checkout.pendingFiles) ? state.checkout.pendingFiles : []
-  if (!b.file || !files.includes(b.file)) return ''
+  const co = state.checkout || {}
+  const editing = Array.isArray(co.pendingFiles) && co.pendingFiles.includes(b.file)
+  const refreshing = Array.isArray(co.refreshingFiles) && co.refreshingFiles.includes(b.file)
+  if (!b.file || (!editing && !refreshing)) return ''
+  // One pencil for both phases (mid-edit, then landed but not yet re-ingested):
+  // the phase lives in the title/aria-label and data-state, never in extra pills.
+  const parts = []
+  if (editing) parts.push(t('Claude past dit bestand nu aan; nog niet geland in de review-tree'))
+  if (refreshing) parts.push(t('Deze wijziging is geland; de review-tree werkt de code nu bij'))
+  const label = parts.join(' — ')
   return html`
     <span
       data-testid="row-editing"
-      title="${t('Claude past dit bestand nu aan; nog niet geland in de review-tree')}"
+      data-state="${editing && refreshing ? 'both' : editing ? 'editing' : 'refreshing'}"
+      title="${label}"
+      aria-label="${label}"
       class="shrink-0 rounded bg-sky-50 dark:bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:text-sky-300"
-      >✎ ${t('wordt aangepast')}</span
-    >
-  `
-}
-
-// refreshingPill marks a row whose file was just LANDED by a Claude edit but
-// the review tree hasn't re-ingested it yet (state.checkout.refreshingFiles,
-// chat_refresh_pending.go via GET /api/chat/checkout — see loadCheckout in
-// home.mjs). Reviewer request: "als claude net een aanpassing heeft gedaan...
-// dan wil ik dat gelijk zien (of juist dat het weg is)" — the existing
-// `ongepusht` pill only says "not on GitHub yet", nothing about whether the
-// CODE shown has caught up. A cycling-arrow glyph plus the word, never colour
-// alone, and a THIRD distinguishable colour/glyph from unpushedPill's ⇧ and
-// editingPill's ✎ — a block can carry all three at once (mid-edit, landed but
-// not yet re-ingested, and unpushed) and each must read on its own.
-//
-// Per FILE, not per block, same accepted trade-off as unpushedPill/
-// editingPill. Deliberately short-lived: home.mjs's own `blocks.changed`
-// handler auto-reloads the tree the moment the server clears this set (see
-// refreshBlocksAfterOwnLanding), so this pill is normally only visible for as
-// long as the ingest-refresh itself takes — a colleague's own push instead
-// keeps going through the existing staleTreeRow, never through this pill.
-function refreshingPill(state, b) {
-  const files =
-    state.checkout && Array.isArray(state.checkout.refreshingFiles) ? state.checkout.refreshingFiles : []
-  if (!b.file || !files.includes(b.file)) return ''
-  return html`
-    <span
-      data-testid="row-refreshing"
-      title="${t('Deze wijziging is geland; de review-tree werkt de code nu bij')}"
-      class="shrink-0 rounded bg-violet-50 dark:bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
-      >⟳ ${t('wordt bijgewerkt')}</span
+      >✎</span
     >
   `
 }
@@ -1125,7 +1103,6 @@ function row(state, b, i) {
       ${() => removedPill(b)} ${() => movedPill(b)}
       ${() => unpushedPill(state, b)}
       ${() => editingPill(state, b)}
-      ${() => refreshingPill(state, b)}
       ${() => batchPill(b)} ${() => claudeChatPill(b)}
       ${() => commentActivityPill(state, b)}
       ${() => approvalPill(state, b)}
