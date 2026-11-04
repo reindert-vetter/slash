@@ -5417,6 +5417,8 @@ still did was CARRY data, so that moved one level up:
 already the element the preview walks, and a rendered button that isn't a
 control is exactly what the reviewer asked to get rid of.
 
+**The ↓/↑ cursor follows its card by key.** `cs.previewPos` is a position, but a newer group lands on top and shifts every index; `recomputeCodePreviews` re-resolves `previewPos` from the key of the card it sat on (test: `tests/code-fence-preview.spec.mjs`, "stays on its card").
+
 ## A "Kopieer" button IS reintroduced later — a real control, not a dead data-carrier
 
 Reviewer request: "maak een copy knop in alle codeblok dingen die uit een

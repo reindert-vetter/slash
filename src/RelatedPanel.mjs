@@ -6073,8 +6073,15 @@ export function CodePreviewPanel(state, commentTarget, opts = {}) {
             opts.inOverlay ? () => 'w-full max-w-[760px]' : () => commentClaudeRowWidthCls(state),
           )
         : ''}
+  // The ↓/↑ cursor is a POSITION, but a new (newest-first) group or a
+  // re-sort shifts positions: follow the card it sat on by its stable key.
+  const cursorKey = cs.previewPos > 0 && cp.items[cs.previewPos - 1] ? cp.items[cs.previewPos - 1].key : null
   </div>`
 }
+    if (cursorKey != null) {
+      const at = next.findIndex((it) => it.key === cursorKey)
+      if (at >= 0) cs.previewPos = at + 1
+    }
 
 // reapplyNewComposerDraftOnceTargetReady — a refresh that restores straight
 // onto the still-open "Comment op deze regel" composer (applyRelRestore's own

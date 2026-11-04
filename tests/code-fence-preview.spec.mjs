@@ -375,6 +375,46 @@ test('↓/↑ at the bottom of the Claude chat walk the code-preview cards', asy
   await expect(page.locator('[data-testid=code-preview-card][data-active=true]')).toHaveCount(0)
 })
 
+// The ↓/↑ cursor follows its card by key when a newer group shows up on top
+// (newest-first sort shifts every position) instead of staying on position N.
+test('the code-preview cursor stays on its card when a newer group is inserted above', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  await page.request.post('/api/workflows/task_code_comment', {
+    data: {
+      pr,
+      file: 'test.php',
+      line: 1,
+      author: 'reviewer',
+      body: 'a:\n```php\n$first = 1;\n```\nb:\n```php\n$second = 2;\n```',
+      code: '$order->total();',
+      gran: 'call',
+      label: 'Order::total',
+    },
+  })
+  await page.goto('/pr/' + pr)
+  await leaveSearchBox(page)
+  const item = page.getByTestId('comment-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+  const cards = page.getByTestId('code-preview-card')
+  await expect(cards).toHaveCount(2)
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowDown')
+  await expect(cards.nth(0)).toHaveAttribute('data-active', 'true')
+
+  // A second, newer comment group arrives (cloned DOM = same mutation path).
+  await page.evaluate(() => {
+    const el = document.querySelector('[data-testid=comment-item]')
+    const c = el.cloneNode(true)
+    c.dataset.commentId = 'injected'
+    el.after(c)
+  })
+  await expect(cards).toHaveCount(4)
+  // The original first card moved to position 3 and keeps the cursor.
+  await expect(cards.nth(2)).toHaveAttribute('data-active', 'true')
+  await expect(page.locator('[data-testid=code-preview-card][data-active=true]')).toHaveCount(1)
+})
+
 // ↓ from the BOTTOM OF A COMMENT (not the chat itself) walks the same
 // code-preview cards first, before falling through further — reviewer
 // request: "als ik in een comment naar beneden ga, en er zijn code blocks
