@@ -1420,7 +1420,12 @@ is the real text "Gefaalde CI-checks onderzoeken", not the placeholder, so it
 stays out of `isGeneralChatAnchor` and gets a named PR-comment index row. The
 first turn asks Claude to find which checks fail and why (`gh pr checks`,
 `gh run view --log-failed`), summarize the cause, propose a fix, and change
-nothing yet. Test: `tests/checks-chat.spec.mjs`.
+nothing yet. The prompt names the fast `gh` forms (`gh pr checks --json …`,
+`--log-failed | tail`, `gh run view <id> --json jobs`) and forbids a bare
+`gh run view <id>`, which takes ~18 s on a ~70-job run (it fetches every job's
+annotations), and it keeps Claude on the current failing run(s): unscoped, a
+turn took 2-4 min, half of it slow `gh` calls and run-history digging.
+Test: `tests/checks-chat.spec.mjs`.
 
 ## A merge conflict is shown as a chip (`conflict-chip`)
 

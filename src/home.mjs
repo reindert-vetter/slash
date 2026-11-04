@@ -13995,7 +13995,7 @@ function maybeStartChecksChat() {
     state,
     t('Gefaalde CI-checks onderzoeken'),
     t(
-      'De CI-checks van deze PR zijn gefaald. Zoek uit welke checks falen en waarom (bijv. met `gh pr checks` en `gh run view --log-failed`), vat de oorzaak samen en stel een oplossing voor. Pas nog niets aan.',
+      'De CI-checks van deze PR zijn gefaald. Zoek uit welke checks falen en waarom, vat de oorzaak samen en stel een oplossing voor. Pas nog niets aan. Werk snel: gebruik `gh pr checks --json name,state,link,workflow` en per falende run `gh run view <id> --log-failed | tail -80`. Wil je de jobs van een run zien, gebruik dan alleen `gh run view <id> --json jobs` (een kale `gh run view <id>` is erg traag). Beperk je tot de huidige falende run(s), geen historie van andere runs.',
     ),
   )
 }
