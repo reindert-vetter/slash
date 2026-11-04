@@ -6,8 +6,8 @@
 
 import { html, reactive } from './vendor/arrow.js'
 
-const BASE = 'inline-flex shrink-0 items-center justify-center rounded-full ring-1 transition-colors '
-const STATE_CLS = {
+export const BASE = 'inline-flex shrink-0 items-center justify-center rounded-full ring-1 transition-colors '
+export const STATE_CLS = {
   normal:
     'bg-slate-50 text-slate-500 ring-slate-200 dark:bg-zinc-800 dark:text-zinc-400 dark:ring-zinc-700',
   warn: 'bg-orange-100 text-orange-700 ring-orange-400 dark:bg-orange-500/20 dark:text-orange-300 dark:ring-orange-500/60',

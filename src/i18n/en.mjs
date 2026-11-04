@@ -782,6 +782,7 @@ export const EN = {
   'Meer naar rechts': 'More to the right',
   'Terug (één stap)': 'Back (one step)',
   'Terug naar PR-overzicht': 'Back to PR overview',
+  'Open PR-overzicht in nieuwe tab': 'Open PR overview in new tab',
 
   // ── settings page rows + strays picked up in review ────────────────────
   'Keyboard hints': 'Keyboard hints',
@@ -793,7 +794,6 @@ export const EN = {
   'Lege regels in een diff selecteerbaar maken en meetellen bij het goedkeuren, aan/uit — standaard aan.':
     'Make blank lines in a diff selectable and count them when approving, on/off — on by default.',
   'Witregels: {state} — lege regels in een diff zijn selecteerbaar en tellen mee (klik om te wisselen)':
-  'Open PR-overzicht in nieuwe tab': 'Open PR overview in new tab',
     'Whitespace lines: {state} — blank lines in a diff are selectable and count (click to toggle)',
   'Witregels aan': 'Whitespace lines on',
   'Witregels uit': 'Whitespace lines off',
@@ -968,6 +968,12 @@ export const EN = {
   'Maximaal {n} afbeeldingen per bericht.': 'At most {n} images per message.',
   '{name} kon niet worden opgeslagen.': '{name} could not be stored.',
   '{name}: {why}': '{name}: {why}',
+
+  // ── src/UsagePie.mjs ───────────────────────────────────────────────────
+  '{left}% over van je 5-uurs Claude-sessie · reset {reset} · gemeten {seen}':
+    '{left}% left of your 5-hour Claude session · resets {reset} · measured {seen}',
+  '5-uurs Claude-sessie is gereset sinds de laatste meting ({seen})':
+    '5-hour Claude session has reset since the last reading ({seen})',
 
   // ── src/selfUpdate.mjs ─────────────────────────────────────────────────
   'Nieuwe versie van slash': 'New version of slash',

@@ -241,6 +241,7 @@ import {
 } from './columnWidth.mjs'
 import { initDictation, handleDictationKeydown } from './dictation.mjs'
 import { analogClock } from './AnalogClock.mjs'
+import { usagePie } from './UsagePie.mjs'
 import { initJiraBell, jiraBellButton, isJiraBellOpen, handleJiraBellKeydown } from './jiraBell.mjs'
 
 initTheme()
@@ -16790,7 +16791,7 @@ function MenuHost() {
 // notification actually exists.
 function JiraBellHost() {
   return html`<div class="fixed right-4 top-4 z-30 flex items-center gap-2">
-    ${analogClock('h-8 w-8 shadow-sm')}${jiraBellButton('h-8 w-8 shadow-sm')}
+    ${usagePie('h-8 shadow-sm')}${analogClock('h-8 w-8 shadow-sm')}${jiraBellButton('h-8 w-8 shadow-sm')}
   </div>`
 }
 

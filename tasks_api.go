@@ -1071,6 +1071,10 @@ func (s *server) routesTasks(mux *http.ServeMux) {
 	// turn (chat_progress.go): the resync read for the SSE stream below, not a
 	// poll target.
 	mux.HandleFunc("/api/chat/progress", s.handleChatProgress)
+	// GET /api/claude/usage → the latest 5h Claude session-budget reading
+	// (claude_usage_api.go), shown as the pie next to the clock. Read-only,
+	// in-memory.
+	mux.HandleFunc("/api/claude/usage", s.handleClaudeUsage)
 	// POST /api/chat/cancel {commentId} -> stop the ONE running claude_chat
 	// turn for that conversation right now (chat_cancel.go). Deliberately NOT
 	// a workflow Signal -- Engine.SignalWorkflow would block for exactly as

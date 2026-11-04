@@ -599,7 +599,9 @@ type chatStreamLine struct {
 	SessionID    string  `json:"session_id"`
 	NumTurns     int     `json:"num_turns"`
 	TotalCostUSD float64 `json:"total_cost_usd"`
-	Usage        *struct {
+	// RateLimitInfo is only set on a `rate_limit_event` frame (usage.go).
+	RateLimitInfo *rateLimitInfo `json:"rate_limit_info"`
+	Usage         *struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -682,6 +684,9 @@ func readChatStream(r io.Reader, onEvent func(ChatEvent), onResult func(), onLin
 			}
 			var l chatStreamLine
 			if json.Unmarshal([]byte(s), &l) == nil {
+				if l.Type == "rate_limit_event" {
+					recordRateLimit(l.RateLimitInfo, time.Now())
+				}
 				if l.Type == "result" {
 					if seenResult {
 						res.Text = strings.TrimSpace(res.Text + "\n\n" + l.Result)

@@ -1300,6 +1300,24 @@ local time: normal, orange 14:30-15:00, red 15:00-17:00, normal again from
 17:00 (`clockState`); on Tuesday/Thursday instead orange from 16:45 and red from 17:00 until midnight. Colour is the only signal by request; `data-state`
 and `title` are for tests/screen readers. Test: `tests/tree-clock.spec.mjs`.
 
+## The Claude session pie (`src/UsagePie.mjs`)
+
+Left of the clock in the same `JiraBellHost` corner: a pie whose filled slice
+is the share of the **5-hour Claude session budget still left**, with that
+percentage as text next to it (the text and slice carry the meaning, colour is
+extra, per the colourblind rule). Source: `GET /api/claude/usage`
+(`claude_usage_api.go`), the latest `rate_limit_event` frame
+(`rate_limit_info.unifiedWindows.five_hour.utilization`/`resetsAt`) that a
+stream-json `claude -p` call made **by slash** reported
+(`modules/claude/usage.go`, in-memory). So it is only as fresh as slash's own
+last Claude call; terminal usage outside slash shows up on the next one
+(reviewer decision: no statusline-snapshot file). Colour reuses the clock's
+`STATE_CLS` on share USED: >80% `warn`, >95% `late`. Once `resetsAt` has
+passed the reading is stale: dimmed (`opacity-50`) with `?` instead of a
+number. No reading yet (`{ok:false}`) → nothing rendered. Polled every 60s and
+on window focus. Test: `tests/claude-usage-pie.spec.mjs`; parser:
+`modules/claude/usage_test.go`.
+
 ## File-type filter above the index (Alles / Backend / Frontend)
 
 `state.fileFilter` (`'all'|'backend'|'frontend'`, a PER-PR setting, not in the URL; see "Per-PR persistence" below)

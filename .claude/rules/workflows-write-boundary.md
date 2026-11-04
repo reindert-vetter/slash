@@ -139,6 +139,11 @@ pressing it against a fresh holder is a harmless, reported no-op. See
 "Cancelling a running turn" / the write-turn slot's own staleness section in
 `.claude/docs/claude-chat-panel.md`.
 
+Tenth example: `GET /api/claude/usage` (`claude_usage_api.go`) — the latest
+5-hour Claude session-budget reading, captured in memory by
+`modules/claude/usage.go` from the CLI's own `rate_limit_event` stream frame.
+No module write, no read-model, no history; empty after a restart.
+
 ## Exception: the Claude chat turn may act through a shell
 
 Deliberately granted by Reindert, overriding the rule above for this one path.
