@@ -1,14 +1,17 @@
-// UsagePie — how much of the 5-hour Claude session budget is still left, as a
-// small pie next to the analog clock in the /pr/<id> corner (JiraBellHost,
+// UsagePie — how much of the 5-hour Claude session budget is USED, plus the
+// projected share at reset ("pace"), as two small pies next to the analog clock in the /pr/<id> corner (JiraBellHost,
 // home.mjs). Data: GET /api/claude/usage, the latest rate_limit_event reading
 // from a Claude call slash itself made (modules/claude/usage.go) — so it is only
 // as fresh as slash's last Claude call.
 //
-// The filled slice is the share LEFT, and the percentage is always shown as
-// text next to it (colourblind rule: shape + text carry the meaning, colour is
-// extra). Colour reuses the clock's palette on share USED: >80% warn, >95% late.
-// A reading taken before the window's resetsAt has passed is stale: dimmed,
-// with "?" instead of a number.
+// First pie: share USED; second pie: the pace, i.e. the share used at reset if
+// you keep going at the same rate — the same number as the `5h:85% - 91%` pace
+// in ~/.claude/statusline.py (working hours only, `~` = wall-clock fallback).
+// Both percentages are always shown as text (colourblind rule: shape + text
+// carry the meaning, colour is extra; a pace over 100% also gets a `!`).
+// Colour reuses the clock's palette on the pace: ≤90 normal, 91–100 warn,
+// >100 late. A reading taken before the window's resetsAt has passed is stale:
+// dimmed, with "?" and no pace pie.
 
 import { html, reactive } from './vendor/arrow.js'
 import { BASE, STATE_CLS } from './AnalogClock.mjs'
@@ -16,12 +19,94 @@ import { t } from './i18n.mjs'
 
 const usage = reactive({ ok: false, utilization: 0, resetsAt: 0, seenAt: 0, now: Date.now() })
 
-/** 'normal' | 'warn' | 'late' | 'stale' for a reading at time `now` (ms). */
+const WINDOW_MS = 5 * 3600 * 1000
+const TZ = 'Europe/Amsterdam'
+
+// Working hours per weekday (JS getDay: 0 = Sunday), in fractional hours.
+// A copy of WORK_HOURS in ~/.claude/statusline.py — keep the two in sync.
+const WORK_HOURS = {
+  1: [8.5, 15.5],
+  2: [10, 17],
+  3: [8.5, 15.5],
+  4: [10, 17],
+  5: [9.5, 15],
+  6: [17, 21],
+}
+
+const fmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: TZ,
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+})
+
+// Amsterdam wall-clock parts of epoch ms `ms`.
+function amsParts(ms) {
+  const p = {}
+  for (const { type, value } of fmt.formatToParts(new Date(ms))) p[type] = Number(value)
+  return p
+}
+
+// Epoch ms of Amsterdam wall-clock time (y, m, d, fractional hour h).
+function amsEpoch(y, m, d, h) {
+  const wall = Date.UTC(y, m - 1, d) + h * 3600 * 1000
+  const off = (ms) => {
+    const p = amsParts(ms)
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(ms / 1000) * 1000
+  }
+  let t = wall - off(wall)
+  t = wall - off(t)
+  return t
+}
+
+// Milliseconds between a and b that fall inside that day's WORK_HOURS (Amsterdam).
+function workingMs(a, b) {
+  if (b <= a) return 0
+  const s = amsParts(a)
+  const e = amsParts(b)
+  const last = Date.UTC(e.year, e.month - 1, e.day)
+  let total = 0
+  for (let day = Date.UTC(s.year, s.month - 1, s.day); day <= last; day += 86400000) {
+    const d = new Date(day)
+    const hours = WORK_HOURS[d.getUTCDay()]
+    if (!hours) continue
+    const [y, m, dd] = [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]
+    const lo = Math.max(amsEpoch(y, m, dd, hours[0]), a)
+    const hi = Math.min(amsEpoch(y, m, dd, hours[1]), b)
+    if (hi > lo) total += hi - lo
+  }
+  return total
+}
+
+/**
+ * Projected share used at reset, in percent, as statusline.py's window_pace:
+ * {pace, approx} or null. Measured up to the reading's own seenAt (not "now"),
+ * because slash's reading may be older than the moment it is shown.
+ */
+export function usagePace(u) {
+  const reset = u.resetsAt * 1000
+  const start = reset - WINDOW_MS
+  const end = Math.min(u.seenAt * 1000, reset)
+  const pct = u.utilization * 100
+  const elapsed = workingMs(start, end)
+  const capacity = workingMs(start, reset)
+  if (elapsed > 0 && capacity > 0) return { pace: (pct * capacity) / elapsed, approx: false }
+  const wall = end - start
+  if (wall > 0) return { pace: (pct * WINDOW_MS) / wall, approx: true }
+  return null
+}
+
+/** 'normal' | 'warn' | 'late' | 'stale' for a reading at time `now` (ms), banded on the pace. */
 export function usageState(u, now) {
   if (now >= u.resetsAt * 1000) return 'stale'
-  const used = u.utilization * 100
-  if (used > 95) return 'late'
-  if (used > 80) return 'warn'
+  const p = usagePace(u)
+  const shown = p ? Math.min(Math.round(p.pace), 999) : 0
+  if (shown > 100) return 'late'
+  if (shown > 90) return 'warn'
   return 'normal'
 }
 
@@ -61,16 +146,35 @@ function slicePath(f) {
   return `M12 12 L12 3 A9 9 0 ${f > 0.5 ? 1 : 0} 1 ${x} ${y} Z`
 }
 
+function pie(testid, f) {
+  return html`<svg viewBox="0 0 24 24" class="h-5 w-5" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
+    <path data-testid="${testid}" d="${f}" fill="currentColor"></path>
+  </svg>`
+}
+
 export function usagePie(cls = 'h-8 shadow-sm') {
   start()
   const state = () => usageState(usage, usage.now)
-  const left = () => Math.round((1 - usage.utilization) * 100)
-  const label = () => (state() === 'stale' ? '?' : left() + '%')
+  const stale = () => state() === 'stale'
+  const used = () => Math.round(usage.utilization * 100)
+  const pace = () => usagePace(usage)
+  const paceShown = () => {
+    const p = pace()
+    return p ? Math.min(Math.round(p.pace), 999) : 0
+  }
+  const paceText = () => {
+    const p = pace()
+    if (!p) return ''
+    return (p.approx ? '~' : '') + paceShown() + '%' + (paceShown() > 100 ? '!' : '')
+  }
+  const label = () => (stale() ? '?' : used() + '%')
   const title = () =>
-    state() === 'stale'
+    stale()
       ? t('5-uurs Claude-sessie is gereset sinds de laatste meting ({seen})', { seen: hhmm(usage.seenAt) })
-      : t('{left}% over van je 5-uurs Claude-sessie · reset {reset} · gemeten {seen}', {
-          left: left(),
+      : t('{used}% van je 5-uurs Claude-sessie verbruikt · bij dit tempo {pace} bij reset {reset} · gemeten {seen}', {
+          used: used(),
+          pace: paceText() || '?',
           reset: hhmm(usage.resetsAt),
           seen: hhmm(usage.seenAt),
         })
@@ -88,15 +192,19 @@ export function usagePie(cls = 'h-8 shadow-sm') {
             aria-label="${title}"
             class="${boxCls}"
           >
-            <svg viewBox="0 0 24 24" class="h-5 w-5" aria-hidden="true">
-              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
-              <path
-                data-testid="claude-usage-slice"
-                d="${() => (state() === 'stale' ? '' : slicePath(1 - usage.utilization))}"
-                fill="currentColor"
-              ></path>
-            </svg>
+            ${pie('claude-usage-slice', () => (stale() ? '' : slicePath(usage.utilization)))}
             <span data-testid="claude-usage-text" class="text-xs font-semibold tabular-nums">${label}</span>
+            <div class="contents">
+              ${() =>
+                !stale() && pace()
+                  ? html`<span class="inline-flex items-center gap-1" data-testid="claude-usage-pace">
+                      ${pie('claude-usage-pace-slice', () => slicePath(Math.min(paceShown(), 100) / 100))}
+                      <span data-testid="claude-usage-pace-text" class="text-xs font-semibold tabular-nums"
+                        >${paceText}</span
+                      >
+                    </span>`
+                  : ''}
+            </div>
           </div>`
         : ''}
   </div>`

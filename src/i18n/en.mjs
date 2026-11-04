@@ -970,8 +970,8 @@ export const EN = {
   '{name}: {why}': '{name}: {why}',
 
   // ── src/UsagePie.mjs ───────────────────────────────────────────────────
-  '{left}% over van je 5-uurs Claude-sessie · reset {reset} · gemeten {seen}':
-    '{left}% left of your 5-hour Claude session · resets {reset} · measured {seen}',
+  '{used}% van je 5-uurs Claude-sessie verbruikt · bij dit tempo {pace} bij reset {reset} · gemeten {seen}':
+    '{used}% of your 5-hour Claude session used · at this pace {pace} by reset {reset} · measured {seen}',
   '5-uurs Claude-sessie is gereset sinds de laatste meting ({seen})':
     '5-hour Claude session has reset since the last reading ({seen})',
 
