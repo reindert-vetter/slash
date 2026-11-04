@@ -869,3 +869,19 @@ export function renderMarkdown(text, startIndex = 0, truncate = false, proposals
   out = highlightMentions(out)
   return out
 }
+
+// splitHermesComplexity separates the bot's `<!-- hermes:pr-complexity:start -->`
+// block from a PR body. `main` is the body before the marker (the bot block is
+// stripped everywhere: it renders as escaped comment text); `complexity` is
+// only the "Overall: …" line plus the Rubric/Score table (markdown), '' when
+// the block has neither or there is no marker.
+export function splitHermesComplexity(body) {
+  const text = String(body || '')
+  const at = text.indexOf('<!-- hermes:pr-complexity:start -->')
+  if (at < 0) return { main: text, complexity: '' }
+  const lines = text.slice(at).split(/\r?\n/)
+  const overall = lines.find((l) => /^\W*Overall:/i.test(l.trim())) || ''
+  const table = lines.filter((l) => l.trim().startsWith('|'))
+  const complexity = [overall.trim(), table.join('\n')].filter(Boolean).join('\n\n')
+  return { main: text.slice(0, at).replace(/\s+$/, ''), complexity }
+}

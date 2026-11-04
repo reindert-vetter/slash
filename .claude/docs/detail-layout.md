@@ -677,6 +677,13 @@ above Mentioned).
 - **A comment on it goes to GitHub as a quoted issue comment** — see
   `postsAsIssueComment` in `.claude/docs/workflows-comments.md`.
 
+- **The bot's hermes complexity block is split off.** `splitHermesComplexity`
+  (`markdown.mjs`) cuts the body at `<!-- hermes:pr-complexity:start -->`:
+  everything from there is stripped from `prDescriptionText()` (index block)
+  and from the Omschrijving card (`descMain()`, also the truncate/Enter
+  basis); `prInfoCard` shows only its "Overall: …" line + Rubric table as a
+  separate card below (`pr-info-complexity`).
+
 Test: `tests/pr-description-block.spec.mjs`; backend
 `pr_description_comment_test.go`.
 
