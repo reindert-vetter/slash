@@ -2168,6 +2168,7 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, cl claude.Clien
 		return newMsg("Kon de status van de wijziging niet bepalen.", true)
 	}
 	amended := false
+	lintNote := ""
 	if strings.TrimSpace(string(statusOut)) != "" {
 		// Every git call in this block goes through runGitInRetryOnLock: this
 		// checkout is the reviewer's own permanent clone, which can genuinely
@@ -2191,6 +2192,9 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, cl claude.Clien
 		for _, p := range a.KeepSeparatePaths {
 			_, _ = runGitIn(ctx, dir, "restore", "--staged", "--", p)
 		}
+		// Fix plug-and-pay's ECS style errors before they reach the PR's
+		// Linter check (php_lint.go); the commit goes ahead regardless.
+		lintNote = fixStagedPHPStyle(ctx, dir)
 		// staleOrigin: see the fetch above — "is this commit already pushed?"
 		// cannot be answered against a ref we could not refresh, so don't
 		// rewrite history on a guess.
@@ -2260,6 +2264,9 @@ func commitCheckoutEditsAt(ctx context.Context, cm *chat.Module, cl claude.Clien
 		a.StashAutoRestore = false
 	}
 	a.KeepSeparatePaths = nil
+	if lintNote != "" {
+		note += "\n\n" + lintNote
+	}
 	return newMsg(pendingLandedMsg(headRefName, dir)+note, false)
 }
 

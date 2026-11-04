@@ -2275,6 +2275,22 @@ URL, reproduces the exact production failure on a plain `git reset --hard`,
 and asserts the actual `ensureChatShadowWorktreeAt` survives it — both on the
 first affected refresh and on a worktree already wedged by an older build.
 
+### ECS style fixes before every slash-made commit (`php_lint.go`)
+
+plug-and-pay's Linter Action fails a PR almost always on its
+`php-style-check` job (`vendor/bin/ecs check <changed .php files>`). So
+right before each commit slash itself makes in a checkout — the chat edit
+here (`commitCheckoutEditsAt`), the plan execution (`runPlanExecuteAgent`)
+and the plan self-review (`runPlanSelfReview`) — `fixStagedPHPStyle` runs
+`vendor/bin/ecs check --fix` on the staged `.php` files only (a few
+seconds) and re-stages them. Only ECS; the other lint jobs (custom/module
+linter, phparkitect, dependency-analyser) are deliberately not run.
+Best-effort: no `vendor/bin/ecs` or no staged PHP → no-op; an ECS crash or
+an error it cannot fix never blocks the commit, but is shown — appended to
+the landed chat bubble, or as the plan run's / self-review step's note.
+Commits Claude makes itself through Bash are not covered. Test:
+`php_lint_test.go`.
+
 ### Serializing concurrent commits (`chat_merge`)
 
 Every `claude_chat` conversation is its **own** Workflow Execution with its

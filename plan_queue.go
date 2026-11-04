@@ -684,11 +684,13 @@ func (m *TaskManager) runPlanSelfReview(ctx context.Context, arg planQueueChainA
 	}
 	summary := truncatePlanText(strings.TrimSpace(res.Text), 600)
 	// Go commits what Claude left behind (it may also have committed itself).
+	lintNote := ""
 	if status, err := runGitStdoutIn(ctx, arg.Dir, "status", "--porcelain"); err == nil && strings.TrimSpace(string(status)) != "" {
 		if _, err := runGitIn(ctx, arg.Dir, "add", "-A"); err != nil {
 			return fail("kon de self-review-wijzigingen niet klaarzetten: " + err.Error())
 		}
 		unstageSubmodulePointers(ctx, arg.Dir)
+		lintNote = fixStagedPHPStyle(ctx, arg.Dir) // php_lint.go; never blocks the commit
 		if _, err := runGitIn(ctx, arg.Dir, "commit", "-m", "Self-review fixes for "+arg.Key); err != nil {
 			return fail("kon de self-review-wijzigingen niet committen: " + err.Error())
 		}
@@ -703,7 +705,11 @@ func (m *TaskManager) runPlanSelfReview(ctx context.Context, arg planQueueChainA
 	if _, err := runGitIn(ctx, arg.Dir, "push", "origin", arg.Branch); err != nil {
 		return fail("de self-review-fixes staan lokaal, maar pushen is geweigerd: " + err.Error())
 	}
-	return planQueueStep{OK: true, Note: nonEmpty(summary, "fixes gepusht")}
+	note := nonEmpty(summary, "fixes gepusht")
+	if lintNote != "" {
+		note += " — " + lintNote
+	}
+	return planQueueStep{OK: true, Note: note}
 }
 
 func nonEmpty(s, fallback string) string {

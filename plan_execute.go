@@ -719,6 +719,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		return res
 	}
 	unstageSubmodulePointers(ctx, dir)
+	lintNote := fixStagedPHPStyle(ctx, dir) // php_lint.go; never blocks the commit
 	if _, err := runGitIn(ctx, dir, "commit", "-m", planCommitMessage(arg.Doc)); err != nil {
 		m.logf("plan execute %s: commit: %v", arg.Doc.Key, err)
 		res.Note = "Kon niet committen: " + err.Error()
@@ -730,6 +731,7 @@ func (m *TaskManager) runPlanExecuteAgent(ctx context.Context, arg planExecuteAg
 		return res
 	}
 	res.Changed, res.Commit = true, strings.TrimSpace(string(sha))
+	res.Note = lintNote
 	return res
 }
 
