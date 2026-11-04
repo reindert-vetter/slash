@@ -793,6 +793,7 @@ export const EN = {
   'Lege regels in een diff selecteerbaar maken en meetellen bij het goedkeuren, aan/uit — standaard aan.':
     'Make blank lines in a diff selectable and count them when approving, on/off — on by default.',
   'Witregels: {state} — lege regels in een diff zijn selecteerbaar en tellen mee (klik om te wisselen)':
+  'Open PR-overzicht in nieuwe tab': 'Open PR overview in new tab',
     'Whitespace lines: {state} — blank lines in a diff are selectable and count (click to toggle)',
   'Witregels aan': 'Whitespace lines on',
   'Witregels uit': 'Whitespace lines off',

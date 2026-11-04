@@ -89,3 +89,22 @@ test('never shown for a drilled column — that keeps its own close-column butto
   await expect(page.getByTestId('main-scroll-left-hint')).toBeHidden()
   await expect(page.getByTestId('block-close-column')).toBeVisible()
 })
+
+test('at stop 1 a second button opens the PR overview in a new tab', async ({ page }) => {
+  await page.goto('/pr/12903')
+  const hint = page.getByTestId('main-scroll-left-hint')
+  const newTab = page.getByTestId('main-scroll-left-newtab-button')
+
+  // Not at stop 1 yet: the left button only steps within the page.
+  await expect(hint).toBeVisible()
+  await expect(newTab).toHaveCount(0)
+
+  await page.getByTestId('main-scroll-left-button').dispatchEvent('click')
+  await expect(page.getByTestId('pr-info-column')).toBeVisible()
+  await expect(newTab).toHaveAttribute('aria-label', /nieuwe tab|new tab/)
+
+  const [popup] = await Promise.all([page.waitForEvent('popup'), newTab.dispatchEvent('click')])
+  await expect(popup).toHaveURL(/\/pr-overview\?pr=.*&sel=/)
+  // The original tab stays on the review tree.
+  await expect(page).toHaveURL(/\/pr\/12903/)
+})
