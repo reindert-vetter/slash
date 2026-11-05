@@ -96,8 +96,7 @@ The reviewer's answers to the plan questions:
 - **Determinism:** the round number and the previous round's run id are
   computed by the handler and travel in the input. The body is one Activity
   with no branching.
-- **Restart:** an interrupted run re-executes its Activity on Recover, which
-  means the whole QA run starts again from the beginning (accepted).
+- **Restart / next round:** resumes per step, see "Resuming per step" below.
 - **Cleanup:** the runs go with `deletePRWorkflowRuns`, and the screenshot dir
   with `removeQAArtifactsForPR`, inside the existing `purgePR` Activity (no new
   step in the cleanup history).
@@ -116,7 +115,9 @@ into `progress.todos` (`{id, title, state: todo|doing|done, result, added}`):
 - `[slash:qa-todo] <id> na <other> | <title>` inserts after `<other>` (unknown →
   at the end); a known id only retitles; `added` = it came in after work began;
 - `[slash:qa-doing] <id>` (a previous doing step is auto-ticked `ok`) and
-  `[slash:qa-done] <id> ok|warn|fail|skip`;
+  `[slash:qa-done] <id> ok|warn|fail|skip | <finding>` (the finding is
+  optional, ≤ 500 chars, kept on the todo as `finding`; a finishing step also
+  gets every not-yet-owned screenshot in the run dir as `images`);
 - the old `[slash:qa-step] <title>` still works: an ad-hoc step appended as doing.
 
 Bounds: 60 steps, 200-char titles, ids `[A-Za-z0-9._-]{1,12}`. **Live only** —
@@ -130,6 +131,56 @@ markers. UI: `todoChecklist()` in `progressBlock` (`qa-todo-count`
 "N / M stappen klaar" + a decorative bar, rows `qa-todo` with glyph AND word:
 ☐ gepland, ▶ bezig, ✓ ok, ! let op, ✗ mislukt, – overgeslagen, "+ toegevoegd").
 Tests: `qa_run_progress_test.go`, the checklist case in `tests/qa-page.spec.mjs`.
+
+## Resuming per step (`qa_run_checkpoint.go`)
+
+Reviewer request: *"ook wil ik dat het per stap weer verder gaat waar het
+gebleven was voor de volgende keer"*. Before this, a restart re-ran the whole
+Activity from scratch (PR 14561 round 2 took 22 minutes).
+
+- **Durable checkpoint:** after every marker batch the sink writes
+  `<runDir>/checkpoint.json` (runId, the checkout's HEAD, plan, todos with
+  state/result/finding/images), atomically. This is a write by the Activity
+  itself, like the screenshots in that dir — not the in-memory snapshot, and
+  never the source of truth for the report (that stays the run's result).
+- **Checkout guard snapshot:** saved as `<runDir>/checkout-snapshot.json` and
+  reused by a restarted attempt. A hard kill never runs the deferred restore,
+  and a fresh snapshot would count the interrupted attempt's leftovers as the
+  reviewer's own work.
+- **When it resumes (`qaResumeFor`):** (1) a restart: the run's own checkpoint
+  (Recover re-executes the Activity with the same runId, so the same dir);
+  (2) a new round right after a round **without a report** (cancelled,
+  failed, killed): that round's checkpoint, whose step screenshots are copied
+  into the new dir. After a round WITH a report nothing changes (the previous
+  report is context, as before). Only a checkpoint with at least one finished
+  step counts.
+- **How:** `seedQAResume` puts the checklist in the live snapshot (an
+  interrupted `doing` step is open again), and `qaRunPrompt` gets a
+  "HERVATTING" section: every step with status, finding and screenshots;
+  don't redo finished steps, no new plan, re-check the stack and log in again,
+  the final JSON still contains ALL steps. When HEAD moved since the
+  checkpoint, the prompt names both commits and asks to redo only the steps
+  that change touched (Reindert: "toch hervatten, alleen geraakte stappen").
+  Go prepends `qaResumeDeviation` to the report's `deviations` (resumed, how
+  many steps carried over, the HEAD move).
+- **Not `claude --resume`:** a resumed session drags the whole (~200k token)
+  context along, which slows every later turn; its last tool call was cut off;
+  the isolated Playwright browser is gone after a restart anyway; and it is
+  useless for a new round.
+- **Determinism:** the workflow body is unchanged (one Activity, no
+  branching); the checkpoint is read and written only inside the Activity.
+
+Tests: `qa_run_checkpoint_test.go`.
+
+## Speed notes (PR 14561 round 2, measured from the transcript)
+
+174 tool calls, but only 7.7 min of tool execution; the rest of the 22 min was
+model turns over a context that grew to ~208k tokens, plus ~3 min writing the
+final report. The biggest single waste was running and debugging automated
+tests (5.5 min, now forbidden, see above). The prompt's "Snel werken" section
+covers the other measured waste: 7 SQL queries guessed against the wrong
+columns before `database-schema` was used, screenshots read back into the
+context, and large raw tool output.
 
 ## The checkout guard (`qa_checkout_guard.go`)
 

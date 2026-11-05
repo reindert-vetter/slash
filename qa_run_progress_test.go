@@ -39,7 +39,7 @@ func eqStrings(a, b []string) bool {
 func TestQARunProgressSinkTodos(t *testing.T) {
 	const repo, pr = "test/qa-todos", 991001
 	startQARunProgress(repo, pr, "run1")
-	sink := qaRunProgressSink(repo, pr)
+	sink := qaRunProgressSink(repo, pr, "", nil)
 	text := func(s string) { sink(claude.ChatEvent{Kind: claude.ChatEventText, TextDelta: s}) }
 	tool := func() { sink(claude.ChatEvent{Kind: claude.ChatEventTool, Tool: "Bash"}) }
 

@@ -107,11 +107,18 @@ type qaTodo struct {
 	State  string `json:"state"`            // todo | doing | done
 	Result string `json:"result,omitempty"` // ok | warn | fail | skip (done only)
 	Added  bool   `json:"added,omitempty"`
+	// Finding is the one-line outcome from `[slash:qa-done] <id> <status> |
+	// <finding>`, and Images the screenshots taken while the step ran
+	// (qaAssignImages). Both feed the durable checkpoint, so an interrupted
+	// run or the next round can resume per step (qa_run_checkpoint.go).
+	Finding string   `json:"finding,omitempty"`
+	Images  []string `json:"images,omitempty"`
 }
 
 const (
 	qaMaxTodos     = 60
 	qaMaxTodoTitle = 200
+	qaMaxFinding   = 500
 )
 
 var (
@@ -126,7 +133,7 @@ var (
 //	qa-todo  <id> | <title>          add a planned step at the end (known id: retitle)
 //	qa-todo  <id> na <other> | <t>   insert right after <other> (unknown: at the end)
 //	qa-doing <id>                    mark in progress; a previous doing step becomes done
-//	qa-done  <id> [ok|warn|fail|skip]
+//	qa-done  <id> [ok|warn|fail|skip] [| <finding>]
 //	qa-step  <title>                 legacy: an ad-hoc step, appended as doing
 func applyQAMarker(p *qaRunProgress, kind, text string) {
 	text = strings.TrimSpace(text)
@@ -169,7 +176,8 @@ func applyQAMarker(p *qaRunProgress, kind, text string) {
 		qaFinishDoing(p, i)
 		p.Todos[i].State, p.Todos[i].Result = "doing", ""
 	case "qa-done":
-		f := strings.Fields(text)
+		head, finding, _ := strings.Cut(text, "|")
+		f := strings.Fields(head)
 		if len(f) == 0 {
 			return
 		}
@@ -185,6 +193,9 @@ func applyQAMarker(p *qaRunProgress, kind, text string) {
 			}
 		}
 		p.Todos[i].State, p.Todos[i].Result = "done", res
+		if finding = truncateTestRunText(strings.TrimSpace(finding), qaMaxFinding); finding != "" {
+			p.Todos[i].Finding = finding
+		}
 	case "qa-step":
 		title := truncateTestRunText(text, qaMaxTodoTitle)
 		if title == "" {

@@ -71,6 +71,19 @@ vraagt het testplan uit te voeren.
   zoek dan een eerlijk alternatief en SCHRIJF OP wat je in plaats daarvan deed.
   Dat komt in `deviations` (zie onder) en is op de eerste pagina zichtbaar.
 
+## Snel werken
+
+Elke beurt kost tijd en alles wat je leest blijft in je context. Daarom:
+
+- Schrijf geen SQL op de gok. Vraag eerst het schema op met
+  `mcp__laravel-boost__database-schema` (met een `filter` op de tabellen die
+  je nodig hebt) en schrijf dan pas je query.
+- Lees een screenshot niet terug met Read, tenzij je twijfelt of hij laat zien
+  wat je bedoelde; de pagina-snapshot van Playwright vertelt je al wat er staat.
+- Houd tool-uitvoer klein: `git diff --stat` en daarna gericht per bestand,
+  `| tail`/`| head` op lange uitvoer, en combineer losse shell-commando's in
+  één aanroep.
+
 ## Screenshots
 
 Maak bij elke belangrijke toestand een screenshot met
@@ -130,10 +143,17 @@ plus ALLE stappen die je nu al voorziet, in volgorde, elk met een korte id
 Daarna, tijdens het werk:
 
     [slash:qa-doing] <id>                       zodra je aan een stap begint
-    [slash:qa-done] <id> <ok|warn|fail|skip>    zodra hij klaar is
+    [slash:qa-done] <id> <ok|warn|fail|skip> | <bevinding>   zodra hij klaar is
     [slash:qa-todo] <id> | <titel>              een extra stap achteraan
     [slash:qa-todo] <id> na <andere id> | <titel>   een extra stap direct na een andere
     [slash:qa-todo] <bestaande id> | <titel>    de titel van een stap bijwerken
+
+De `<bevinding>` is één of twee zinnen: wat je deed en wat je zag (met de
+relevante id's, aantallen of foutmelding). slash bewaart elke afgeronde stap
+met die bevinding en de screenshots die je tijdens de stap maakte. Wordt de
+run onderbroken, dan gaat de volgende poging vanaf die stappen verder in
+plaats van opnieuw te beginnen — schrijf de bevinding dus zo dat je er later
+de stap in het verslag mee kunt uitschrijven.
 
 Blijkt onderweg dat er een stap bij moet (ertussen of erachter): voeg hem toe
 met een nieuwe id (bijv. `2a`) en werk verder. Laat een stap die je niet meer

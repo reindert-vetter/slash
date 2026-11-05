@@ -259,9 +259,22 @@ func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir st
 	// The checkout guard (qa_checkout_guard.go): snapshot now, put back what
 	// the run added/changed afterwards — also after a cancel or a failure.
 	// Deferred AFTER release, so it runs BEFORE the write slot is handed back.
-	snap, serr := snapshotQACheckout(ctx, dir)
-	if serr != nil {
-		return fail("Kon de staat van de werkmap niet vastleggen: " + serr.Error())
+	// A restarted run reuses the snapshot its interrupted attempt saved: a
+	// hard kill never ran the deferred restore, and a fresh snapshot would
+	// count that attempt's leftovers as the reviewer's own work
+	// (qa_run_checkpoint.go).
+	runDir := qaRunDir(dataDir, arg.PR, arg.RunID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		return fail("Kon de screenshotmap niet aanmaken.")
+	}
+	snap, ok := loadQASnapshot(runDir)
+	if !ok {
+		var serr error
+		snap, serr = snapshotQACheckout(ctx, dir)
+		if serr != nil {
+			return fail("Kon de staat van de werkmap niet vastleggen: " + serr.Error())
+		}
+		_ = saveQASnapshot(runDir, snap)
 	}
 	defer func() {
 		restored, notes := restoreQACheckout(context.WithoutCancel(ctx), dir, snap)
@@ -276,10 +289,6 @@ func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir st
 		}
 	}()
 
-	runDir := qaRunDir(dataDir, arg.PR, arg.RunID)
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return fail("Kon de screenshotmap niet aanmaken.")
-	}
 	var prev *qaReport
 	if arg.PrevRunID != "" && tm != nil && tm.engine != nil {
 		var pr qaRunResult
@@ -287,11 +296,22 @@ func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir st
 			prev = pr.Report
 		}
 	}
+	// Per-step resume (qa_run_checkpoint.go): this run's own checkpoint after
+	// a restart, or the previous round's when that round left no report.
+	head := snap.Head
+	if h, err := qaGit(ctx, dir, "rev-parse", "HEAD"); err == nil {
+		head = strings.TrimSpace(string(h))
+	}
+	resume := qaResumeFor(dataDir, arg, runDir, head, prev != nil)
+	if resume != nil {
+		mutateQARunProgress(arg.Repo, arg.PR, func(p *qaRunProgress) { seedQAResume(p, resume) })
+		saveCheckpointNow(arg, runDir, head)
+	}
 
 	setPhase(chatPhaseStarting)
 	result, err := cl.RunChat(runCtx, claude.RunRequest{
 		Model:        claude.ModelOpus,
-		Prompt:       qaRunPrompt(arg, runDir, prev),
+		Prompt:       qaRunPrompt(arg, runDir, prev, resume),
 		SystemPrompt: claude.QARunSystemPrompt + explainLangTail(langFor(runCtx, tm, langpref.KindExplain)),
 		WorkDir:      dir,
 		// No Edit (file header of test_run.go, point 1, applies verbatim).
@@ -301,7 +321,7 @@ func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir st
 		// An idle (no output) bound, not a total one — see HeartbeatContext.
 		// A docker/artisan call can be silent for a while.
 		Timeout:     20 * time.Minute,
-		OnEvent:     qaRunProgressSink(arg.Repo, arg.PR),
+		OnEvent:     qaRunProgressSink(arg.Repo, arg.PR, runDir, func() { saveCheckpointNow(arg, runDir, head) }),
 		OnHeartbeat: func() { touchWriteTurnHolder(writeSlotKey) },
 	})
 	if err != nil {
@@ -315,13 +335,24 @@ func runQARun(ctx context.Context, tm *TaskManager, cl claude.Client, dataDir st
 		return fail("Claude leverde geen leesbaar QA-verslag op: " + perr.Error())
 	}
 	sanitizeQAReport(rep, runDir)
+	if resume != nil {
+		rep.Deviations = append(qaResumeDeviation(resume), rep.Deviations...)
+	}
 	res.Report = rep
 	return res
 }
 
+// saveCheckpointNow writes the live checklist to the run's durable checkpoint
+// (qa_run_checkpoint.go). Best effort: a failed write only costs the resume.
+func saveCheckpointNow(arg qaRunArg, runDir, head string) {
+	if p, ok := qaRunProgressFor(arg.Repo, arg.PR); ok && p.RunID == arg.RunID {
+		_ = saveQACheckpoint(runDir, qaCheckpoint{RunID: arg.RunID, Head: head, Plan: p.Plan, Todos: p.Todos})
+	}
+}
+
 // qaRunPrompt is the call-specific part (the static instructions live in
 // prompts/qa_run.md).
-func qaRunPrompt(arg qaRunArg, runDir string, prev *qaReport) string {
+func qaRunPrompt(arg qaRunArg, runDir string, prev *qaReport, resume *qaResume) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Test pull request #%d", arg.PR)
 	if arg.Repo != "" {
@@ -347,6 +378,11 @@ func qaRunPrompt(arg qaRunArg, runDir string, prev *qaReport) string {
 			}
 		}
 		b.WriteString("\n")
+	}
+	if resume != nil {
+		b.WriteString(qaResumePromptSection(resume))
+		b.WriteString("Ga verder met de open stappen in de lokale admin, en sluit af met het JSON-verslag.")
+		return b.String()
 	}
 	b.WriteString("Begin met het afleiden van de scenario's, test ze in de lokale admin, en sluit af met het JSON-verslag.")
 	return b.String()
@@ -384,12 +420,20 @@ var qaRunMarkerRe = regexp.MustCompile(`(?m)^[ \t>*-]*\[slash:(qa-plan|qa-step|q
 // the current text block, so the buffered tail is parsed as a finished line
 // right there — otherwise a marker at the end of a block without a trailing
 // newline was glued onto the next block's first line and never matched.
-func qaRunProgressSink(repo string, pr int) func(claude.ChatEvent) {
+//
+// runDir/onMarker make it durable: a finishing step gets the screenshots
+// taken meanwhile, and onMarker (the checkpoint write) runs after every
+// marker batch. Both may be empty/nil.
+func qaRunProgressSink(repo string, pr int, runDir string, onMarker func()) func(claude.ChatEvent) {
 	var buf string
 	parse := func(lines string) {
-		for _, m := range qaRunMarkerRe.FindAllStringSubmatch(lines, -1) {
+		ms := qaRunMarkerRe.FindAllStringSubmatch(lines, -1)
+		for _, m := range ms {
 			kind, text := m[1], m[2]
-			mutateQARunProgress(repo, pr, func(p *qaRunProgress) { applyQAMarker(p, kind, text) })
+			mutateQARunProgress(repo, pr, func(p *qaRunProgress) { applyQAMarkerInRun(p, kind, text, runDir) })
+		}
+		if len(ms) > 0 && onMarker != nil {
+			onMarker()
 		}
 	}
 	flush := func() {
