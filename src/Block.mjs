@@ -5090,7 +5090,49 @@ export function diffStat(rows) {
 
 // approvedRowSet reads a block's approved-row indices as a Set (empty when none).
 export function approvedRowSet(b) {
-  return new Set(Array.isArray(b && b.approvedRows) ? b.approvedRows : [])
+  const raw = Array.isArray(b && b.approvedRows) ? b.approvedRows : []
+  return withNeighbourApprovedBlanks(b, raw)
+}
+
+// A blank changed row counts as approved when the nearest non-blank changed row
+// before OR after it (in the same contiguous changed run) is approved. Derived at
+// read time, never persisted; a stored blank index is ignored whenever a
+// non-blank neighbour exists. A run with no non-blank row keeps its stored value.
+// See "Blank rows follow their neighbour" in .claude/docs/approval.md.
+const neighbourCache = new WeakMap()
+function withNeighbourApprovedBlanks(b, raw) {
+  if (!b || !b.code) return new Set(raw)
+  const rows = blockRows(b)
+  if (!rows.length) return new Set(raw)
+  const hit = neighbourCache.get(b)
+  if (hit && hit.raw === raw && hit.rows === rows) return new Set(hit.set)
+  const stored = new Set(raw)
+  const blank = (r) => rowChanged(r) && !(displayText(r) || '').trim()
+  const out = new Set(raw)
+  for (let i = 0; i < rows.length; i++) {
+    if (!blank(rows[i])) continue
+    let found = false
+    let ok = false
+    for (let j = i - 1; j >= 0 && rowChanged(rows[j]); j--) {
+      if (blank(rows[j])) continue
+      found = true
+      ok = stored.has(j)
+      break
+    }
+    if (!ok)
+      for (let j = i + 1; j < rows.length && rowChanged(rows[j]); j++) {
+        if (blank(rows[j])) continue
+        found = true
+        ok = ok || stored.has(j)
+        break
+      }
+    if (found) {
+      if (ok) out.add(i)
+      else out.delete(i)
+    }
+  }
+  neighbourCache.set(b, { raw, rows, set: out })
+  return new Set(out)
 }
 
 // approvedCallSet reads a block's approved call-segment keys as a Set (empty

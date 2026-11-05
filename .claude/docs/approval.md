@@ -303,6 +303,17 @@ so an index outside `changedRows` is simply ignored. The only visible effect is
 `rowCellHTML`'s left-margin ✓ (`changed && approved.has(i)`) also lighting up on
 the blank row — a shape signal, never colour-only.
 
+## Blank rows follow their neighbour (derived, never stored)
+
+With "show whitespace lines" ON (default) a blank changed row is a real row in
+the counter. `approvedRowSet` (`Block.mjs`) therefore decides blank changed rows
+at read time: approved iff the nearest non-blank changed row before OR after it
+(same contiguous changed run) is approved; a stored blank index is ignored when
+such a neighbour exists. A run with no non-blank row keeps its stored value. It
+covers every approve path (call level, import propagation, re-anchored
+approvals) that the forward sweep above misses, and writes nothing (no Signal,
+no Go change). Test: `tests/blank-row-follows-neighbour.spec.mjs`.
+
 ## Approving from the mouse: a call-segment hover ring
 
 A first cut of this added three clickable gutter glyphs — a round `✓`/`○` per
