@@ -376,13 +376,32 @@ func qaMCPConfig(runDir string) string {
 	return string(out)
 }
 
-var qaRunMarkerRe = regexp.MustCompile(`(?m)^[ \t>*-]*\[slash:(qa-plan|qa-step)\][ \t]+(\S.*)$`)
+var qaRunMarkerRe = regexp.MustCompile(`(?m)^[ \t>*-]*\[slash:(qa-plan|qa-step|qa-todo|qa-doing|qa-done)\][ \t]+(\S.*)$`)
 
 // qaRunProgressSink maps the streamed CLI events onto the volatile snapshot —
-// the same phase/tool mapping as testRunProgressSink plus the two marker kinds.
+// the same phase/tool mapping as testRunProgressSink plus the marker kinds
+// (applyQAMarker). Text is parsed per complete line; a non-text event ends
+// the current text block, so the buffered tail is parsed as a finished line
+// right there — otherwise a marker at the end of a block without a trailing
+// newline was glued onto the next block's first line and never matched.
 func qaRunProgressSink(repo string, pr int) func(claude.ChatEvent) {
 	var buf string
+	parse := func(lines string) {
+		for _, m := range qaRunMarkerRe.FindAllStringSubmatch(lines, -1) {
+			kind, text := m[1], m[2]
+			mutateQARunProgress(repo, pr, func(p *qaRunProgress) { applyQAMarker(p, kind, text) })
+		}
+	}
+	flush := func() {
+		if buf != "" {
+			parse(buf)
+			buf = ""
+		}
+	}
 	return func(ev claude.ChatEvent) {
+		if ev.Kind != claude.ChatEventText {
+			flush()
+		}
 		switch ev.Kind {
 		case claude.ChatEventText:
 			buf += ev.TextDelta
@@ -392,16 +411,7 @@ func qaRunProgressSink(repo string, pr int) func(claude.ChatEvent) {
 			}
 			lines := buf[:cut+1]
 			buf = buf[cut+1:]
-			for _, m := range qaRunMarkerRe.FindAllStringSubmatch(lines, -1) {
-				text := truncateTestRunText(strings.TrimSpace(m[2]), 200)
-				mutateQARunProgress(repo, pr, func(p *qaRunProgress) {
-					if m[1] == "qa-plan" {
-						p.Plan = text
-					} else if len(p.Steps) < 100 {
-						p.Steps = append(p.Steps, text)
-					}
-				})
-			}
+			parse(lines)
 		case claude.ChatEventThinking:
 			mutateQARunProgress(repo, pr, func(p *qaRunProgress) { p.Phase, p.Tool, p.Detail = chatPhaseThinking, "", "" })
 		case claude.ChatEventTool:

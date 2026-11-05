@@ -102,10 +102,30 @@ De pagina toont een stap met `compare` als twee panelen naast elkaar,
 
 ## Voortgang
 
-Meld tijdens het werk, elk op een eigen regel:
+De reviewer ziet live een stappenlijst die je zelf bijhoudt. Elke regel
+hieronder staat op een EIGEN regel in je tekst (niet in een codeblok, niet
+binnen een tool-aanroep).
+
+Je EERSTE tekst, vóór je eerste tool-aanroep, is je plan: één samenvatting
+plus ALLE stappen die je nu al voorziet, in volgorde, elk met een korte id
+(`1`, `2`, `3`, … — letters, cijfers, `.`, `-`, `_`, max 12 tekens):
 
     [slash:qa-plan] <één regel: welke scenario's je gaat testen>
-    [slash:qa-step] <korte titel van de stap waar je nu mee bezig bent>
+    [slash:qa-todo] 1 | <korte titel van de stap>
+    [slash:qa-todo] 2 | <korte titel van de stap>
+
+Daarna, tijdens het werk:
+
+    [slash:qa-doing] <id>                       zodra je aan een stap begint
+    [slash:qa-done] <id> <ok|warn|fail|skip>    zodra hij klaar is
+    [slash:qa-todo] <id> | <titel>              een extra stap achteraan
+    [slash:qa-todo] <id> na <andere id> | <titel>   een extra stap direct na een andere
+    [slash:qa-todo] <bestaande id> | <titel>    de titel van een stap bijwerken
+
+Blijkt onderweg dat er een stap bij moet (ertussen of erachter): voeg hem toe
+met een nieuwe id (bijv. `2a`) en werk verder. Laat een stap die je niet meer
+doet niet open staan: sluit hem af met `skip`. Eindig met een stap
+"Bevindingen".
 
 ## Je eindantwoord
 

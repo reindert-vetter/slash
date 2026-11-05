@@ -238,3 +238,50 @@ test('the header strip and ←/→ buttons navigate, and a before/after pair ren
   await expect(side).toContainText('this is not mermaid')
   await expect(page.getByTestId('qa-next')).toBeDisabled()
 })
+
+test('a running round shows the live step checklist: planned, in progress, done with a result, and steps added later', async ({ page }, testInfo) => {
+  const pr = seededPr(testInfo)
+  const LIVE = '0123456789abcdef01234567'
+  await page.route(`**/api/qa?pr=${pr}*`, (route) =>
+    route.fulfill({
+      json: {
+        ok: true,
+        pr,
+        rounds: [{ runId: LIVE, round: 1, status: 'running', createdAt: '2026-10-08T10:00:00Z', updatedAt: '2026-10-08T10:01:00Z' }],
+        progress: {
+          runId: LIVE,
+          running: true,
+          plan: 'Pauzeren en hervatten',
+          steps: [],
+          phase: 'thinking',
+          startedAt: Date.now() - 5000,
+          updatedAt: Date.now(),
+          todos: [
+            { id: '1', title: 'Opzet: testdata', state: 'done', result: 'ok' },
+            { id: '2', title: 'Pauzeren in de admin', state: 'done', result: 'warn' },
+            { id: '2a', title: 'Hervatten na pauze', state: 'doing', added: true },
+            { id: '3', title: 'Bevindingen', state: 'todo' },
+          ],
+        },
+      },
+    }),
+  )
+  await page.goto(`/qa/${pr}`)
+  await appReady(page)
+
+  await expect(page.getByTestId('qa-progress')).toContainText('Plan: Pauzeren en hervatten')
+  await expect(page.getByTestId('qa-todo-count')).toHaveText('2 / 4 stappen klaar')
+  const rows = page.getByTestId('qa-todo')
+  await expect(rows).toHaveCount(4)
+  // Order is the server's (an inserted step sits between, not at the end);
+  // state reads as a glyph plus a word, never colour alone.
+  await expect(rows.nth(0)).toContainText('✓')
+  await expect(rows.nth(0)).toContainText('ok')
+  await expect(rows.nth(1)).toContainText('!')
+  await expect(rows.nth(1)).toContainText('let op')
+  await expect(rows.nth(2)).toContainText('Hervatten na pauze')
+  await expect(rows.nth(2)).toContainText('▶')
+  await expect(rows.nth(2)).toContainText('+ toegevoegd · bezig')
+  await expect(rows.nth(3)).toContainText('☐')
+  await expect(rows.nth(3)).toContainText('gepland')
+})

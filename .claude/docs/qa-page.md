@@ -94,6 +94,35 @@ The reviewer's answers to the plan questions:
   with `removeQAArtifactsForPR`, inside the existing `purgePR` Activity (no new
   step in the cleanup history).
 
+## The live step checklist (`[slash:qa-*]` markers)
+
+Reviewer request: *"kan je mij een progress laten zien, misschien met stappen
+die je gaat doorlopen, dat kan je dan van tevoren bepalen. daarna mag je extra
+stappen ertussen of erna krijgen"*. Claude writes line markers into its
+streamed text (the prompt's "Voortgang" section); `qaRunProgressSink`
+(`qa_run.go`) parses them and `applyQAMarker` (`qa_run_progress.go`) folds them
+into `progress.todos` (`{id, title, state: todo|doing|done, result, added}`):
+
+- `[slash:qa-plan] <line>` and, BEFORE the first tool call, every planned step
+  as `[slash:qa-todo] <id> | <title>`;
+- `[slash:qa-todo] <id> na <other> | <title>` inserts after `<other>` (unknown →
+  at the end); a known id only retitles; `added` = it came in after work began;
+- `[slash:qa-doing] <id>` (a previous doing step is auto-ticked `ok`) and
+  `[slash:qa-done] <id> ok|warn|fail|skip`;
+- the old `[slash:qa-step] <title>` still works: an ad-hoc step appended as doing.
+
+Bounds: 60 steps, 200-char titles, ids `[A-Za-z0-9._-]{1,12}`. **Live only** —
+it lives in the in-memory snapshot, not in the run's result; once the round
+ends the report takes over. The sink parses whole lines and **flushes its
+buffer on every non-text event**: a text block that ends without a newline
+right before a tool call used to glue its last line (often a marker) onto the
+next block's first line, so it never matched. The built-in TodoWrite tool was
+considered and is not available in `claude -p` (CLI 2.1.318), hence text
+markers. UI: `todoChecklist()` in `progressBlock` (`qa-todo-count`
+"N / M stappen klaar" + a decorative bar, rows `qa-todo` with glyph AND word:
+☐ gepland, ▶ bezig, ✓ ok, ! let op, ✗ mislukt, – overgeslagen, "+ toegevoegd").
+Tests: `qa_run_progress_test.go`, the checklist case in `tests/qa-page.spec.mjs`.
+
 ## The checkout guard (`qa_checkout_guard.go`)
 
 Reviewer rule: *"qa mag geen bestanden toevoegen of aanpassen, behalve als je
@@ -170,8 +199,8 @@ continued to the right are gone (and with them the Enter "full height" toggle).
 - **The stage** (`<main data-testid=qa-stage>`, scrolls vertically) shows ONE
   page, always as a keyed array of one:
   - **Page 0, "Overzicht"** (`qa-overview`): the live progress while running
-    (status line via `claudeStatusText`, the plan, the `[slash:qa-step]` list,
-    Stop) or the run's error, then the summary, the **"Afwijkingen van de
+    (status line via `claudeStatusText`, the plan, the step checklist —
+    see "The live step checklist" above —, Stop) or the run's error, then the summary, the **"Afwijkingen van de
     opdracht"** block (`qa-deviations`, `!` plus words), the scenario table,
     the step index, and the start card.
   - **A step** (`qa-step`): eyebrow · title · status chip (glyph + word) · a

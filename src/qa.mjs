@@ -851,6 +851,51 @@ function progressStatusText() {
   return claudeStatusText(p.tool ? { ...p, tool: prettyTool(p.tool) } : p, elapsed)
 }
 
+// The live step checklist ([slash:qa-todo]/[slash:qa-doing]/[slash:qa-done],
+// see applyQAMarker in qa_run_progress.go): a glyph AND a word per row, never
+// colour alone. Each row's key carries its whole content, so a row whose
+// state changes is mounted fresh instead of reused with stale bindings.
+const TODO_MARK = {
+  todo: ['☐', 'gepland'],
+  doing: ['▶', 'bezig'],
+  ok: ['✓', 'ok'],
+  warn: ['!', 'let op'],
+  fail: ['✗', 'mislukt'],
+  skip: ['–', 'overgeslagen'],
+}
+
+function progressTodos() {
+  return (state.progress && state.progress.todos) || []
+}
+
+function todoRow(x) {
+  const [glyph, word] = TODO_MARK[x.state === 'done' ? x.result || 'ok' : x.state] || TODO_MARK.todo
+  const rowCls = 'flex items-baseline gap-2 ' + (x.state === 'doing' ? 'font-semibold text-slate-900 dark:text-zinc-100' : x.state === 'done' ? 'text-slate-500 dark:text-zinc-400' : 'text-slate-600 dark:text-zinc-300')
+  return html`<li class="${rowCls}" data-testid="qa-todo" data-state="${x.state}" data-result="${x.result || ''}">
+    <span class="w-4 shrink-0 text-center font-mono" aria-hidden="true">${glyph}</span>
+    <span class="min-w-0 flex-1">${x.title}</span>
+    <span class="shrink-0 text-[11px] text-slate-500 dark:text-zinc-400">${(x.added ? t('+ toegevoegd') + ' · ' : '') + t(word)}</span>
+  </li>`.key('todo:' + x.id + ':' + x.state + ':' + (x.result || '') + ':' + (x.added ? 1 : 0) + ':' + x.title)
+}
+
+function todoChecklist() {
+  return html`<div class="contents">
+    ${() => {
+      const todos = progressTodos()
+      if (!todos.length) return [html`<span class="hidden"></span>`.key('todo-none')]
+      const done = todos.filter((x) => x.state === 'done').length
+      const pct = Math.round((done / todos.length) * 100) + '%'
+      return [
+        html`<div class="mt-1 flex flex-col gap-1" data-testid="qa-todo-head">
+          <span class="text-[12px] font-semibold text-slate-700 dark:text-zinc-200" data-testid="qa-todo-count">${t('{done} / {total} stappen klaar', { done, total: todos.length })}</span>
+          <div class="h-1 w-full overflow-hidden rounded bg-indigo-100 dark:bg-indigo-500/20" aria-hidden="true"><div class="h-full bg-indigo-500" style="${'width:' + pct}"></div></div>
+        </div>`.key('todo-head:' + done + ':' + todos.length),
+        html`<ol class="flex flex-col gap-0.5" data-testid="qa-todos">${() => progressTodos().map(todoRow)}</ol>`.key('todo-list'),
+      ]
+    }}
+  </div>`
+}
+
 function progressBlock() {
   return html`<div class="contents">
     ${() => {
@@ -866,7 +911,7 @@ function progressBlock() {
           </div>
           <span class="text-slate-600 dark:text-zinc-300" data-testid="qa-progress-status">${() => progressStatusText()}</span>
           <span class="text-slate-500 dark:text-zinc-400">${() => (state.progress && state.progress.plan ? t('Plan: {plan}', { plan: state.progress.plan }) : '')}</span>
-          <ol class="list-decimal pl-5 text-slate-600 dark:text-zinc-300">${() => ((state.progress && state.progress.steps) || []).map((x, k) => html`<li>${x}</li>`.key('ps:' + k + ':' + x))}</ol>
+          ${todoChecklist()}
         </div>`.key('qa-progress-run')
       }
       if (mode === 'err') {
