@@ -414,7 +414,41 @@ func pushPendingPR(ctx context.Context, tm *TaskManager, repo string, pr int) {
 	}
 	setPendingPushState(repo, pr, "", "")
 	publishPendingPushChanged(repo, pr)
+	refreshCheckoutTrackingRef(ctx, tm, repo, pr, headRef)
 	reRequestChangesRequestedReviews(ctx, tm, repo, pr)
+}
+
+// checkoutTrackingFetchTimeout bounds the best-effort fetch below, so an
+// unreachable origin never holds up the chat_merge queue for long.
+const checkoutTrackingFetchTimeout = 30 * time.Second
+
+// refreshCheckoutTrackingRef fetches origin/<headRef> in the PR's own werkmap
+// after a successful push. The push runs from the SHARED clone, so only that
+// clone's origin/<headRef> moved; the werkmap (a separate clone, e.g.
+// ~/dev/plug-and-pay-4) kept its old tracking ref and git status there said
+// "ahead 1, push needed" for a commit GitHub already had (reviewer report,
+// PR 14561).
+//
+// Best effort, failure only logged: the push itself already succeeded. Takes
+// no lock on purpose — a ref-only `fetch origin <branch>` never touches the
+// working tree or the shared clone (so no ingestMu), and waiting for the
+// werkmap's write-turn slot could block the merge queue behind a running turn.
+// A colliding git process in that dir at worst fails this fetch, which is
+// harmless: the next landing's own fetch refreshes the same ref.
+func refreshCheckoutTrackingRef(ctx context.Context, tm *TaskManager, repo string, pr int, headRef string) {
+	dataDir := ""
+	if tm != nil {
+		dataDir = tm.dataDir
+	}
+	a := getCheckoutAssignment(dataDir, repo, pr)
+	if a == nil || a.Dir == "" {
+		return
+	}
+	fctx, cancel := context.WithTimeout(ctx, checkoutTrackingFetchTimeout)
+	defer cancel()
+	if err := fetchOriginBranch(fctx, a.Dir, headRef); err != nil && tm != nil && tm.logf != nil {
+		tm.logf("pending push: pr %d pushed but could not refresh origin/%s in %s: %v", pr, headRef, a.Dir, err)
+	}
 }
 
 // reRequestChangesRequestedReviews asks every reviewer whose latest verdict is

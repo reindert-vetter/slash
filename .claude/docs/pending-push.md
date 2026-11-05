@@ -59,6 +59,13 @@ Always on, no UI, best effort (a failure is only logged; the push already
 succeeded). It runs inside the same Activity, so it stays inside the write
 boundary. Test: `TestPushPendingPRReRequestsChangesRequestedReviewers`.
 
+Just before that, `refreshCheckoutTrackingRef` runs a best-effort, lock-free
+`git fetch origin <headRef>` (30s timeout, failure only logged) in the PR's own
+werkmap: the push runs from the shared clone, so otherwise the werkmap's
+`origin/<headRef>` stayed stale and `git status` there said "ahead 1" for an
+already-pushed commit (PR 14561). Test:
+`TestPushPendingPRRefreshesTheCheckoutTrackingRef`.
+
 ## Durable checkout dir/branch: which directory survives a restart
 
 `chatCheckoutAssignment` (`chat_checkout.go`) — which local directory a PR's

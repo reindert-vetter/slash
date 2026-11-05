@@ -684,3 +684,37 @@ func TestPushPendingPRReRequestsChangesRequestedReviewers(t *testing.T) {
 		t.Fatalf("re-requested %v, want [ricky-imu]", got)
 	}
 }
+
+// The push runs from the shared clone, so without an explicit refresh the
+// PR's own werkmap kept its old origin/<headRef> and git status there said
+// "ahead 1" for a commit GitHub already had (PR 14561). After a successful
+// push the werkmap's tracking ref must point at the pushed commit.
+func TestPushPendingPRRefreshesTheCheckoutTrackingRef(t *testing.T) {
+	setupChatShadowRepo(t, "feature/x", "v1\n")
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	landOneEdit(t, dataDir, 3011, "conv-track", "feature/x", "foo.txt", "edited by claude\n")
+	a := getCheckoutAssignment("", "", 3011)
+	if a == nil || a.Dir == "" {
+		t.Fatal("expected a checkout assignment after the landing")
+	}
+	head, err := runGitIn(ctx, a.Dir, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := runGitIn(ctx, a.Dir, "rev-parse", "refs/remotes/origin/feature/x")
+	if strings.TrimSpace(string(before)) == strings.TrimSpace(string(head)) {
+		t.Fatal("precondition: origin/feature/x already at the landed commit before the push")
+	}
+
+	pushPendingPR(ctx, nil, "", 3011)
+
+	after, err := runGitIn(ctx, a.Dir, "rev-parse", "refs/remotes/origin/feature/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(after)) != strings.TrimSpace(string(head)) {
+		t.Fatalf("checkout origin/feature/x = %s after push, want the pushed %s", strings.TrimSpace(string(after)), strings.TrimSpace(string(head)))
+	}
+}
