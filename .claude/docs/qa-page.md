@@ -60,6 +60,14 @@ The reviewer's answers to the plan questions:
   `workDirOverlay.mjs` unchanged, with its own `sendCheckoutAction` (the same
   chat_merge `merge` Signal as the tree's checkout chip), so the question is
   asked here exactly as in the tree.
+- **No automated tests.** The prompt forbids `php artisan test`/PHPUnit/Pest/
+  Dusk/specs: QA tests behaviour in the running app like a human. A PR
+  test-plan item such as "feature tests groen" becomes a `skip` step, even
+  when the reviewer says "voer test plan uit" (Reindert: "altijd skip"). Only
+  an instruction that literally asks to run tests runs exactly those, once,
+  without debugging an unrelated red test. Reason: PR 14561 round 2 ran whole
+  test directories and then debugged an unrelated failing `SessionFlowTest`.
+  Tests belong to CI and `test_run` ("Tests laten draaien").
 - **The claude call:** Opus, `RunChat` with `Read/Grep/Glob/Bash` +
   `mcp__playwright` + `mcp__laravel-boost`, **no Edit**. `MCPConfig` is
   `qaMCPConfig(runDir)`. The idle timeout is 20 min, heartbeat-based.
