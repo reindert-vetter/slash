@@ -17857,6 +17857,12 @@ function testClassPreviewCard(state, row) {
 
 // DetailPanel — the area right of the sidebar. It shows the block card for the
 // selected row, and the next row's card already (a look-ahead preview). When
+  // A QA run: jump to its own page (/qa/<pr>), the same target as the PR
+  // menu's "QA-test in admin". The QA page is primary-repo only. Other task
+  // types (analysis passes, trackers) have no page of their own to go to.
+  if (row.kind === 'run' && row.run && row.run.workflow === 'qa_run' && !REPO) {
+    items.push({ id: 'task-goto-qa', label: t('Ga naar de QA-pagina'), hint: 'qa ga naar open', run: () => (location.href = '/qa/' + state.pr) })
+  }
 // both cards are from the same file, a dashed connector links them.
 //
 // A plain, static flex-item class list — no more `${() => ...}` left-offset

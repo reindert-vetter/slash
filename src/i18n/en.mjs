@@ -783,6 +783,7 @@ export const EN = {
   'Terug (één stap)': 'Back (one step)',
   'Terug naar PR-overzicht': 'Back to PR overview',
   'Open PR-overzicht in nieuwe tab': 'Open PR overview in new tab',
+  'Ga naar de QA-pagina': 'Go to the QA page',
 
   // ── settings page rows + strays picked up in review ────────────────────
   'Keyboard hints': 'Keyboard hints',
