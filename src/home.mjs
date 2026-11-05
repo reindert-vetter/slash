@@ -173,7 +173,7 @@ import CommandMenu, { filterCommands } from './CommandMenu.mjs'
 import { CallArrowsHost, setCallArrows, resettleCallArrows } from './callArrows.mjs'
 import { setPrRepo } from './prContext.mjs'
 import { bindUrlState, num } from './urlState.mjs'
-import { renderMarkdown, splitHermesComplexity } from './markdown.mjs'
+import { renderMarkdown } from './markdown.mjs'
 import { commentMentionsMe } from './mentions.mjs'
 import ImageLightboxHost, { initImageLightbox, isLightboxOpen, handleLightboxKeydown } from './imageLightbox.mjs'
 import { initMarkdownCodeCopy, copyCodeToClipboard } from './codeCopy.mjs'
@@ -3554,7 +3554,7 @@ watch(
 // PR has neither yet (prMeta still loading, or an untitled/empty PR).
 function prDescriptionText() {
   const title = (state.prMeta.title || state.title || '').trim()
-  const body = splitHermesComplexity((state.prMeta.body || '').replace(/\r\n?/g, '\n')).main.replace(/\s+$/, '')
+  const body = (state.prMeta.body || '').replace(/\r\n?/g, '\n').replace(/\s+$/, '')
   if (!title && !body) return ''
   return body ? `${title}\n\n${body}` : title
 }
@@ -17395,7 +17395,7 @@ function prInfoCard(state) {
           // pills below it. Surfaced by making this block a keyboard stop —
           // reaching it with ↓ and pressing Enter is now the normal way to read
           // it in full.
-          (descMain().length > DESC_TRUNCATE_AT && !state.descriptionExpanded ? 'flex-1 ' : 'shrink-0 ') +
+          (state.prMeta.body && state.prMeta.body.length > DESC_TRUNCATE_AT && !state.descriptionExpanded ? 'flex-1 ' : 'shrink-0 ') +
           // The same focus ring a since block / a Taken row wears while the
           // stop-1 cursor is on it — prInfoCard's own ring drops as soon as
           // state.taskFocus is set, so exactly one thing looks focused.
@@ -17407,8 +17407,8 @@ function prInfoCard(state) {
       >
         <div class="mb-1 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Omschrijving')}</div>
         ${() =>
-          descMain()
-            ? descMain().length > DESC_TRUNCATE_AT
+          state.prMeta.body
+            ? state.prMeta.body.length > DESC_TRUNCATE_AT
               ? // Long body: truncate with a fade + clickable "meer…" affordance
                 // that toggles state.descriptionExpanded (same flag the PR-menu
                 // item drives). Collapsed, the wrap grows (flex-1) to fill
@@ -17427,7 +17427,7 @@ function prInfoCard(state) {
                     class="${() =>
                       'markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300 ' +
                       (state.descriptionExpanded ? '' : 'h-full overflow-hidden')}"
-                    .innerHTML="${() => renderMarkdown(descMain())}"
+                    .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
                   ></div>
                   <button
                     type="button"
@@ -17450,24 +17450,9 @@ function prInfoCard(state) {
                 </div>`
               : html`<div
                   class="shrink-0 markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
-                  .innerHTML="${() => renderMarkdown(descMain())}"
+                  .innerHTML="${() => renderMarkdown(state.prMeta.body)}"
                 ></div>`
             : html`<p class="shrink-0 text-[13px] text-slate-400 dark:text-zinc-500">${t('geen omschrijving')}</p>`}
-      </div>
-      <div class="contents">
-        ${() =>
-          splitHermesComplexity(state.prMeta.body).complexity
-            ? html`<div
-                class="mt-3 shrink-0 rounded-md border border-slate-200 dark:border-zinc-800 px-2.5 py-2"
-                data-testid="pr-info-complexity"
-              >
-                <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-zinc-500">${t('Complexiteit')}</div>
-                <div
-                  class="markdown-body text-[13px] leading-relaxed text-slate-700 dark:text-zinc-300"
-                  .innerHTML="${() => renderMarkdown(splitHermesComplexity(state.prMeta.body).complexity)}"
-                ></div>
-              </div>`
-            : ''}
       </div>
       </div>
       <div
@@ -17597,7 +17582,6 @@ function stepTaskFocus(dir) {
 // constant, because three places have to agree on it (buildStopOneRows, the
 // block's own focus binding and the Enter branch).
 const DESC_FOCUS_KEY = 'desc:body'
-const descMain = () => splitHermesComplexity((state.prMeta || {}).body || '').main
 
 // buildStopOneRows — everything the stop-1 cursor (state.taskFocus) can land
 // on, in the order they sit on screen: the "Aanpassingen sinds jouw review"
@@ -17613,7 +17597,7 @@ const descMain = () => splitHermesComplexity((state.prMeta || {}).body || '').ma
 // an empty fact section.
 function buildStopOneRows(state) {
   const since = sinceReviewSections(state.prMeta || {}).map((s) => ({ key: s.key, since: true }))
-  const desc = descMain() ? [{ key: DESC_FOCUS_KEY, desc: true }] : []
+  const desc = (state.prMeta || {}).body ? [{ key: DESC_FOCUS_KEY, desc: true }] : []
   return since.concat(desc, buildTaskRows(state))
 }
 
@@ -17622,7 +17606,7 @@ function buildStopOneRows(state) {
 // affordance exists at all (DESC_TRUNCATE_AT), so Enter and the affordance can
 // never disagree.
 function descCollapsible(state) {
-  const body = descMain()
+  const body = (state.prMeta || {}).body || ''
   return body.length > DESC_TRUNCATE_AT
 }
 

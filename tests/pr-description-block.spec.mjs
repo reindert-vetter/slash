@@ -151,34 +151,3 @@ test('a PR description edit refused by the backend keeps the draft and shows why
   await expect(page.getByTestId('inline-edit-error')).toContainText('intussen gewijzigd')
   await expect(page.getByTestId('inline-edit-textarea')).toHaveValue('Rework checkout flow\n\nMy edit.')
 })
-
-test('the hermes complexity block is stripped from the description and shown as its own card with Overall + table', async ({ page }) => {
-  const body = [
-    'Real description.',
-    '',
-    '<!-- hermes:pr-complexity:start -->',
-    '**Complexity assessment**',
-    '**Overall: 2/5 — Localized.**',
-    '',
-    '| Rubric | Score |',
-    '| --- | --- |',
-    '| Local logic | 2/5 |',
-    '',
-    '**Basis:** something long.',
-    '<!-- hermes:pr-complexity:metadata {"a":1} -->',
-    '<!-- hermes:pr-complexity:end -->',
-  ].join('\n')
-  await mockMeta(page, body)
-  await page.goto('/pr/12903?sel=PR-description:1')
-  await leaveSearchBox(page)
-  await page.keyboard.press('ArrowLeft')
-  const desc = page.getByTestId('pr-info-body')
-  await expect(desc).toContainText('Real description.')
-  await expect(desc).not.toContainText('hermes')
-  const card = page.getByTestId('pr-info-complexity')
-  await expect(card).toContainText('Overall: 2/5')
-  await expect(card.locator('table')).toContainText('Local logic')
-  await expect(card).not.toContainText('Basis')
-  await expect(page.getByTestId('block-row').first()).toContainText('PR-titel & omschrijving')
-  await expect(page.getByTestId('code-diff').first()).not.toContainText('hermes')
-})
